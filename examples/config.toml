@@ -1,0 +1,13 @@
+# Copy this file outside the repository, then edit only the paths for a local installation.
+
+[paths]
+# Relative paths resolve from this config file's directory.
+data_dir = "state"
+vault_path = ""
+
+[mail]
+folder = "Job Applications"
+
+[privacy]
+retain_message_bodies = false
+retain_attachments = false

@@ -1,0 +1,17 @@
+# Add this entry to the chosen Hermes profile's config.yaml.
+# Replace both absolute paths locally; do not commit a filled-in copy.
+
+mcp_servers:
+  recruiting_pipeline:
+    command: uv
+    args:
+      - --directory
+      - /absolute/path/to/recruiting-pipeline
+      - run
+      - recruiting-pipeline-mcp
+    env:
+      RECRUITING_PIPELINE_CONFIG: /absolute/path/to/recruiting-pipeline-config.toml
+    timeout: 30
+    connect_timeout: 30
+    sampling:
+      enabled: false
