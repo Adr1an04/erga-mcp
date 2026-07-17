@@ -18,3 +18,7 @@ Early research and architecture phase.
 ## Development
 
 Initial research, design decisions, and implementation milestones will be added as the project takes shape.
+
+## License
+
+[MIT](LICENSE)

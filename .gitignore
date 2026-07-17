@@ -1,15 +1,28 @@
-# Credentials and local configuration
+# Local configuration and credentials
 .env
 .env.*
 !.env.example
-secrets/
-*.token
+*.key
 *.pem
+*.p12
+*.token
+*.credential
 
-# Local user data and generated artifacts
+# Local user data, imports, caches, and generated artifacts
 .local/
+.cache/
 data/
+imports/
+attachments/
+exports/
 output/
+*.db
+*.sqlite
+*.sqlite3
+
+# Tooling and operating-system files
 __pycache__/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .DS_Store
