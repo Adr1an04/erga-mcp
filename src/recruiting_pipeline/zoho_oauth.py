@@ -142,6 +142,39 @@ def _start_loopback_receiver() -> Callable[[str], str]:
     return receive
 
 
+def _read_keychain_value(service: str, client_id: str) -> str:
+    result = subprocess.run(
+        ["security", "find-generic-password", "-s", service, "-a", client_id, "-w"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.rstrip("\n")
+
+
+def read_tokens_from_keychain(client_id: str) -> dict[str, object]:
+    value = json.loads(_read_keychain_value("recruiting-pipeline.zoho.tokens", client_id))
+    if not isinstance(value, dict) or not isinstance(value.get("refresh_token"), str):
+        raise ValueError("Zoho Keychain token entry has no refresh token")
+    return value
+
+
+def refresh_access_token(*, client_id: str, accounts_url: str = "https://accounts.zoho.com") -> str:
+    response = _post_form(
+        f"{accounts_url.rstrip('/')}/oauth/v2/token",
+        {
+            "refresh_token": str(read_tokens_from_keychain(client_id)["refresh_token"]),
+            "client_id": client_id,
+            "client_secret": _read_client_secret_from_keychain(client_id),
+            "grant_type": "refresh_token",
+        },
+    )
+    token = response.get("access_token")
+    if not isinstance(token, str):
+        raise ValueError("Zoho refresh response did not include an access token")
+    return token
+
+
 def _read_client_secret_from_keychain(client_id: str) -> str:
     result = subprocess.run(
         [

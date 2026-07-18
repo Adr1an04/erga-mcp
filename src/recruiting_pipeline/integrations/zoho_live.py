@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
+from datetime import UTC, datetime
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from ..classification import classify_application_message
 from ..models import MailEvent
@@ -44,3 +48,55 @@ def sync_metadata(store: PipelineStore, messages: Sequence[MailMessageMetadata])
             counts["created"] += 1
             counts[kind.split(".", 1)[0]] += 1
     return counts
+
+
+def fetch_inbox_metadata(*, access_token: str, limit: int = 20) -> list[MailMessageMetadata]:
+    """Fetch Inbox metadata only from Zoho's read-only endpoints."""
+
+    def get(url: str) -> dict[str, object]:
+        request = Request(url, headers={"Authorization": f"Zoho-oauthtoken {access_token}"})
+        with urlopen(request, timeout=30) as response:  # noqa: S310 - fixed Zoho HTTPS endpoint
+            decoded = json.loads(response.read().decode("utf-8"))
+        if not isinstance(decoded, dict):
+            raise ValueError("Zoho API response was not an object")
+        return decoded
+
+    accounts = get("https://mail.zoho.com/api/accounts").get("data", [])
+    if not isinstance(accounts, list) or not accounts or not isinstance(accounts[0], dict):
+        raise ValueError("Zoho account discovery returned no account")
+    account_id = str(accounts[0]["accountId"])
+    folders = get(f"https://mail.zoho.com/api/accounts/{account_id}/folders").get("data", [])
+    if not isinstance(folders, list):
+        raise ValueError("Zoho folder discovery returned invalid data")
+    inbox = next(
+        (
+            item
+            for item in folders
+            if isinstance(item, dict) and str(item.get("folderType", "")).lower() == "inbox"
+        ),
+        None,
+    )
+    if inbox is None:
+        raise ValueError("Zoho account has no Inbox folder")
+    folder_id = str(inbox["folderId"])
+    messages = get(
+        f"https://mail.zoho.com/api/accounts/{account_id}/messages/view?"
+        + urlencode({"folderId": folder_id, "start": 0, "limit": limit})
+    ).get("data", [])
+    if not isinstance(messages, list):
+        raise ValueError("Zoho message listing returned invalid data")
+    result: list[MailMessageMetadata] = []
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        received_at = datetime.fromtimestamp(int(item["receivedTime"]) / 1000, UTC)
+        result.append(
+            MailMessageMetadata(
+                message_id=str(item["messageId"]),
+                received_at=received_at,
+                sender=str(item.get("fromAddress", "")),
+                subject=str(item.get("subject", "")),
+                preview=str(item.get("summary", "")),
+            )
+        )
+    return result

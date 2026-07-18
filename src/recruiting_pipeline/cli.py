@@ -10,11 +10,17 @@ from pathlib import Path
 from .config import DEFAULT_CONFIG, load_config
 from .integrations.obsidian import import_markdown_evidence
 from .integrations.zoho import ingest_fixture
+from .integrations.zoho_live import fetch_inbox_metadata, sync_metadata
 from .resume import create_job_package, create_resume_proposal, validate_latex_proposal
 from .resume_settings import as_json as resume_settings_as_json
 from .resume_settings import update_settings
 from .store import PipelineStore
-from .zoho_oauth import _read_client_secret_from_keychain, connect, store_client_secret
+from .zoho_oauth import (
+    _read_client_secret_from_keychain,
+    connect,
+    refresh_access_token,
+    store_client_secret,
+)
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "recruiting-pipeline" / "config.toml"
 
@@ -72,6 +78,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     zoho_connect.add_argument("--client-id", required=True)
     zoho_connect.add_argument("--accounts-url", default="https://accounts.zoho.com")
+    zoho_sync = zoho_commands.add_parser(
+        "sync", help="read recent Inbox metadata and record local events"
+    )
+    _config_argument(zoho_sync)
+    zoho_sync.add_argument("--client-id", required=True)
+    zoho_sync.add_argument("--limit", type=int, default=20)
 
     resume = subcommands.add_parser("resume", help="create reviewable local resume proposals")
     resume_commands = resume.add_subparsers(dest="resume_command", required=True)
@@ -203,6 +215,14 @@ def main(arguments: Sequence[str] | None = None) -> int:
             for item in import_markdown_evidence(config.vault_path, args.note)
         ]
         _print_json([asdict(item) for item in imported])
+        return 0
+    if args.command == "zoho" and args.zoho_command == "sync":
+        if args.limit < 1 or args.limit > 100:
+            raise ValueError("--limit must be between 1 and 100")
+        messages = fetch_inbox_metadata(
+            access_token=refresh_access_token(client_id=args.client_id), limit=args.limit
+        )
+        _print_json({"fetched": len(messages), **sync_metadata(store, messages)})
         return 0
     if args.command == "zoho" and args.zoho_command == "ingest-fixture":
         _print_json({"created": ingest_fixture(store, args.fixture)})
