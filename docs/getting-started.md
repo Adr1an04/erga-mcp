@@ -59,7 +59,27 @@ uv run recruiting-pipeline zoho ingest-fixture \
   --fixture tests/fixtures/zoho_messages.json
 ```
 
-## 4. Connect Hermes through MCP
+## 4. Connect Zoho Mail (read-only)
+
+The live connector uses Zoho's **Mobile-based application** OAuth type, Authorization Code + PKCE, a fixed local redirect URI, and macOS Keychain. It requests only `ZohoMail.messages.READ`; messages are not writable.
+
+1. In Zoho API Console, create a Mobile-based application and register exactly `http://127.0.0.1:8765/callback` as its redirect URI.
+2. Copy the client ID (not a secret). Store the client secret locally without displaying it using:
+
+   ```bash
+   uv run recruiting-pipeline zoho set-client-secret --client-id '<client-id>'
+   ```
+
+   The command prompts without echo and writes the secret only to macOS Keychain.
+3. Start the consent flow:
+
+   ```bash
+   uv run recruiting-pipeline zoho connect --client-id '<client-id>'
+   ```
+
+   Your browser opens Zoho's official consent page. On approval, the local loopback endpoint receives the code and the token response is stored in macOS Keychain. No token or secret is written to configuration, Git, chat, `.env`, or Obsidian.
+
+## 5. Connect Hermes through MCP
 
 Copy `integrations/hermes/mcp.example.yaml` into the selected Hermes profile's `config.yaml`, replacing the placeholder absolute paths locally. Review the full command before enabling it: a local MCP server runs with Hermes client permissions. Hermes starts this server through stdio and exposes tools prefixed with `mcp_recruiting_pipeline_`.
 
@@ -72,7 +92,7 @@ The initial MCP server exposes only read-only local tools:
 
 It does not receive a Zoho token and it cannot change external services.
 
-## 5. Add the workflow skill
+## 6. Add the workflow skill
 
 For a personal Hermes installation, tap this repository with `hermes skills tap add Adr1an04/recruiting-pipeline`, then install `skills/productivity/recruiting-pipeline/SKILL.md` through the chosen skill workflow. The skill contains workflow and safety policy only; it contains no integration code or credentials.
 

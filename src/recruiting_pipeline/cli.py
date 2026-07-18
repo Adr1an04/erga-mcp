@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 from collections.abc import Sequence
 from dataclasses import asdict
@@ -13,6 +14,7 @@ from .resume import create_job_package, create_resume_proposal, validate_latex_p
 from .resume_settings import as_json as resume_settings_as_json
 from .resume_settings import update_settings
 from .store import PipelineStore
+from .zoho_oauth import _read_client_secret_from_keychain, connect, store_client_secret
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "recruiting-pipeline" / "config.toml"
 
@@ -61,6 +63,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     _config_argument(zoho_fixture)
     zoho_fixture.add_argument("--fixture", type=Path, required=True)
+    zoho_secret = zoho_commands.add_parser(
+        "set-client-secret", help="store a Zoho OAuth client secret in macOS Keychain"
+    )
+    zoho_secret.add_argument("--client-id", required=True)
+    zoho_connect = zoho_commands.add_parser(
+        "connect", help="open Zoho's read-only OAuth consent flow"
+    )
+    zoho_connect.add_argument("--client-id", required=True)
+    zoho_connect.add_argument("--accounts-url", default="https://accounts.zoho.com")
 
     resume = subcommands.add_parser("resume", help="create reviewable local resume proposals")
     resume_commands = resume.add_subparsers(dest="resume_command", required=True)
@@ -173,6 +184,25 @@ def main(arguments: Sequence[str] | None = None) -> int:
             for item in import_markdown_evidence(config.vault_path, args.note)
         ]
         _print_json([asdict(item) for item in imported])
+        return 0
+    if args.command == "zoho" and args.zoho_command == "set-client-secret":
+        secret = getpass.getpass("Zoho OAuth client secret (stored only in macOS Keychain): ")
+        store_client_secret(args.client_id, secret)
+        _print_json({"client_id": args.client_id, "stored": "macOS Keychain"})
+        return 0
+    if args.command == "zoho" and args.zoho_command == "connect":
+        tokens = connect(
+            accounts_url=args.accounts_url,
+            client_id=args.client_id,
+            client_secret=_read_client_secret_from_keychain(args.client_id),
+        )
+        _print_json(
+            {
+                "client_id": args.client_id,
+                "connected": True,
+                "refresh_token_stored": bool(tokens.get("refresh_token")),
+            }
+        )
         return 0
     if args.command == "zoho" and args.zoho_command == "ingest-fixture":
         _print_json({"created": ingest_fixture(store, args.fixture)})
