@@ -42,6 +42,7 @@ def build_server(config_path: Path) -> FastMCP:
         return {
             "applications": len(store.list_applications()),
             "evidence": len(store.list_evidence()),
+            "mail_events": len(store.list_mail_events()),
             "audit_events": len(store.audit_events()),
         }
 
@@ -59,6 +60,14 @@ def build_server(config_path: Path) -> FastMCP:
         return [
             cast(dict[str, object], _json_value(asdict(evidence)))
             for evidence in store.list_evidence()
+        ]
+
+    @server.tool()
+    def list_mail_events() -> list[dict[str, object]]:
+        """List normalized local mail events; previews and message bodies are not retained."""
+        return [
+            cast(dict[str, object], _json_value(asdict(event)))
+            for event in store.list_mail_events()
         ]
 
     return server

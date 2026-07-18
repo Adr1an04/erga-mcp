@@ -20,7 +20,7 @@ class McpServerTests(unittest.TestCase):
 
             self.assertEqual(
                 {tool.name for tool in tools},
-                {"pipeline_status", "list_applications", "list_evidence"},
+                {"pipeline_status", "list_applications", "list_evidence", "list_mail_events"},
             )
 
 

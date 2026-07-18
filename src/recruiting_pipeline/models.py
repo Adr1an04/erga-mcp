@@ -30,3 +30,14 @@ class AuditEvent:
     action: str
     subject_id: str
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class MailEvent:
+    message_id: str
+    received_at: datetime
+    sender: str
+    subject: str
+    kind: str
+    confidence: float
+    requires_review: bool

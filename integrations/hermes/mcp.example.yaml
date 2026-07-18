@@ -1,5 +1,7 @@
 # Add this entry to the chosen Hermes profile's config.yaml.
-# Replace both absolute paths locally; do not commit a filled-in copy.
+# Review the exact command and both absolute paths before enabling it.
+# This local stdio process runs with Hermes client permissions; it is not a sandbox.
+# Replace placeholders locally and do not commit a filled-in copy.
 
 mcp_servers:
   recruiting_pipeline:
@@ -10,6 +12,7 @@ mcp_servers:
       - run
       - recruiting-pipeline-mcp
     env:
+      # Non-secret local configuration path only. Do not pass OAuth tokens.
       RECRUITING_PIPELINE_CONFIG: /absolute/path/to/recruiting-pipeline-config.toml
     timeout: 30
     connect_timeout: 30

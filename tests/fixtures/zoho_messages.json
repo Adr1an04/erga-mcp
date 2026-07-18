@@ -1,0 +1,16 @@
+[
+  {
+    "message_id": "fixture-message-001",
+    "received_at": "2026-01-15T09:30:00+00:00",
+    "sender": "recruiting@example.test",
+    "subject": "We received your application",
+    "preview": "Thank you for applying."
+  },
+  {
+    "message_id": "fixture-message-002",
+    "received_at": "2026-01-16T10:45:00+00:00",
+    "sender": "talent@example.test",
+    "subject": "Update on your application",
+    "preview": "Unfortunately, we will not be moving forward."
+  }
+]

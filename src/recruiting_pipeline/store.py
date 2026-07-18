@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from .models import Application, AuditEvent, Evidence
+from .models import Application, AuditEvent, Evidence, MailEvent
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS evidence (
@@ -24,6 +24,16 @@ CREATE TABLE IF NOT EXISTS applications (
     source_url TEXT NOT NULL,
     status TEXT NOT NULL,
     evidence_ids_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mail_events (
+    message_id TEXT PRIMARY KEY,
+    received_at TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    requires_review INTEGER NOT NULL,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS audit_events (
@@ -153,6 +163,60 @@ class PipelineStore:
                 text=row["text"],
                 approved=bool(row["approved"]),
                 created_at=_as_datetime(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def approved_evidence(self, evidence_ids: list[str]) -> list[Evidence]:
+        evidence_by_id = {item.id: item for item in self.list_evidence()}
+        selected = [evidence_by_id.get(evidence_id) for evidence_id in evidence_ids]
+        if not selected or any(item is None or not item.approved for item in selected):
+            raise ValueError("resume proposals require existing approved evidence")
+        return [item for item in selected if item is not None]
+
+    def record_mail_event(self, event: MailEvent) -> bool:
+        """Persist minimal classified mail metadata once; never retain preview/body content."""
+        self.initialize()
+        with closing(self._connection()) as connection:
+            result = connection.execute(
+                """
+                INSERT INTO mail_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(message_id) DO NOTHING
+                """,
+                (
+                    event.message_id,
+                    _as_text(event.received_at),
+                    event.sender,
+                    event.subject,
+                    event.kind,
+                    event.confidence,
+                    event.requires_review,
+                    _as_text(_now()),
+                ),
+            )
+            if result.rowcount:
+                self._record_audit(
+                    connection,
+                    "mail_event.recorded",
+                    event.message_id,
+                    {"kind": event.kind, "requires_review": event.requires_review},
+                )
+            connection.commit()
+        return bool(result.rowcount)
+
+    def list_mail_events(self) -> list[MailEvent]:
+        self.initialize()
+        with closing(self._connection()) as connection:
+            rows = connection.execute("SELECT * FROM mail_events ORDER BY received_at").fetchall()
+        return [
+            MailEvent(
+                message_id=row["message_id"],
+                received_at=_as_datetime(row["received_at"]),
+                sender=row["sender"],
+                subject=row["subject"],
+                kind=row["kind"],
+                confidence=float(row["confidence"]),
+                requires_review=bool(row["requires_review"]),
             )
             for row in rows
         ]

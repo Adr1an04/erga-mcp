@@ -28,13 +28,15 @@ See [Getting started](docs/getting-started.md) for Hermes MCP setup and local-da
 
 ## Current capabilities
 
-- Local configuration and SQLite state initialization
-- Evidence and application-record foundations with an audit trail
-- Conservative deterministic acknowledgement/denial classification
-- Read-only MCP tools for local status, application records, and evidence
-- Generic Hermes skills, MCP, and cron setup examples
+- Local configuration and SQLite state with an audit trail
+- Approved evidence capture and draft application records with evidence provenance
+- Read-only, vault-bounded Obsidian Markdown import that creates unapproved candidates
+- Fixture-first Zoho metadata classification with message-ID deduplication and read-only scope validation
+- Reviewable local LaTeX résumé proposals: proposed source, diff, and claim/evidence report without source mutation or remote sync
+- Read-only MCP tools for local status, applications, evidence, and normalized mail events
+- Generic Hermes skill, stdio MCP, and deterministic no-agent cron examples
 
-Zoho OAuth polling, Obsidian write proposals, and Overleaf Git proposals are deliberately not connected yet. They require their own testable adapters and explicit authorization flows.
+Live Zoho OAuth, Obsidian writes, LaTeX/Overleaf synchronization, application submission, and outbound messaging are deliberately unconnected. They require separately configured adapters, user-side authorization, and explicit approval.
 
 ## Development
 
