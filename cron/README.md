@@ -33,8 +33,8 @@ hermes --profile <profile> cron create '0 9 * * 1-5' \
 
 `--no-agent` is deliberate: the script's JSON stdout is delivered verbatim, without an LLM interpreting local records. Change `--deliver local` to a private, reviewed destination only after confirming the output contains no sensitive data.
 
-## Future Zoho collection stage
+## Read-only Zoho collection stage
 
-A future read-only adapter should run as a deterministic no-agent script first. It may poll only the configured folder using the minimum OAuth scope, normalize candidate events locally, and exit. A separate, user-invoked review can summarize those events.
+The CLI includes a read-only Zoho adapter. A deterministic no-agent poll may run `recruiting-pipeline zoho sync` against a configured Inbox using the minimum OAuth scopes, normalize newly observed metadata locally, and exit. Configure the client identifier and Keychain-backed OAuth connection locally; never commit credentials, personal paths, or a filled-in cron command.
 
-Never schedule automatic applications, external résumé syncs, emails, or social-media actions.
+Treat cron output as a prompt for review. Never schedule automatic applications, external résumé syncs, emails, or social-media actions.
