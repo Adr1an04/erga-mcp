@@ -157,6 +157,25 @@ def main(arguments: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(arguments)
     if args.command == "init":
         return _initialize(args.config)
+    if args.command == "zoho" and args.zoho_command == "set-client-secret":
+        secret = getpass.getpass("Zoho OAuth client secret (stored only in macOS Keychain): ")
+        store_client_secret(args.client_id, secret)
+        _print_json({"client_id": args.client_id, "stored": "macOS Keychain"})
+        return 0
+    if args.command == "zoho" and args.zoho_command == "connect":
+        tokens = connect(
+            accounts_url=args.accounts_url,
+            client_id=args.client_id,
+            client_secret=_read_client_secret_from_keychain(args.client_id),
+        )
+        _print_json(
+            {
+                "client_id": args.client_id,
+                "connected": True,
+                "refresh_token_stored": bool(tokens.get("refresh_token")),
+            }
+        )
+        return 0
 
     store = _store_for(args.config)
     if args.command == "status":
@@ -184,25 +203,6 @@ def main(arguments: Sequence[str] | None = None) -> int:
             for item in import_markdown_evidence(config.vault_path, args.note)
         ]
         _print_json([asdict(item) for item in imported])
-        return 0
-    if args.command == "zoho" and args.zoho_command == "set-client-secret":
-        secret = getpass.getpass("Zoho OAuth client secret (stored only in macOS Keychain): ")
-        store_client_secret(args.client_id, secret)
-        _print_json({"client_id": args.client_id, "stored": "macOS Keychain"})
-        return 0
-    if args.command == "zoho" and args.zoho_command == "connect":
-        tokens = connect(
-            accounts_url=args.accounts_url,
-            client_id=args.client_id,
-            client_secret=_read_client_secret_from_keychain(args.client_id),
-        )
-        _print_json(
-            {
-                "client_id": args.client_id,
-                "connected": True,
-                "refresh_token_stored": bool(tokens.get("refresh_token")),
-            }
-        )
         return 0
     if args.command == "zoho" and args.zoho_command == "ingest-fixture":
         _print_json({"created": ingest_fixture(store, args.fixture)})
