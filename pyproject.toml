@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "erga-mcp"
 version = "0.1.0"
-description = "A local-first recruiting workflow toolkit for Hermes and other MCP clients."
+description = "Organize job applications and tailor LaTeX resumes from the CLI or an MCP client."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }

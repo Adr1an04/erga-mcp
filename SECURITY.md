@@ -1,28 +1,12 @@
-# Security policy
+# Security
 
-## Reporting a vulnerability
+Please report security problems through
+[GitHub's private vulnerability form](https://github.com/Adr1an04/erga-mcp/security/advisories/new),
+not a public issue.
 
-Please do not open a public issue for a suspected vulnerability and do not include credentials,
-résumés, application data, email content, or other personal information in a report.
+Include the affected version, a short reproduction using fake data, and what an attacker could do.
+Do not include real credentials, résumés, emails, or application data.
 
-Use GitHub's private vulnerability reporting for
-[`Adr1an04/erga-mcp`](https://github.com/Adr1an04/erga-mcp/security/advisories/new). Include:
+Erga is pre-alpha, so security fixes are made against the latest code on `main`.
 
-- the affected version or commit;
-- the relevant component and configuration;
-- reproducible steps using synthetic data;
-- the impact you observed; and
-- a suggested mitigation, if you have one.
-
-The maintainer will acknowledge a complete report as soon as practical, validate the issue, and
-coordinate remediation and disclosure. Please allow time for a fix before publishing details.
-
-## Supported versions
-
-Erga is pre-alpha. Security fixes are applied to the latest code on the default branch; older
-commits and unreleased snapshots are not maintained as separate supported lines.
-
-## Security model
-
-Erga's detailed trust boundaries, credential handling, content-safety rules, network-fetch
-controls, and MCP capability classes are documented in [`docs/security.md`](docs/security.md).
+See [`docs/security.md`](docs/security.md) for the detailed permissions and safety model.

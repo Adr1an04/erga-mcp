@@ -1,12 +1,6 @@
 <div align="center">
   <img src="docs/assets/erga-logo.svg" width="720" alt="Erga" />
 
-  <p><strong>Your private, evidence-first career workspace.</strong></p>
-
-  <p>
-    Local-first&nbsp;&nbsp;·&nbsp;&nbsp;Reviewable&nbsp;&nbsp;·&nbsp;&nbsp;MCP-ready
-  </p>
-
   <p>
     <a href="https://github.com/Adr1an04/erga-mcp/actions/workflows/ci.yml"><img src="https://github.com/Adr1an04/erga-mcp/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white" alt="Python 3.11+" /></a>
@@ -24,68 +18,36 @@
 
 ---
 
-**Erga** comes from the Greek word for works or deeds. The project handles the repetitive work
-around a job search while keeping consequential decisions in your hands.
+Recruiting is hard for students and full-time engineers. Applications pile up, job descriptions
+disappear, recruiter updates get buried in your inbox, and every role asks for a slightly different
+version of the same résumé.
 
-Erga MCP is an open-source Python CLI and local MCP server that turns verified career evidence,
-job postings, recruiting mail, and a user-provided LaTeX résumé into an organized, reviewable
-workflow. Its core is deterministic and local: SQLite state, auditable records, bounded imports,
-and résumé diffs you approve yourself.
+Erga helps you keep that mess organized. It tracks your applications, saves the job information
+and recruiting updates that matter, and prepares a tailored version of your résumé for each role.
+It is built around LaTeX résumé workflows and is designed to work cleanly with templates such as
+[Jake's Resume](https://www.overleaf.com/latex/templates/jakes-resume/syzfjbzwjncs). Your original
+résumé stays untouched; Erga creates a separate `.tex` file, a readable diff, and a PDF for you to
+review.
+
+You can use Erga directly from the command line or connect it to an MCP client such as Hermes. Its
+application records and generated files stay on your computer.
 
 > [!IMPORTANT]
-> Erga prepares research and local drafts. It does not submit applications, send messages, invent
-> résumé claims, mutate email, or update a remote résumé on its own.
-
-## Principles
-
-1. **Evidence before generation** — every new résumé claim must trace to career evidence supplied
-   and approved by the user.
-2. **Local by default** — application state, evidence, and generated artifacts remain in paths you
-   control.
-3. **Review before action** — résumé changes are separate proposals with a diff and claim report.
-4. **Narrow integrations** — mail access is read-only, MCP runs over stdio, and optional adapters
-   receive only the capabilities they need.
-5. **Deterministic core** — the standalone CLI and domain layer work without an agent, hosted
-   service, or proprietary UI.
+> Erga organizes the process, but it does not submit applications, send messages, invent résumé
+> claims, modify your inbox, or overwrite your original résumé.
 
 ## What Erga does
 
-| Capability | Result |
-| --- | --- |
-| Career evidence | Stores verified facts with provenance and approval state |
-| Job intake | Captures a public posting and creates an isolated local workspace |
-| Résumé tailoring | Reorders existing, user-written content and creates a reviewable diff |
-| Claim validation | Links proposed claims to approved evidence instead of inventing metrics |
-| Recruiting mail | Classifies bounded Gmail or Zoho metadata using local rules |
-| Application tracking | Keeps draft applications, status history, and an audit trail in SQLite |
-| MCP integration | Exposes the same workflow to Hermes and other compatible clients |
-| Private export | Packages local records and generated job artifacts into an explicit ZIP export |
+- Keep your applications and status history in one local database.
+- Save job postings before they disappear.
+- Create a separate folder and tailored résumé for each role.
+- Reorder existing résumé bullets, projects, and skills to better match a job description.
+- Compile the result to a PDF and show exactly what changed.
+- Read limited Gmail or Zoho metadata to spot interviews, assessments, offers, and rejections.
+- Use the same tools from the CLI or an MCP client.
 
-Erga intentionally does **not** fill forms, submit applications, send recruiter messages, modify
-mailboxes, or silently overwrite your résumé.
-
-## How Erga works
-
-```text
-verified career facts ───────┐
-                             ▼
-job posting ─────────► evidence ledger ─────► draft application
-                             │
-read-only mail metadata ─────┤
-                             ▼
-                  local job workspace
-                             │
-                             ▼
-              résumé proposal + diff + claim report
-                             │
-                             ▼
-                        you review
-```
-
-Automatic tailoring is deliberately narrow. Erga ranks and reorders existing Experience bullets,
-project entries, and skills against visible job-posting content. It does not rewrite those claims.
-Generated packages record the source and output position of each claim, matched terms, and exact
-evidence references when available.
+Erga does not fill out forms or submit applications. Resume tailoring only uses content already in
+your template or facts you added yourself.
 
 ## Quick start
 
@@ -184,8 +146,7 @@ Core MCP tools include:
 | `install_mail_monitor_scripts` | Prepare deterministic Hermes notification runners |
 | `export_data` | Build a private ZIP of local records and generated packages |
 
-Local-write and local-exec tools remain subject to approval in the invoking MCP client. The full
-capability model is documented in [`docs/security.md`](docs/security.md).
+The full list of permissions and safety limits is in [`docs/security.md`](docs/security.md).
 
 ## Repository map
 
@@ -200,15 +161,10 @@ tests/                synthetic unit and MCP integration tests
 
 ## Documentation
 
-Start here, in order:
-
-1. [`docs/overview.md`](docs/overview.md) — product boundary and system shape.
-2. [`docs/getting-started.md`](docs/getting-started.md) — full local and integration setup.
-3. [`docs/architecture/ADR-001-local-core-and-evidence-ledger.md`](docs/architecture/ADR-001-local-core-and-evidence-ledger.md) — core architecture decision.
-4. [`docs/security.md`](docs/security.md) — trust boundaries and MCP capability model.
-5. [`CONTRIBUTING.md`](CONTRIBUTING.md) — development workflow and acceptance checks.
-6. [`docs/FUTURE.md`](docs/FUTURE.md) — roadmap and explicit non-goals.
-7. [`docs/versioning.md`](docs/versioning.md) — pre-1.0 release policy.
+- [`docs/getting-started.md`](docs/getting-started.md) — full setup.
+- [`docs/security.md`](docs/security.md) — permissions and safety details.
+- [`docs/FUTURE.md`](docs/FUTURE.md) — ideas for later.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to run checks and contribute.
 
 ## Project status
 

@@ -1,48 +1,18 @@
 name: Feature request
-description: Propose a scoped improvement that fits Erga's product boundary.
-title: "[Feature]: "
+description: Suggest something that would make Erga more useful.
+title: "[Feature] "
 labels:
   - enhancement
 body:
-  - type: markdown
-    attributes:
-      value: |
-        Erga keeps consequential actions under user control. Requests for automatic applications,
-        autonomous messages, fabricated résumé claims, or broad mailbox access are out of scope.
-  - type: checkboxes
-    id: checks
-    attributes:
-      label: Before submitting
-      options:
-        - label: I searched existing issues and the roadmap.
-          required: true
-        - label: This request preserves local-first storage and explicit user approval.
-          required: true
-        - label: This request does not require fabricated career evidence or autonomous external actions.
-          required: true
   - type: textarea
     id: problem
     attributes:
-      label: Problem
-      description: What user problem should Erga solve?
+      label: What problem are you trying to solve?
     validations:
       required: true
   - type: textarea
-    id: proposal
+    id: idea
     attributes:
-      label: Proposed behavior
-      description: Describe the smallest useful end-to-end workflow.
+      label: What would you like Erga to do?
     validations:
       required: true
-  - type: textarea
-    id: boundaries
-    attributes:
-      label: Privacy and approval boundaries
-      description: What data, permissions, local writes, network reads, or external actions are involved?
-    validations:
-      required: true
-  - type: textarea
-    id: alternatives
-    attributes:
-      label: Alternatives considered
-      description: What can users do today, and why is it insufficient?
