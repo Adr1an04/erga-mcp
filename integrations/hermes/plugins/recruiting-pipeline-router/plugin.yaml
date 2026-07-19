@@ -1,0 +1,8 @@
+manifest_version: 1
+name: recruiting-pipeline-router
+version: "0.2.0"
+description: Deterministically route pasted job links to the local Recruiting Pipeline MCP intake.
+author: Recruiting Pipeline contributors
+hermes_requires: ">=0.18.2"
+provides_hooks:
+  - pre_llm_call

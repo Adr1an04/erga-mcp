@@ -55,6 +55,7 @@ latexmk = "latexmk"
             self.assertEqual(config.resume.bullet_target_chars, 105)
             self.assertEqual(config.resume.bullet_max_chars, 120)
             self.assertEqual(config.resume.output_root, config_path.parent / "applications")
+        self.assertEqual(config.resume.output_pdf_name, "Firstname_Lastname_Resume.pdf")
 
     def test_rejects_an_invalid_resume_bullet_range(self) -> None:
         with TemporaryDirectory() as directory:

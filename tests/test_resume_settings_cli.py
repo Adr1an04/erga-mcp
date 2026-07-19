@@ -47,6 +47,8 @@ class ResumeSettingsCliTests(unittest.TestCase):
                     "1",
                     "--output-root",
                     "applications",
+                    "--output-pdf-name",
+                    "Candidate_Resume.pdf",
                 ]
             )
 
@@ -56,9 +58,11 @@ class ResumeSettingsCliTests(unittest.TestCase):
             self.assertEqual(settings["editable_sections"], ["experience", "projects"])
             self.assertEqual(settings["bullet_target_chars"], 105)
             self.assertEqual(settings["output_root"], str(root / "applications"))
+            self.assertEqual(settings["output_pdf_name"], "Candidate_Resume.pdf")
             stored_config = config.read_text(encoding="utf-8")
             self.assertIn('template_path = "templates/master.tex"', stored_config)
             self.assertIn('output_root = "applications"', stored_config)
+            self.assertIn('output_pdf_name = "Candidate_Resume.pdf"', stored_config)
 
     def test_rejects_invalid_settings_without_changing_the_config_file(self) -> None:
         with TemporaryDirectory() as directory:

@@ -6,7 +6,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from recruiting_pipeline.models import Evidence
-from recruiting_pipeline.resume import create_section_resume_proposal, replace_section_contents
+from recruiting_pipeline.resume import (
+    create_baseline_resume_proposal,
+    create_section_resume_proposal,
+    replace_section_contents,
+)
 
 
 class ResumeEditorTests(unittest.TestCase):
@@ -48,6 +52,27 @@ class ResumeEditorTests(unittest.TestCase):
             self.assertIn("keep", proposed)
             self.assertTrue(proposal.diff_path.exists())
             self.assertTrue(proposal.claim_report_path.exists())
+
+    def test_creates_a_truthful_baseline_proposal_when_no_claim_can_be_added(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            original = "\\section{Experience}\nverified work\n"
+            source.write_text(original, encoding="utf-8")
+
+            proposal = create_baseline_resume_proposal(
+                resume_path=source,
+                output_dir=root / "proposal",
+                evidence=[],
+                reason="No approved evidence overlapped the job description.",
+            )
+
+            self.assertEqual(source.read_text(encoding="utf-8"), original)
+            self.assertEqual(proposal.proposed_tex_path.read_text(encoding="utf-8"), original)
+            self.assertEqual(proposal.diff_path.read_text(encoding="utf-8"), "")
+            report = proposal.claim_report_path.read_text(encoding="utf-8")
+            self.assertIn("No approved evidence overlapped", report)
+            self.assertIn('"approved_evidence": []', report)
 
 
 if __name__ == "__main__":

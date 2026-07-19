@@ -21,6 +21,8 @@ bullet_target_chars = 0
 bullet_max_chars = 0
 max_pages = 0
 output_root = "output"
+# The filename of every generated local PDF. Configure a real candidate name locally.
+output_pdf_name = "Firstname_Lastname_Resume.pdf"
 latexmk = "latexmk"
 
 [mail]
@@ -51,6 +53,7 @@ class ResumeSettings:
     bullet_max_chars: int
     max_pages: int
     output_root: Path
+    output_pdf_name: str
     latexmk: str
 
 
@@ -111,6 +114,9 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
     latexmk = str(resume.get("latexmk", "latexmk")).strip()
     if not latexmk:
         raise ValueError("resume latexmk must be non-empty")
+    output_pdf_name = str(resume.get("output_pdf_name", "Firstname_Lastname_Resume.pdf")).strip()
+    if Path(output_pdf_name).name != output_pdf_name or not output_pdf_name.endswith(".pdf"):
+        raise ValueError("resume output_pdf_name must be a PDF filename without path components")
     return ResumeSettings(
         template_path=template_path,
         editable_sections=tuple(item.strip() for item in editable_sections_value),
@@ -119,6 +125,7 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
         bullet_max_chars=bullet_lengths[2],
         max_pages=max_pages,
         output_root=_path(str(resume.get("output_root", "output")), base_dir),
+        output_pdf_name=output_pdf_name,
         latexmk=latexmk,
     )
 

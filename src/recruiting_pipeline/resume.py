@@ -33,7 +33,23 @@ class ResumePackage:
 
 
 _SAFE_PATH_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_TERM_CYCLE = re.compile(
+    r"^(?:(?P<season_a>spring|summer|fall|winter)[-_ ]*(?P<year_a>20\d{2})|"
+    r"(?P<year_b>20\d{2})[-_ ]*(?P<season_b>spring|summer|fall|winter))$",
+    re.IGNORECASE,
+)
 _SECTION_HEADING = re.compile(r"^\\section\{(?P<name>[^}]+)\}\s*$", re.MULTILINE)
+
+
+def normalize_cycle(cycle: str) -> str:
+    """Use one stable directory spelling for recognizable recruiting terms."""
+    match = _TERM_CYCLE.fullmatch(cycle.strip())
+    if match is None:
+        return cycle
+    season = match.group("season_a") or match.group("season_b")
+    year = match.group("year_a") or match.group("year_b")
+    assert season is not None and year is not None
+    return f"{season.casefold()}-{year}"
 
 
 def replace_section_contents(source: str, section_name: str, replacement: str) -> str:
@@ -75,7 +91,8 @@ def create_job_package(
     if not job_url.startswith(("http://", "https://")):
         raise ValueError("job_url must be an HTTP(S) URL")
     output_root.mkdir(parents=True, exist_ok=True)
-    cycle_dir = output_root / _safe_path_component(cycle)
+    normalized_cycle = normalize_cycle(cycle)
+    cycle_dir = output_root / _safe_path_component(normalized_cycle)
     if cycle_dir.is_symlink():
         raise ValueError("resume package directories must not be a symlink")
     cycle_dir.mkdir(exist_ok=True)
@@ -94,7 +111,7 @@ def create_job_package(
             {
                 "application_slug": application_slug,
                 "created_at": datetime.now(UTC).isoformat(),
-                "cycle": cycle,
+                "cycle": normalized_cycle,
                 "job_url": job_url,
                 "template_status": "not_copied",
             },
@@ -215,6 +232,44 @@ def create_keyword_prioritized_resume_proposal(
                 ),
                 "source_modified": False,
                 "external_sync": "not performed",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return ResumeProposal(proposed_tex_path, diff_path, claim_report_path)
+
+
+def create_baseline_resume_proposal(
+    *, resume_path: Path, output_dir: Path, evidence: list[Evidence], reason: str
+) -> ResumeProposal:
+    """Copy a résumé into a reviewable proposal when no truthful edit is available."""
+    if resume_path.suffix.lower() != ".tex" or not resume_path.is_file():
+        raise ValueError("resume_path must point to an existing .tex file")
+    if any(not item.approved for item in evidence):
+        raise ValueError("baseline proposal evidence must be approved")
+    if not reason.strip():
+        raise ValueError("reason cannot be empty")
+    original = resume_path.read_text(encoding="utf-8")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    proposed_tex_path = output_dir / "proposal.tex"
+    diff_path = output_dir / "proposal.diff"
+    claim_report_path = output_dir / "claim-report.json"
+    proposed_tex_path.write_text(original, encoding="utf-8")
+    diff_path.write_text("", encoding="utf-8")
+    claim_report_path.write_text(
+        json.dumps(
+            {
+                "approved_evidence": [
+                    {"id": item.id, "source_ref": item.source_ref, "text": item.text}
+                    for item in evidence
+                ],
+                "external_sync": "not performed",
+                "reason": reason,
+                "source_modified": False,
+                "tailoring": "baseline copy; no unsupported claims added",
             },
             indent=2,
             sort_keys=True,

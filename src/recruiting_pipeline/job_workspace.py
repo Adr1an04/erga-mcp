@@ -28,8 +28,8 @@ def create_job_workspace(
     selected_evidence: list[Evidence],
 ) -> JobWorkspace:
     """Make an isolated, Finder-visible job workspace from local approved evidence."""
-    if not selected_evidence or any(not item.approved for item in selected_evidence):
-        raise ValueError("job workspace requires approved selected evidence")
+    if any(not item.approved for item in selected_evidence):
+        raise ValueError("job workspace evidence must be approved")
     if not template_path.is_file() or template_path.suffix.lower() != ".tex":
         raise ValueError("template_path must be an existing .tex file")
     package = create_job_package(

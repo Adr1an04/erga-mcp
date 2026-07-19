@@ -30,6 +30,7 @@ def update_settings(config_path: Path, updates: dict[str, object]) -> ResumeSett
         "bullet_max_chars": current.bullet_max_chars,
         "max_pages": current.max_pages,
         "output_root": str(current.output_root),
+        "output_pdf_name": current.output_pdf_name,
         "latexmk": current.latexmk,
     }
     values.update({key: value for key, value in updates.items() if value is not None})
@@ -43,6 +44,7 @@ def update_settings(config_path: Path, updates: dict[str, object]) -> ResumeSett
             f"bullet_max_chars = {values['bullet_max_chars']}",
             f"max_pages = {values['max_pages']}",
             f"output_root = {json.dumps(values['output_root'])}",
+            f"output_pdf_name = {json.dumps(values['output_pdf_name'])}",
             f"latexmk = {json.dumps(values['latexmk'])}",
         ]
     )

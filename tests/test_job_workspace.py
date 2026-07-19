@@ -33,6 +33,25 @@ class JobWorkspaceTests(unittest.TestCase):
             self.assertTrue(workspace.job_snapshot_path.exists())
             self.assertIn("ev1", workspace.selected_evidence_path.read_text(encoding="utf-8"))
 
+    def test_creates_a_workspace_when_no_evidence_is_available(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            template = root / "master.tex"
+            template.write_text("\\section{Experience}\nverified work\n", encoding="utf-8")
+
+            workspace = create_job_workspace(
+                output_root=root / "output",
+                cycle="Fall26",
+                application_slug="ExampleCo",
+                job_url="https://jobs.example.test/1",
+                job_snapshot="Unrelated role",
+                template_path=template,
+                selected_evidence=[],
+            )
+
+            self.assertEqual(workspace.selected_evidence_path.read_text(encoding="utf-8"), "[]\n")
+            self.assertTrue(workspace.template_copy_path.is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,7 +21,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.10,<2"]
+mcp = ["mcp>=1.28,<2"]
 dev = ["mypy>=1.14", "ruff>=0.9"]
 
 [project.scripts]

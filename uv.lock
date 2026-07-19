@@ -728,7 +728,7 @@ mcp = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.10,<2" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
 ]

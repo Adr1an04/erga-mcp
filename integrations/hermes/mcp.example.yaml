@@ -3,6 +3,9 @@
 # This local stdio process runs with Hermes client permissions; it is not a sandbox.
 # Replace placeholders locally and do not commit a filled-in copy.
 
+# Give a fresh gateway the same bounded discovery window as the deterministic router.
+mcp_discovery_timeout: 30
+
 mcp_servers:
   recruiting_pipeline:
     command: uv
@@ -14,7 +17,23 @@ mcp_servers:
     env:
       # Non-secret local configuration path only. Do not pass OAuth tokens.
       RECRUITING_PIPELINE_CONFIG: /absolute/path/to/recruiting-pipeline-config.toml
-    timeout: 30
+    # Intake may fetch a job page and run a local LaTeX build.
+    # Worst case is a 30 s page fetch plus a 120 s LaTeX validation. Leave
+    # enough outer headroom for startup, artifact writes, and result transfer.
+    timeout: 210
     connect_timeout: 30
+    # Keep the default model-visible surface focused. The advanced
+    # prepare_job_workspace tool can be added deliberately when needed.
+    tools:
+      include:
+        - pipeline_status
+        - list_applications
+        - list_evidence
+        - list_mail_events
+        - intake_job_url
+        - create_tailored_resume
+        - validate_tailored_resume
+      prompts: false
+      resources: false
     sampling:
       enabled: false

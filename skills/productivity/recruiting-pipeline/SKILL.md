@@ -1,7 +1,7 @@
 ---
 name: recruiting-pipeline
-description: Use when organizing local recruiting records, evaluating career evidence, or proposing a truthful résumé update through Recruiting Pipeline.
-version: 0.1.0
+description: Use immediately when a user shares a job-posting URL—including a bare link or chat preview—and when organizing recruiting records, evaluating career evidence, or proposing a truthful résumé update through Recruiting Pipeline.
+version: 0.2.0
 author: Recruiting Pipeline contributors
 license: MIT
 metadata:
@@ -18,6 +18,7 @@ Use this workflow with the local Recruiting Pipeline MCP server to organize recr
 
 ## When to Use
 
+- Receiving a job-posting URL by itself, inside a Markdown link, or followed by an unfurled title and description.
 - Reviewing local application records or evidence.
 - Classifying a clearly sourced application-status message.
 - Comparing a job description to career evidence.
@@ -27,11 +28,12 @@ Do not use it to submit an application, contact an employer, modify mail, or syn
 
 ## Tight Loop
 
-1. Call the available `mcp_recruiting_pipeline_*` read-only tools to inspect local state. **Done when:** relevant application and evidence records are identified.
-2. Separate source-backed facts from inference and outside commentary. **Done when:** each proposed claim has a source reference or is marked unknown.
-3. Use approved evidence only for résumé proposals. **Done when:** every bullet links to an evidence ID; missing metrics remain questions.
-4. Present a concise proposal and a reviewable diff plan. **Done when:** the person can approve, reject, or request changes without ambiguity.
-5. Stop before an external side effect. **Done when:** application submission, messages, and remote résumé sync remain manual unless separately approved.
+1. If the current user message contains a job-posting URL, call `mcp__recruiting_pipeline__intake_job_url` immediately with the complete URL unchanged—even when the message is only a link or contains preview text. Do not browse, summarize, or call read-only tools first. Respect an explicit request to summarize only or skip intake. **Done when:** the tool returns a package path or an actionable configuration error.
+2. For requests without a new job URL, call the relevant `mcp__recruiting_pipeline__*` read-only tools to inspect local state. **Done when:** relevant application and evidence records are identified.
+3. Separate source-backed facts from inference and outside commentary. **Done when:** each proposed claim has a source reference or is marked unknown.
+4. Use approved evidence only for résumé proposals. **Done when:** every bullet links to an evidence ID; missing metrics remain questions.
+5. Present a concise proposal and a reviewable diff plan. **Done when:** the person can approve, reject, or request changes without ambiguity.
+6. Stop before an external side effect. **Done when:** application submission, messages, and remote résumé sync remain manual unless separately approved.
 
 ## Safety Boundary
 
@@ -47,6 +49,7 @@ Do not use it to submit an application, contact an employer, modify mail, or syn
 2. **Acknowledge email treated as proof of submission.** Keep the source event and confidence; review uncertain cases.
 3. **A Reddit thread treated as employer fact.** Keep it labeled as contextual commentary with a permalink and date.
 4. **A tool proposal mistaken for approval.** Present the diff; wait for a direct approval before any external action.
+5. **A pasted job link summarized in the browser.** Run `intake_job_url` first; the local snapshot is the source for later summaries.
 
 ## Verification Checklist
 

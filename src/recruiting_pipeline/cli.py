@@ -142,6 +142,7 @@ def _parser() -> argparse.ArgumentParser:
     resume_settings_set.add_argument("--bullet-max-chars", type=int)
     resume_settings_set.add_argument("--max-pages", type=int)
     resume_settings_set.add_argument("--output-root")
+    resume_settings_set.add_argument("--output-pdf-name")
     resume_settings_set.add_argument("--latexmk")
     resume_package = resume_commands.add_parser(
         "create-package", help="create an isolated job output package"
@@ -288,6 +289,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "bullet_max_chars": args.bullet_max_chars,
             "max_pages": args.max_pages,
             "output_root": args.output_root,
+            "output_pdf_name": args.output_pdf_name,
             "latexmk": args.latexmk,
         }
         _print_json(resume_settings_as_json(update_settings(args.config, updates)))

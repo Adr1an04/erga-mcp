@@ -28,6 +28,20 @@ class ResumePackageTests(unittest.TestCase):
             self.assertEqual(manifest["job_url"], "https://jobs.example.test/palantir")
             self.assertEqual(manifest["template_status"], "not_copied")
 
+    def test_normalizes_equivalent_term_cycles_to_one_directory_name(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "applications"
+            package = create_job_package(
+                output_root=root,
+                cycle="2026-fall",
+                application_slug="ExampleCo",
+                job_url="https://jobs.example.test/role",
+            )
+
+            self.assertEqual(package.package_dir, root / "fall-2026" / "ExampleCo")
+            manifest = json.loads(package.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["cycle"], "fall-2026")
+
     def test_refuses_a_symlinked_cycle_directory(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory) / "applications"
