@@ -179,9 +179,10 @@ def create_keyword_prioritized_resume_proposal(
     suffix = "\\\\" if values.rstrip().endswith("\\\\") else ""
     names = values.removesuffix(suffix).strip().split(", ")
     terms = job_description.casefold()
-    prioritized = sorted(
-        names, key=lambda name: (name.casefold() in terms, name.casefold()), reverse=True
-    )
+    prioritized = [
+        name
+        for _, name in sorted(enumerate(names), key=lambda item: not (item[1].casefold() in terms))
+    ]
     replacement = (
         prefix + "Languages:} " + ", ".join(prioritized) + (" " + suffix if suffix else "")
     )
