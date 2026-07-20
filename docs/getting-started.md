@@ -128,10 +128,19 @@ After initializing the local config, add the server with Hermes:
 
 ```bash
 hermes mcp add erga-mcp \
-  --command "uv --directory /absolute/path/to/erga-mcp run erga-mcp"
+  --command uv \
+  --connect-timeout 30 \
+  --env ERGA_MCP_CONFIG=/absolute/path/to/config.toml \
+  --args --directory /absolute/path/to/erga-mcp run erga-mcp
 ```
 
-Set `ERGA_MCP_CONFIG` in the MCP server environment to the non-secret local config path. Alternatively, copy `integrations/hermes/mcp.example.yaml` into the selected Hermes profile configuration and replace its local path placeholders. Never put OAuth tokens, client secrets, résumé files, or vault contents in that config.
+Keep `--args` last because Hermes treats everything after it as server arguments. If the gateway
+routes this chat through a named profile, use that profile for every command in this section, such
+as `hermes --profile coder mcp add ...`, `hermes --profile coder mcp test erga-mcp`, and
+`hermes --profile coder plugins install ...`. Alternatively, copy
+`integrations/hermes/mcp.example.yaml` into the selected Hermes profile configuration and replace
+its local path placeholders. Never put OAuth tokens, client secrets, résumé files, or vault
+contents in that config.
 
 Verify cold-start discovery before relying on a gateway session:
 

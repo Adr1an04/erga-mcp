@@ -124,12 +124,16 @@ Install the optional MCP dependencies, then register the local stdio server:
 uv sync --extra mcp
 
 hermes mcp add erga-mcp \
-  --command "uv --directory /absolute/path/to/erga-mcp run erga-mcp"
+  --command uv \
+  --connect-timeout 30 \
+  --env ERGA_MCP_CONFIG=/absolute/path/to/config.toml \
+  --args --directory /absolute/path/to/erga-mcp run erga-mcp
 ```
 
-Set `ERGA_MCP_CONFIG` in the MCP environment to the absolute path of your local `config.toml`.
-See [`integrations/hermes/mcp.example.yaml`](integrations/hermes/mcp.example.yaml) for a complete
-example.
+`--args` must remain last. If the gateway routes the chat through a named Hermes profile, add the
+same profile flag to MCP and plugin commands (for example, `hermes --profile coder mcp add ...`).
+See [`integrations/hermes/mcp.example.yaml`](integrations/hermes/mcp.example.yaml) for the equivalent
+configuration file.
 
 Core MCP tools include:
 
