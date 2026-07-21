@@ -4,6 +4,8 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 
+from ..models import MailEvent
+
 _TABLE_HEADER = (
     "| Company | Role | Location / work mode | Source | Status | Applied | "
     "Next action | Contact / link |"
@@ -40,6 +42,65 @@ def _table_cells(line: str) -> tuple[str, ...]:
     if not stripped.startswith("|") or not stripped.endswith("|"):
         return ()
     return tuple(cell.strip() for cell in stripped[1:-1].split("|"))
+
+
+def _company_matches_acknowledgement(company: str, event: MailEvent) -> bool:
+    tokens = re.findall(r"[a-z0-9]+", company.casefold())
+    if not tokens:
+        return False
+    content = f"{event.sender}\n{event.subject}".casefold()
+    return all(
+        re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", content) for token in tokens
+    )
+
+
+def reconcile_confirmed_application_tracker_rows(
+    *, tracker_dir: Path, events: Sequence[MailEvent]
+) -> int:
+    """Mark researching rows as applied only for an exactly matched acknowledgement."""
+    acknowledgements = sorted(
+        (event for event in events if event.kind == "application.acknowledgement"),
+        key=lambda event: event.received_at,
+    )
+    if not acknowledgements:
+        return 0
+
+    updates = 0
+    for tracker_path in sorted(tracker_dir.expanduser().resolve().glob("*.md")):
+        text = tracker_path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        divider_line = _application_table_divider_line(lines)
+        if divider_line is None:
+            continue
+        changed = False
+        for index in range(divider_line + 1, len(lines)):
+            cells = _table_cells(lines[index])
+            if len(cells) != len(_EXPECTED_TABLE_COLUMNS):
+                continue
+            if cells[4].casefold() not in {"researching", "draft"}:
+                continue
+            match = next(
+                (
+                    event
+                    for event in acknowledgements
+                    if _company_matches_acknowledgement(cells[0], event)
+                ),
+                None,
+            )
+            if match is None:
+                continue
+            updated_cells = list(cells)
+            updated_cells[4] = "Applied"
+            updated_cells[5] = match.received_at.date().isoformat()
+            updated_cells[6] = "Await acknowledgement or recruiting update."
+            lines[index] = "| " + " | ".join(_table_cell(cell) for cell in updated_cells) + " |"
+            updates += 1
+            changed = True
+        if changed:
+            tracker_path.write_text(
+                "\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8"
+            )
+    return updates
 
 
 def _application_table_divider_line(lines: list[str]) -> int | None:

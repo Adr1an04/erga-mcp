@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.integrations.obsidian_tracker import write_job_tracker_note
+from erga_mcp.integrations.obsidian_tracker import (
+    reconcile_confirmed_application_tracker_rows,
+    write_job_tracker_note,
+)
+from erga_mcp.models import MailEvent
 
 
 class ObsidianTrackerTests(unittest.TestCase):
@@ -176,6 +181,46 @@ class ObsidianTrackerTests(unittest.TestCase):
                 application_constraints=("No more than two applications.",),
             )
             self.assertEqual(repeated.read_text(encoding="utf-8"), original)
+
+    def test_marks_only_exactly_matched_acknowledgements_as_applied(self) -> None:
+        with TemporaryDirectory() as directory:
+            tracker = Path(directory)
+            tracker_path = tracker / "Summer 2027 Application Tracker.md"
+            tracker_path.write_text(
+                "# Summer 2027\n\n## Application tracker\n\n"
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| Google | Software Engineering Intern | Remote | Link | Researching |  | "
+                "Review role requirements and decide whether to apply. | Note |\n"
+                "| Snowflake | Software Engineering Intern | Remote | Link | "
+                "Online assessment |  | Complete assessment. | Note |\n",
+                encoding="utf-8",
+            )
+            event = MailEvent(
+                message_id="mail-1",
+                received_at=datetime(2026, 7, 20, 19, tzinfo=UTC),
+                sender="careers@google.com",
+                subject="Google application received",
+                kind="application.acknowledgement",
+                confidence=0.9,
+                requires_review=False,
+            )
+
+            updates = reconcile_confirmed_application_tracker_rows(
+                tracker_dir=tracker, events=[event]
+            )
+
+            rendered = tracker_path.read_text(encoding="utf-8")
+            self.assertEqual(updates, 1)
+            self.assertIn(
+                "| Google | Software Engineering Intern | Remote | Link | Applied | 2026-07-20 |",
+                rendered,
+            )
+            self.assertIn(
+                "| Snowflake | Software Engineering Intern | Remote | Link | Online assessment |",
+                rendered,
+            )
 
 
 if __name__ == "__main__":

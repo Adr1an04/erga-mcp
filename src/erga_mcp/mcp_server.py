@@ -22,7 +22,10 @@ from .config import ErgaConfig, load_config
 from .cron_setup import install_hermes_monitor_scripts
 from .exporting import export_bundle
 from .integrations.gmail_live import fetch_inbox_metadata_with_gws
-from .integrations.obsidian_tracker import write_job_tracker_note
+from .integrations.obsidian_tracker import (
+    reconcile_confirmed_application_tracker_rows,
+    write_job_tracker_note,
+)
 from .integrations.zoho_live import fetch_all_inbox_metadata, sync_metadata
 from .job_intake import fetch_job_snapshot, select_relevant_evidence
 from .job_research import (
@@ -854,19 +857,26 @@ def build_server(config_path: Path) -> FastMCP:
                 max_messages=1000,
             )
         sync_result = sync_metadata(store, messages)
+        tracker_updates = 0
+        if config.tracker.enabled and config.tracker.tracker_dir is not None:
+            tracker_updates = reconcile_confirmed_application_tracker_rows(
+                tracker_dir=config.tracker.tracker_dir,
+                events=store.list_mail_events(),
+            )
         created = cast(int, sync_result["created"])
         recruiting_events = cast(int, sync_result["application"]) + cast(int, sync_result["job"])
         message = (
             "📬 **Erga mail sync complete**\n\n"
             f"{config.mail_provider.title()} {config.mail_folder} checked: "
             f"{len(messages)} messages scanned · {created} new events · "
-            f"{recruiting_events} recruiting updates."
+            f"{recruiting_events} recruiting updates · {tracker_updates} tracker rows updated."
         )
         return {
             "provider": config.mail_provider,
             "fetched": len(messages),
             "created": created,
             "recruiting_events": recruiting_events,
+            "tracker_updates": tracker_updates,
             "message": message,
         }
 
