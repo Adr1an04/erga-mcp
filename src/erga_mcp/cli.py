@@ -343,6 +343,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     accounts_url=config.mail_accounts_url,
                 ),
                 limit=args.limit,
+                folder=config.mail_folder,
             )
         sync_result = sync_metadata(store, messages)
         result = {

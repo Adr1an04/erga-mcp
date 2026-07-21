@@ -93,8 +93,10 @@ def format_recruiting_alerts(alerts: Sequence[dict[str, str | bool]]) -> str:
     return "\n\n".join(blocks)
 
 
-def fetch_inbox_metadata(*, access_token: str, limit: int = 20) -> list[MailMessageMetadata]:
-    """Fetch Inbox metadata only from Zoho's read-only endpoints."""
+def fetch_inbox_metadata(
+    *, access_token: str, limit: int = 20, folder: str = "Inbox"
+) -> list[MailMessageMetadata]:
+    """Fetch read-only metadata from a named Zoho folder."""
 
     def get(url: str) -> dict[str, object]:
         request = Request(url, headers={"Authorization": f"Zoho-oauthtoken {access_token}"})
@@ -111,17 +113,28 @@ def fetch_inbox_metadata(*, access_token: str, limit: int = 20) -> list[MailMess
     folders = get(f"https://mail.zoho.com/api/accounts/{account_id}/folders").get("data", [])
     if not isinstance(folders, list):
         raise ValueError("Zoho folder discovery returned invalid data")
-    inbox = next(
+    normalized_folder = folder.strip().casefold()
+    if not normalized_folder:
+        raise ValueError("Zoho folder must not be empty")
+    selected_folder = next(
         (
             item
             for item in folders
-            if isinstance(item, dict) and str(item.get("folderType", "")).lower() == "inbox"
+            if isinstance(item, dict)
+            and (
+                str(item.get("folderName", "")).strip().casefold() == normalized_folder
+                or str(item.get("displayName", "")).strip().casefold() == normalized_folder
+                or (
+                    normalized_folder == "inbox"
+                    and str(item.get("folderType", "")).strip().casefold() == "inbox"
+                )
+            )
         ),
         None,
     )
-    if inbox is None:
-        raise ValueError("Zoho account has no Inbox folder")
-    folder_id = str(inbox["folderId"])
+    if selected_folder is None:
+        raise ValueError(f"Zoho folder not found: {folder}")
+    folder_id = str(selected_folder["folderId"])
     messages = get(
         f"https://mail.zoho.com/api/accounts/{account_id}/messages/view?"
         + urlencode({"folderId": folder_id, "start": 0, "limit": limit})
