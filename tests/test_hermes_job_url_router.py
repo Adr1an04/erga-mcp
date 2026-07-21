@@ -235,7 +235,7 @@ class HermesJobUrlRouterTests(unittest.TestCase):
             assert transformed is not None
             self.assertIn("router will add the native message attachment", injected["context"])
             self.assertIn('MEDIA:"', transformed)
-            self.assertIn(str(pdf_path), transformed)
+            self.assertIn(str(pdf_path.resolve()), transformed)
             self.assertIn("[[as_document]]", transformed)
             self.assertIsNone(repeated)
 
@@ -282,7 +282,7 @@ class HermesJobUrlRouterTests(unittest.TestCase):
             research_dir = package_dir / "research"
             research_dir.mkdir(parents=True)
             research_note = research_dir / "role-research.md"
-            research_note.write_text("# Example Co — Software Intern research\n")
+            research_note.write_text("# Example Co — Software Intern research\n", encoding="utf-8")
             intake_result = json.dumps(
                 {
                     "package_dir": str(package_dir),

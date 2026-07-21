@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -10,6 +11,20 @@ from urllib.request import Request, urlopen
 from .zoho import MailMessageMetadata
 
 _GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
+
+
+def _run_gws(command: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run a GWS command, including Windows .cmd launchers without shell injection."""
+    invocation = command
+    if os.name == "nt" and command[0].casefold().endswith((".bat", ".cmd")):
+        invocation = [
+            os.environ.get("COMSPEC", "cmd.exe"),
+            "/d",
+            "/s",
+            "/c",
+            subprocess.list2cmdline(command),
+        ]
+    return subprocess.run(invocation, check=True, capture_output=True, text=True, timeout=30)
 
 
 def parse_message_metadata(payload: dict[str, object]) -> MailMessageMetadata:
@@ -81,7 +96,7 @@ def fetch_inbox_metadata_with_gws(
         raise ValueError("limit must be between 1 and 100")
 
     def invoke(command: list[str]) -> dict[str, object]:
-        completed = subprocess.run(command, check=True, capture_output=True, text=True, timeout=30)
+        completed = _run_gws(command)
         value = json.loads(completed.stdout)
         if not isinstance(value, dict):
             raise ValueError("gws returned non-object JSON")
@@ -141,7 +156,7 @@ def fetch_all_inbox_metadata_with_gws(
         raise ValueError("Gmail maximum message count must be positive")
 
     def invoke(command: list[str]) -> dict[str, object]:
-        completed = subprocess.run(command, check=True, capture_output=True, text=True, timeout=30)
+        completed = _run_gws(command)
         value = json.loads(completed.stdout)
         if not isinstance(value, dict):
             raise ValueError("gws returned non-object JSON")

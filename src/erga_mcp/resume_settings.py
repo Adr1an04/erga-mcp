@@ -48,7 +48,11 @@ def update_settings(config_path: Path, updates: dict[str, object]) -> ResumeSett
             f"latexmk = {json.dumps(values['latexmk'])}",
         ]
     )
-    replaced = re.sub(r"(?ms)^\[resume\]\n.*?(?=^\[|\Z)", f"{table}\n\n", raw)
+    replaced = re.sub(
+        r"(?ms)^\[resume\]\n.*?(?=^\[|\Z)",
+        lambda _match: f"{table}\n\n",
+        raw,
+    )
     if replaced == raw:
         raise ValueError("config must contain a [resume] table; rerun init or add one manually")
     with tempfile.NamedTemporaryFile(

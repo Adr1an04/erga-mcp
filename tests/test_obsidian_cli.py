@@ -20,7 +20,8 @@ class ObsidianCliTests(unittest.TestCase):
             note.write_text("## Project\n\nVerified delivery outcome.\n", encoding="utf-8")
             config = root / "config.toml"
             config.write_text(
-                f'[paths]\ndata_dir = "state"\nvault_path = "{vault}"\n', encoding="utf-8"
+                f'[paths]\ndata_dir = "state"\nvault_path = {json.dumps(str(vault))}\n',
+                encoding="utf-8",
             )
             output = StringIO()
 

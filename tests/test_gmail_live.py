@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from erga_mcp.integrations.gmail_live import (
+    _run_gws,
     fetch_all_inbox_metadata_with_gws,
     fetch_inbox_metadata_with_gws,
     parse_message_metadata,
@@ -10,6 +12,17 @@ from erga_mcp.integrations.gmail_live import (
 
 
 class GmailLiveTests(unittest.TestCase):
+    def test_runs_windows_cmd_launchers_through_cmd_exe(self) -> None:
+        command = [r"C:\tools\gws.cmd", "gmail", "users", "messages", "list"]
+        with (
+            patch("erga_mcp.integrations.gmail_live.os.name", "nt"),
+            patch("erga_mcp.integrations.gmail_live.subprocess.run") as run,
+        ):
+            _run_gws(command)
+
+        self.assertEqual(run.call_args.args[0][:4], ["cmd.exe", "/d", "/s", "/c"])
+        self.assertTrue(run.call_args.args[0][4].endswith("gws.cmd gmail users messages list"))
+
     def test_parses_gmail_metadata_without_body_content(self) -> None:
         message = parse_message_metadata(
             {

@@ -180,7 +180,9 @@ class JobResearchTests(unittest.TestCase):
             package_dir = Path(directory)
             research_dir = package_dir / "research"
             research_dir.mkdir()
-            (research_dir / "role-research.md").write_text("# Example — Role research\n")
+            (research_dir / "role-research.md").write_text(
+                "# Example — Role research\n", encoding="utf-8"
+            )
             raw = json.dumps(
                 {
                     "success": True,
