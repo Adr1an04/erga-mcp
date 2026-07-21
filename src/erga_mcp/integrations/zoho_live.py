@@ -94,7 +94,7 @@ def format_recruiting_alerts(alerts: Sequence[dict[str, str | bool]]) -> str:
 
 
 def fetch_inbox_metadata(
-    *, access_token: str, limit: int = 20, folder: str = "Inbox"
+    *, access_token: str, limit: int = 20, folder: str = "Inbox", start: int = 0
 ) -> list[MailMessageMetadata]:
     """Fetch read-only metadata from a named Zoho folder."""
 
@@ -137,7 +137,7 @@ def fetch_inbox_metadata(
     folder_id = str(selected_folder["folderId"])
     messages = get(
         f"https://mail.zoho.com/api/accounts/{account_id}/messages/view?"
-        + urlencode({"folderId": folder_id, "start": 0, "limit": limit})
+        + urlencode({"folderId": folder_id, "start": start, "limit": limit})
     ).get("data", [])
     if not isinstance(messages, list):
         raise ValueError("Zoho message listing returned invalid data")
@@ -155,4 +155,35 @@ def fetch_inbox_metadata(
                 preview=str(item.get("summary", "")),
             )
         )
+    return result
+
+
+def fetch_all_inbox_metadata(
+    *,
+    access_token: str,
+    folder: str = "Inbox",
+    page_size: int = 100,
+    max_messages: int = 1000,
+) -> list[MailMessageMetadata]:
+    """Read a configured Zoho folder page by page, bounded by ``max_messages``."""
+    if page_size < 1:
+        raise ValueError("Zoho page size must be positive")
+    if max_messages < 1:
+        raise ValueError("Zoho maximum message count must be positive")
+
+    result: list[MailMessageMetadata] = []
+    start = 0
+    while len(result) < max_messages:
+        remaining = max_messages - len(result)
+        page_limit = min(page_size, remaining)
+        page = fetch_inbox_metadata(
+            access_token=access_token,
+            folder=folder,
+            limit=page_limit,
+            start=start,
+        )
+        result.extend(page)
+        if len(page) < page_limit:
+            break
+        start += len(page)
     return result

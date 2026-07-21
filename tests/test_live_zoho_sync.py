@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from erga_mcp.integrations.zoho import MailMessageMetadata
 from erga_mcp.integrations.zoho_live import (
+    fetch_all_inbox_metadata,
     fetch_inbox_metadata,
     format_recruiting_alerts,
     sync_metadata,
@@ -72,6 +73,52 @@ class LiveZohoSyncTests(unittest.TestCase):
         self.assertEqual([message.message_id for message in messages], ["message-1"])
         self.assertIn("folderId=jobs-1", urls[-1])
         self.assertNotIn("folderId=inbox-1", urls[-1])
+
+    def test_reads_each_page_until_the_configured_folder_is_exhausted(self) -> None:
+        urls: list[str] = []
+        responses = iter(
+            [
+                {"data": [{"accountId": "account-1"}]},
+                {"data": [{"folderId": "inbox-1", "folderType": "Inbox", "folderName": "Inbox"}]},
+                {
+                    "data": [
+                        {"messageId": "m1", "receivedTime": "1784556770435"},
+                        {"messageId": "m2", "receivedTime": "1784556770435"},
+                    ]
+                },
+                {"data": [{"accountId": "account-1"}]},
+                {"data": [{"folderId": "inbox-1", "folderType": "Inbox", "folderName": "Inbox"}]},
+                {"data": [{"messageId": "m3", "receivedTime": "1784556770435"}]},
+            ]
+        )
+
+        class Response:
+            def __init__(self, payload: object) -> None:
+                self.payload = payload
+
+            def __enter__(self) -> Response:
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps(self.payload).encode("utf-8")
+
+        def fake_urlopen(request: object, *, timeout: int) -> Response:
+            self.assertEqual(timeout, 30)
+            urls.append(str(getattr(request, "full_url")))
+            return Response(next(responses))
+
+        with patch("erga_mcp.integrations.zoho_live.urlopen", fake_urlopen):
+            messages = fetch_all_inbox_metadata(
+                access_token="access-token", folder="Inbox", page_size=2
+            )
+
+        self.assertEqual([message.message_id for message in messages], ["m1", "m2", "m3"])
+        message_urls = [url for url in urls if "/messages/view?" in url]
+        self.assertIn("start=0", message_urls[0])
+        self.assertIn("start=2", message_urls[1])
 
     def test_records_new_messages_once_with_application_job_and_other_categories(self) -> None:
         messages = [

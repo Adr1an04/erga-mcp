@@ -33,7 +33,9 @@ class MailSyncMcpTests(unittest.TestCase):
             )
             with (
                 patch("erga_mcp.mcp_server.refresh_access_token", return_value="test-token"),
-                patch("erga_mcp.mcp_server.fetch_inbox_metadata", return_value=[message]) as fetch,
+                patch(
+                    "erga_mcp.mcp_server.fetch_all_inbox_metadata", return_value=[message]
+                ) as fetch,
             ):
                 result: Any = asyncio.run(
                     build_server(config_path).call_tool("sync_recruiting_mail", {})
@@ -47,7 +49,9 @@ class MailSyncMcpTests(unittest.TestCase):
         self.assertIn("Erga mail sync complete", payload["message"])
         self.assertNotIn(message.preview, payload["message"])
         self.assertNotIn(message.subject, payload["message"])
-        fetch.assert_called_once_with(access_token="test-token", limit=50, folder="Inbox")
+        fetch.assert_called_once_with(
+            access_token="test-token", folder="Inbox", max_messages=1000, page_size=100
+        )
 
 
 if __name__ == "__main__":

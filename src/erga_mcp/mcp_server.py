@@ -23,7 +23,7 @@ from .cron_setup import install_hermes_monitor_scripts
 from .exporting import export_bundle
 from .integrations.gmail_live import fetch_inbox_metadata_with_gws
 from .integrations.obsidian_tracker import write_job_tracker_note
-from .integrations.zoho_live import fetch_inbox_metadata, sync_metadata
+from .integrations.zoho_live import fetch_all_inbox_metadata, sync_metadata
 from .job_intake import fetch_job_snapshot, select_relevant_evidence
 from .job_research import (
     JobResearch,
@@ -834,7 +834,7 @@ def build_server(config_path: Path) -> FastMCP:
 
     @server.tool(annotations=_NETWORK_READ_AND_WRITE)
     def sync_recruiting_mail() -> dict[str, object]:
-        """Read bounded mail metadata, persist local events, and return a safe summary."""
+        """Read configured mail page by page, persist local events, and summarize safely."""
         limit = 50
         if config.mail_provider == "gmail":
             messages = fetch_inbox_metadata_with_gws(
@@ -844,13 +844,14 @@ def build_server(config_path: Path) -> FastMCP:
         else:
             if not config.mail_client_id:
                 raise ValueError("mail client_id must be configured before Zoho sync")
-            messages = fetch_inbox_metadata(
+            messages = fetch_all_inbox_metadata(
                 access_token=refresh_access_token(
                     client_id=config.mail_client_id,
                     accounts_url=config.mail_accounts_url,
                 ),
-                limit=limit,
                 folder=config.mail_folder,
+                page_size=100,
+                max_messages=1000,
             )
         sync_result = sync_metadata(store, messages)
         created = cast(int, sync_result["created"])
