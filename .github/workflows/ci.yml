@@ -150,7 +150,9 @@ jobs:
           uv pip install --python .package-test/bin/python "${wheel_path}[mcp]"
           .package-test/bin/erga --help
           .package-test/bin/python -c "import erga_mcp; print(erga_mcp.__version__)"
-          .package-test/bin/erga-mcp </dev/null
+          config_dir=$(mktemp -d)
+          .package-test/bin/erga init --config "$config_dir/config.toml"
+          ERGA_MCP_CONFIG="$config_dir/config.toml" .package-test/bin/erga-mcp </dev/null
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4
