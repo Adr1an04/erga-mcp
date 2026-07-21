@@ -166,8 +166,8 @@ def load_config(config_path: Path) -> ErgaConfig:
         raise ValueError("tracking tracker_dir must be configured when tracking is enabled")
 
     mail_provider = str(mail.get("provider", "zoho")).strip().casefold()
-    if mail_provider not in {"zoho", "gmail", "both"}:
-        raise ValueError("mail provider must be zoho, gmail, or both")
+    if mail_provider not in {"zoho", "gmail"}:
+        raise ValueError("mail provider must be zoho or gmail")
     mail_accounts_url = str(mail.get("accounts_url", "https://accounts.zoho.com")).strip()
     if not mail_accounts_url.startswith("https://"):
         raise ValueError("mail accounts_url must use HTTPS")

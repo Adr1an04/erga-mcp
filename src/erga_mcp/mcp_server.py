@@ -839,28 +839,23 @@ def build_server(config_path: Path) -> FastMCP:
     @server.tool(annotations=_NETWORK_READ_AND_WRITE)
     def sync_recruiting_mail() -> dict[str, object]:
         """Read configured mail page by page, persist local events, and summarize safely."""
-        messages = []
-        if config.mail_provider in {"gmail", "both"}:
-            messages.extend(
-                fetch_all_inbox_metadata_with_gws(
-                    gws_command=config.gws_command,
-                    page_size=100,
-                    max_messages=1000,
-                )
+        if config.mail_provider == "gmail":
+            messages = fetch_all_inbox_metadata_with_gws(
+                gws_command=config.gws_command,
+                page_size=100,
+                max_messages=1000,
             )
-        if config.mail_provider in {"zoho", "both"}:
+        else:
             if not config.mail_client_id:
                 raise ValueError("mail client_id must be configured before Zoho sync")
-            messages.extend(
-                fetch_all_inbox_metadata(
-                    access_token=refresh_access_token(
-                        client_id=config.mail_client_id,
-                        accounts_url=config.mail_accounts_url,
-                    ),
-                    folder=config.mail_folder,
-                    page_size=100,
-                    max_messages=1000,
-                )
+            messages = fetch_all_inbox_metadata(
+                access_token=refresh_access_token(
+                    client_id=config.mail_client_id,
+                    accounts_url=config.mail_accounts_url,
+                ),
+                folder=config.mail_folder,
+                page_size=100,
+                max_messages=1000,
             )
         sync_result = sync_metadata(store, messages)
         tracker_updates = 0
