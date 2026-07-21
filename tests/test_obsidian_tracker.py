@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.integrations.obsidian_tracker import (
+    import_confirmed_application_tracker_rows,
     reconcile_confirmed_application_tracker_rows,
     write_job_tracker_note,
 )
@@ -181,6 +182,52 @@ class ObsidianTrackerTests(unittest.TestCase):
                 application_constraints=("No more than two applications.",),
             )
             self.assertEqual(repeated.read_text(encoding="utf-8"), original)
+
+    def test_imports_only_acknowledgements_in_active_cycles(self) -> None:
+        with TemporaryDirectory() as directory:
+            tracker = Path(directory)
+            table = (
+                "## Application tracker\n\n"
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            )
+            fall_tracker = tracker / "Fall 2026 Application Tracker.md"
+            spring_tracker = tracker / "Spring 2027 Applications.md"
+            fall_tracker.write_text("# Fall 2026\n\n" + table, encoding="utf-8")
+            spring_tracker.write_text("# Spring 2027\n\n" + table, encoding="utf-8")
+            events = [
+                MailEvent(
+                    message_id="current",
+                    received_at=datetime(2026, 7, 20, tzinfo=UTC),
+                    sender="jobs@example.test",
+                    subject="Thank you for applying to Example Systems",
+                    kind="application.acknowledgement",
+                    confidence=0.9,
+                    requires_review=False,
+                ),
+                MailEvent(
+                    message_id="legacy",
+                    received_at=datetime(2026, 2, 1, tzinfo=UTC),
+                    sender="jobs@example.test",
+                    subject="Thank you for applying to Legacy Systems",
+                    kind="application.acknowledgement",
+                    confidence=0.9,
+                    requires_review=False,
+                ),
+            ]
+
+            created = import_confirmed_application_tracker_rows(
+                tracker_dir=tracker,
+                active_cycles=("Fall 2026", "Spring 2027"),
+                events=events,
+            )
+
+            self.assertEqual(created, 1)
+            self.assertIn(
+                "| Example Systems | Application confirmed by email |", fall_tracker.read_text()
+            )
+            self.assertNotIn("Legacy Systems", spring_tracker.read_text())
 
     def test_marks_only_exactly_matched_acknowledgements_as_applied(self) -> None:
         with TemporaryDirectory() as directory:

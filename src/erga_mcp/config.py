@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +40,8 @@ folder = "Job Applications"
 # Optional Markdown/Obsidian tracker. Keep disabled when no tracker provider is wanted.
 enabled = false
 tracker_dir = ""
+# Explicit recruiting cycles eligible for acknowledgement-based tracker imports.
+active_cycles = []
 
 [privacy]
 # Keep full message bodies and attachments disabled unless a user explicitly enables them.
@@ -64,6 +67,7 @@ class ResumeSettings:
 class TrackerSettings:
     enabled: bool
     tracker_dir: Path | None
+    active_cycles: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -150,6 +154,14 @@ def load_config(config_path: Path) -> ErgaConfig:
     tracker_value = str(tracking.get("tracker_dir", "")).strip()
     tracker_dir = _path(tracker_value, config_path.parent) if tracker_value else None
     tracker_enabled = bool(tracking.get("enabled", False))
+    active_cycles_value = tracking.get("active_cycles", [])
+    if not isinstance(active_cycles_value, list) or any(
+        not isinstance(cycle, str)
+        or re.fullmatch(r"(?:Fall|Spring)\s+\d{4}", " ".join(cycle.split()), re.IGNORECASE) is None
+        for cycle in active_cycles_value
+    ):
+        raise ValueError("tracking active_cycles must be a list of Fall YYYY or Spring YYYY values")
+    active_cycles = tuple(" ".join(cycle.split()) for cycle in active_cycles_value)
     if tracker_enabled and tracker_dir is None:
         raise ValueError("tracking tracker_dir must be configured when tracking is enabled")
 
@@ -165,7 +177,9 @@ def load_config(config_path: Path) -> ErgaConfig:
         data_dir=data_dir,
         vault_path=vault_path,
         resume=_resume_settings(document, config_path.parent),
-        tracker=TrackerSettings(enabled=tracker_enabled, tracker_dir=tracker_dir),
+        tracker=TrackerSettings(
+            enabled=tracker_enabled, tracker_dir=tracker_dir, active_cycles=active_cycles
+        ),
         mail_provider=mail_provider,
         gws_command=str(mail.get("gws_command", "gws")).strip() or "gws",
         mail_client_id=str(mail.get("client_id", "")).strip(),

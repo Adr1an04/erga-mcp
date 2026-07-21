@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.config import load_config
+from erga_mcp.config import DEFAULT_CONFIG, load_config
 
 
 class ConfigTests(unittest.TestCase):
@@ -90,6 +90,20 @@ bullet_max_chars = 90
 
             with self.assertRaisesRegex(ValueError, "bullet character lengths"):
                 load_config(config_path)
+
+    def test_loads_active_tracker_cycles_for_mail_reconciliation(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace("enabled = false", "enabled = true")
+                .replace('tracker_dir = ""', 'tracker_dir = "tracker"')
+                .replace("active_cycles = []", 'active_cycles = ["Fall 2026", "Spring 2027"]'),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+            self.assertEqual(config.tracker.active_cycles, ("Fall 2026", "Spring 2027"))
 
 
 if __name__ == "__main__":

@@ -23,6 +23,12 @@ _EXPECTED_TABLE_COLUMNS = (
     "next action",
     "contact / link",
 )
+_ACTIVE_CYCLE_PATTERN = re.compile(r"^(Fall|Spring)\s+(\d{4})$", re.IGNORECASE)
+_ACKNOWLEDGEMENT_COMPANY_PATTERN = re.compile(
+    r"\b(?:thank\s+you|thanks)\s+for\s+(?:your\s+)?(?:applying|application)\s+"
+    r"(?:to|at)\s+(.+?)(?:[!.,:]|$)",
+    re.IGNORECASE,
+)
 
 
 def _safe_name(value: str) -> str:
@@ -101,6 +107,100 @@ def reconcile_confirmed_application_tracker_rows(
                 "\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8"
             )
     return updates
+
+
+def _active_cycle_for_received_at(
+    received_at_year: int, received_at_month: int, active_cycles: Sequence[str]
+) -> str | None:
+    season = "Fall" if received_at_month >= 7 else "Spring"
+    candidate = f"{season} {received_at_year}"
+    return next(
+        (cycle for cycle in active_cycles if cycle.casefold() == candidate.casefold()), None
+    )
+
+
+def _company_from_acknowledgement(event: MailEvent) -> str | None:
+    match = _ACKNOWLEDGEMENT_COMPANY_PATTERN.search(event.subject)
+    if match is None:
+        return None
+    company = " ".join(match.group(1).split())
+    try:
+        return _safe_name(company)
+    except ValueError:
+        return None
+
+
+def _application_table_end(lines: list[str], divider_line: int) -> int:
+    end = divider_line + 1
+    while end < len(lines) and _table_cells(lines[end]):
+        end += 1
+    return end
+
+
+def import_confirmed_application_tracker_rows(
+    *, tracker_dir: Path, active_cycles: Sequence[str], events: Sequence[MailEvent]
+) -> int:
+    """Add explicit acknowledgement-only rows for configured current recruiting cycles."""
+    active_cycles = tuple(" ".join(cycle.split()) for cycle in active_cycles if cycle.strip())
+    if not active_cycles:
+        return 0
+    if any(_ACTIVE_CYCLE_PATTERN.fullmatch(cycle) is None for cycle in active_cycles):
+        raise ValueError("active tracker cycles must be Fall YYYY or Spring YYYY")
+
+    tracker_dir = tracker_dir.expanduser().resolve()
+    existing_companies: set[tuple[str, str]] = set()
+    for tracker_path in tracker_dir.glob("*.md"):
+        text = tracker_path.read_text(encoding="utf-8")
+        tracker_cycle = tracker_path.stem.removesuffix(" Application Tracker").removesuffix(
+            " Applications"
+        )
+        divider_line = _application_table_divider_line(text.splitlines())
+        if divider_line is None:
+            continue
+        for line in text.splitlines()[divider_line + 1 :]:
+            cells = _table_cells(line)
+            if len(cells) == len(_EXPECTED_TABLE_COLUMNS) and cells[0]:
+                existing_companies.add((tracker_cycle.casefold(), cells[0].casefold()))
+
+    created = 0
+    for event in sorted(events, key=lambda item: item.received_at):
+        if event.kind != "application.acknowledgement":
+            continue
+        cycle = _active_cycle_for_received_at(
+            event.received_at.year, event.received_at.month, active_cycles
+        )
+        company = _company_from_acknowledgement(event)
+        if cycle is None or company is None:
+            continue
+        key = (cycle.casefold(), company.casefold())
+        if key in existing_companies:
+            continue
+        tracker_path = _tracker_path(tracker_dir, cycle)
+        text = tracker_path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        divider_line = _application_table_divider_line(lines)
+        if divider_line is None:
+            continue
+        row = [
+            company,
+            "Application confirmed by email",
+            "",
+            "Email acknowledgement",
+            "Applied",
+            event.received_at.date().isoformat(),
+            "Await recruiting update.",
+            "",
+        ]
+        lines.insert(
+            _application_table_end(lines, divider_line),
+            "| " + " | ".join(_table_cell(cell) for cell in row) + " |",
+        )
+        tracker_path.write_text(
+            "\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8"
+        )
+        existing_companies.add(key)
+        created += 1
+    return created
 
 
 def _application_table_divider_line(lines: list[str]) -> int | None:

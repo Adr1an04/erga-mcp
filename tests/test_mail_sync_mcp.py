@@ -41,6 +41,10 @@ class MailSyncMcpTests(unittest.TestCase):
                     "erga_mcp.mcp_server.reconcile_confirmed_application_tracker_rows",
                     return_value=1,
                 ) as reconcile,
+                patch(
+                    "erga_mcp.mcp_server.import_confirmed_application_tracker_rows",
+                    return_value=2,
+                ) as imports,
             ):
                 result: Any = asyncio.run(
                     build_server(config_path).call_tool("sync_recruiting_mail", {})
@@ -51,7 +55,8 @@ class MailSyncMcpTests(unittest.TestCase):
         self.assertEqual(payload["fetched"], 1)
         self.assertEqual(payload["created"], 1)
         self.assertEqual(payload["recruiting_events"], 1)
-        self.assertEqual(payload["tracker_updates"], 1)
+        self.assertEqual(payload["tracker_updates"], 3)
+        self.assertEqual(payload["tracker_imports"], 2)
         self.assertIn("Erga mail sync complete", payload["message"])
         self.assertNotIn(message.preview, payload["message"])
         self.assertNotIn(message.subject, payload["message"])
@@ -60,6 +65,8 @@ class MailSyncMcpTests(unittest.TestCase):
         )
         self.assertEqual(reconcile.call_args.kwargs["tracker_dir"], root / "tracker")
         self.assertEqual(len(reconcile.call_args.kwargs["events"]), 1)
+        self.assertEqual(imports.call_args.kwargs["active_cycles"], ())
+        self.assertEqual(imports.call_args.kwargs["tracker_dir"], root / "tracker")
 
 
 if __name__ == "__main__":
