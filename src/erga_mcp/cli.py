@@ -10,6 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .config import DEFAULT_CONFIG, load_config
+from .contact_projection import project_recruiter_contacts
 from .cron_setup import install_hermes_monitor_scripts
 from .doctor import check_installation
 from .exporting import export_bundle
@@ -356,9 +357,13 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 folder=config.mail_folder,
             )
         sync_result = sync_metadata(store, messages)
+        contacts_projected = project_recruiter_contacts(
+            store.list_recruiter_contacts(), config.contact_outputs
+        )
         result = {
             "provider": config.mail_provider,
             "fetched": len(messages),
+            "contacts_projected": contacts_projected,
             **sync_result,
         }
         if args.notify:

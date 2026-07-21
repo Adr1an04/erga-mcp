@@ -40,6 +40,17 @@ class TokenUsage:
 
 
 @dataclass(frozen=True)
+class RecruiterContact:
+    id: str
+    email: str
+    name: str | None
+    company: str | None
+    first_seen_at: datetime
+    last_seen_at: datetime
+    source_message_id: str
+
+
+@dataclass(frozen=True)
 class AuditEvent:
     id: str
     action: str

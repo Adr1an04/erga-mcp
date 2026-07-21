@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, StrictInt
 
 from .cli import DEFAULT_CONFIG_PATH
 from .config import ErgaConfig, load_config
+from .contact_projection import project_recruiter_contacts
 from .cron_setup import install_hermes_monitor_scripts
 from .exporting import export_bundle
 from .integrations.gmail_live import fetch_all_inbox_metadata_with_gws
@@ -945,13 +946,18 @@ def build_server(config_path: Path) -> FastMCP:
                 events=store.list_mail_events(),
             )
         tracker_rows_updated = tracker_updates + tracker_imports
+        contacts_projected = project_recruiter_contacts(
+            store.list_recruiter_contacts(), config.contact_outputs
+        )
         created = cast(int, sync_result["created"])
         recruiting_events = cast(int, sync_result["application"]) + cast(int, sync_result["job"])
         message = (
             "📬 **Erga mail sync complete**\n\n"
             f"{config.mail_provider.title()} {config.mail_folder} checked: "
             f"{len(messages)} messages scanned · {created} new events · "
-            f"{recruiting_events} recruiting updates · {tracker_rows_updated} tracker rows updated."
+            f"{recruiting_events} recruiting updates · "
+            f"{tracker_rows_updated} tracker rows updated · "
+            f"{contacts_projected} contacts projected."
         )
         return {
             "provider": config.mail_provider,
@@ -960,6 +966,7 @@ def build_server(config_path: Path) -> FastMCP:
             "recruiting_events": recruiting_events,
             "tracker_updates": tracker_rows_updated,
             "tracker_imports": tracker_imports,
+            "contacts_projected": contacts_projected,
             "message": message,
         }
 

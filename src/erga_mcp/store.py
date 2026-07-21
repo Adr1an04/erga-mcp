@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from .models import Application, AuditEvent, Evidence, MailEvent, TokenUsage
+from .models import Application, AuditEvent, Evidence, MailEvent, RecruiterContact, TokenUsage
 
 APPLICATION_STATUSES = frozenset(
     {
@@ -58,6 +58,22 @@ CREATE TABLE IF NOT EXISTS mail_events (
     confidence REAL NOT NULL,
     requires_review INTEGER NOT NULL,
     created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS recruiter_contacts (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    name TEXT,
+    company TEXT,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    source_message_id TEXT NOT NULL REFERENCES mail_events(message_id)
+);
+CREATE INDEX IF NOT EXISTS recruiter_contacts_last_seen_idx
+ON recruiter_contacts(last_seen_at DESC);
+CREATE TABLE IF NOT EXISTS recruiter_contact_applications (
+    contact_id TEXT NOT NULL REFERENCES recruiter_contacts(id),
+    application_id TEXT NOT NULL REFERENCES applications(id),
+    PRIMARY KEY(contact_id, application_id)
 );
 CREATE TABLE IF NOT EXISTS audit_events (
     id TEXT PRIMARY KEY,
@@ -436,6 +452,97 @@ class ErgaStore:
                 kind=row["kind"],
                 confidence=float(row["confidence"]),
                 requires_review=bool(row["requires_review"]),
+            )
+            for row in rows
+        ]
+
+    def upsert_recruiter_contact(
+        self,
+        *,
+        email: str,
+        name: str | None,
+        company: str | None,
+        source_message_id: str,
+        seen_at: datetime,
+    ) -> RecruiterContact:
+        """Create or refresh a recruiter contact from minimal mail metadata."""
+        normalized_email = email.strip().casefold()
+        if "@" not in normalized_email or normalized_email.startswith("@"):
+            raise ValueError("email must be a valid address")
+        normalized_name = " ".join(name.split()) if name else None
+        normalized_company = " ".join(company.split()) if company else None
+        self.initialize()
+        with closing(self._connection()) as connection:
+            row = connection.execute(
+                "SELECT * FROM recruiter_contacts WHERE email = ?", (normalized_email,)
+            ).fetchone()
+            if row is None:
+                contact = RecruiterContact(
+                    id=f"contact_{uuid4().hex}",
+                    email=normalized_email,
+                    name=normalized_name,
+                    company=normalized_company,
+                    first_seen_at=seen_at,
+                    last_seen_at=seen_at,
+                    source_message_id=source_message_id,
+                )
+                connection.execute(
+                    "INSERT INTO recruiter_contacts VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        contact.id,
+                        contact.email,
+                        contact.name,
+                        contact.company,
+                        _as_text(contact.first_seen_at),
+                        _as_text(contact.last_seen_at),
+                        contact.source_message_id,
+                    ),
+                )
+                self._record_audit(
+                    connection, "recruiter_contact.created", contact.id, {"email": contact.email}
+                )
+            else:
+                contact = RecruiterContact(
+                    id=row["id"],
+                    email=row["email"],
+                    name=normalized_name or row["name"],
+                    company=normalized_company or row["company"],
+                    first_seen_at=_as_datetime(row["first_seen_at"]),
+                    last_seen_at=seen_at,
+                    source_message_id=source_message_id,
+                )
+                connection.execute(
+                    """
+                    UPDATE recruiter_contacts
+                    SET name = ?, company = ?, last_seen_at = ?, source_message_id = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        contact.name,
+                        contact.company,
+                        _as_text(contact.last_seen_at),
+                        contact.source_message_id,
+                        contact.id,
+                    ),
+                )
+            connection.commit()
+        return contact
+
+    def list_recruiter_contacts(self) -> list[RecruiterContact]:
+        self.initialize()
+        with closing(self._connection()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM recruiter_contacts ORDER BY last_seen_at DESC"
+            ).fetchall()
+        return [
+            RecruiterContact(
+                id=row["id"],
+                email=row["email"],
+                name=row["name"],
+                company=row["company"],
+                first_seen_at=_as_datetime(row["first_seen_at"]),
+                last_seen_at=_as_datetime(row["last_seen_at"]),
+                source_message_id=row["source_message_id"],
             )
             for row in rows
         ]

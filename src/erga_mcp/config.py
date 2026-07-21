@@ -43,6 +43,10 @@ tracker_dir = ""
 # Explicit recruiting cycles eligible for acknowledgement-based tracker imports.
 active_cycles = []
 
+[contacts]
+# Optional contact projections. Each output is an explicit local sink, such as Obsidian.
+outputs = []
+
 [privacy]
 # Keep full message bodies and attachments disabled unless a user explicitly enables them.
 retain_message_bodies = false
@@ -71,12 +75,19 @@ class TrackerSettings:
 
 
 @dataclass(frozen=True)
+class ContactOutputSettings:
+    kind: str
+    directory: Path
+
+
+@dataclass(frozen=True)
 class ErgaConfig:
     config_path: Path
     data_dir: Path
     vault_path: Path | None
     resume: ResumeSettings
     tracker: TrackerSettings
+    contact_outputs: tuple[ContactOutputSettings, ...]
     mail_provider: str
     gws_command: str
     mail_client_id: str
@@ -146,6 +157,7 @@ def load_config(config_path: Path) -> ErgaConfig:
     paths = _section(document, "paths")
     mail = _section(document, "mail")
     tracking = _section(document, "tracking")
+    contacts = _section(document, "contacts")
     privacy = _section(document, "privacy")
 
     data_dir = _path(str(paths.get("data_dir", "state")), config_path.parent)
@@ -165,6 +177,22 @@ def load_config(config_path: Path) -> ErgaConfig:
     if tracker_enabled and tracker_dir is None:
         raise ValueError("tracking tracker_dir must be configured when tracking is enabled")
 
+    contact_outputs_value = contacts.get("outputs", [])
+    if not isinstance(contact_outputs_value, list):
+        raise ValueError("contacts outputs must be a list")
+    contact_outputs: list[ContactOutputSettings] = []
+    for output in contact_outputs_value:
+        if not isinstance(output, dict):
+            raise ValueError("each contacts output must be a table")
+        kind = str(output.get("kind", "")).strip().casefold()
+        directory_value = str(output.get("directory", "")).strip()
+        if kind != "obsidian" or not directory_value:
+            raise ValueError("contacts outputs currently require kind = 'obsidian' and a directory")
+        if vault_path is None:
+            raise ValueError("paths vault_path must be configured for an Obsidian contacts output")
+        directory = _path(directory_value, vault_path)
+        contact_outputs.append(ContactOutputSettings(kind=kind, directory=directory))
+
     mail_provider = str(mail.get("provider", "zoho")).strip().casefold()
     if mail_provider not in {"zoho", "gmail"}:
         raise ValueError("mail provider must be zoho or gmail")
@@ -180,6 +208,7 @@ def load_config(config_path: Path) -> ErgaConfig:
         tracker=TrackerSettings(
             enabled=tracker_enabled, tracker_dir=tracker_dir, active_cycles=active_cycles
         ),
+        contact_outputs=tuple(contact_outputs),
         mail_provider=mail_provider,
         gws_command=str(mail.get("gws_command", "gws")).strip() or "gws",
         mail_client_id=str(mail.get("client_id", "")).strip(),

@@ -8,6 +8,7 @@ from urllib.request import Request, urlopen
 
 from ..classification import classify_application_message
 from ..models import MailEvent
+from ..recruiter_contacts import record_recruiter_contact_from_mail
 from ..store import ErgaStore
 from .zoho import MailMessageMetadata
 
@@ -58,6 +59,10 @@ def sync_metadata(
         created = store.record_mail_event(event)
         if not created:
             store.update_mail_event_classification(event)
+        contact = record_recruiter_contact_from_mail(store, event)
+        if contact is not None:
+            counts.setdefault("contacts", 0)
+            counts["contacts"] = int(counts["contacts"]) + 1
         category = kind.split(".", 1)[0]
         counts[category] = int(counts[category]) + 1
         if created:

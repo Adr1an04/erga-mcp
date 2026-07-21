@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from erga_mcp.models import MailEvent
+from erga_mcp.recruiter_contacts import record_recruiter_contact_from_mail
 from erga_mcp.store import ErgaStore
 
 
@@ -121,6 +124,27 @@ class StoreTests(unittest.TestCase):
                             input_tokens=invalid_value,  # type: ignore[arg-type]
                             output_tokens=0,
                         )
+
+    def test_detects_named_recruiter_contacts_from_application_metadata(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = ErgaStore(Path(directory) / "erga.sqlite3")
+            event = MailEvent(
+                message_id="message-1",
+                received_at=datetime(2026, 7, 21, tzinfo=UTC),
+                sender="Jane Smith <jane.smith@company.test>",
+                subject="Interview invitation",
+                kind="application.interview",
+                confidence=0.99,
+                requires_review=True,
+            )
+            store.record_mail_event(event)
+            contact = record_recruiter_contact_from_mail(store, event)
+
+            self.assertIsNotNone(contact)
+            assert contact is not None
+            self.assertEqual(contact.name, "Jane Smith")
+            self.assertEqual(contact.email, "jane.smith@company.test")
+            self.assertEqual(store.list_recruiter_contacts(), [contact])
 
 
 if __name__ == "__main__":
