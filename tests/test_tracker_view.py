@@ -37,8 +37,8 @@ class TrackerViewTests(unittest.TestCase):
         self.assertIn("Erga application tracker", message)
         self.assertIn("2 roles", message)
         self.assertIn("**Fall 2026**", message)
-        self.assertIn("🟡 **Cloudflare** — Software Engineer Intern", message)
-        self.assertIn("📬 **Google** — Software Engineering Intern", message)
+        self.assertIn("🟡 **Cloudflare** - Software Engineer Intern", message)
+        self.assertIn("📬 **Google** - Software Engineering Intern", message)
         self.assertIn("Next: Review résumé", message)
         self.assertNotIn("https://example.test", message)
 

@@ -201,7 +201,7 @@ def render_tracker_message(
             details = f"{details} · Applied {entry.applied}"
         lines.append(
             f"{_STATUS_ICONS.get(entry.status.casefold(), '•')} "
-            f"**{_short(entry.company, limit=80)}** — {_short(entry.role, limit=120)}"
+            f"**{_short(entry.company, limit=80)}** - {_short(entry.role, limit=120)}"
         )
         lines.append(f"> {details}")
         if entry.next_action:
