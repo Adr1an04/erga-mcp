@@ -40,17 +40,18 @@ def sync_metadata(
     alerts: list[dict[str, str | bool]] = []
     for message in messages:
         kind, confidence, requires_review = _classify(message)
-        created = store.record_mail_event(
-            MailEvent(
-                message_id=message.message_id,
-                received_at=message.received_at,
-                sender=message.sender,
-                subject=message.subject,
-                kind=kind,
-                confidence=confidence,
-                requires_review=requires_review,
-            )
+        event = MailEvent(
+            message_id=message.message_id,
+            received_at=message.received_at,
+            sender=message.sender,
+            subject=message.subject,
+            kind=kind,
+            confidence=confidence,
+            requires_review=requires_review,
         )
+        created = store.record_mail_event(event)
+        if not created:
+            store.update_mail_event_classification(event)
         if created:
             counts["created"] = int(counts["created"]) + 1
             category = kind.split(".", 1)[0]

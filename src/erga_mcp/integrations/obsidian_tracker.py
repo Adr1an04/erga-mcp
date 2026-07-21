@@ -25,8 +25,8 @@ _EXPECTED_TABLE_COLUMNS = (
 )
 _ACTIVE_CYCLE_PATTERN = re.compile(r"^(Fall|Spring)\s+(\d{4})$", re.IGNORECASE)
 _ACKNOWLEDGEMENT_COMPANY_PATTERN = re.compile(
-    r"\b(?:thank\s+you|thanks)\s+for\s+(?:your\s+)?(?:applying|application)\s+"
-    r"(?:to|at)\s+(.+?)(?:[!.,:]|$)",
+    r"\b(?:thank\s+you|thanks)\s+for\s+(?:your\s+)?"
+    r"(?:(?:applying|application)\s+(?:to|at)|interest\s+in)\s+(.+?)(?:[!.,:]|$)",
     re.IGNORECASE,
 )
 

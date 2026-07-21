@@ -14,6 +14,7 @@ from erga_mcp.integrations.zoho_live import (
     format_recruiting_alerts,
     sync_metadata,
 )
+from erga_mcp.models import MailEvent
 from erga_mcp.store import ErgaStore
 
 
@@ -173,6 +174,33 @@ class LiveZohoSyncTests(unittest.TestCase):
             )
             self.assertEqual(sync_metadata(store, messages)["created"], 0)
             self.assertEqual(sync_metadata(store, messages)["alerts"], [])
+
+    def test_reclassifies_existing_messages_when_rules_improve(self) -> None:
+        message = MailMessageMetadata(
+            "tesla-1",
+            datetime(2026, 7, 12, tzinfo=UTC),
+            "noreply@tesla.com",
+            "Adrian, thank you for your interest in Tesla",
+            "",
+        )
+        with TemporaryDirectory() as directory:
+            store = ErgaStore(Path(directory) / "erga.sqlite3")
+            store.record_mail_event(
+                MailEvent(
+                    message_id=message.message_id,
+                    received_at=message.received_at,
+                    sender=message.sender,
+                    subject=message.subject,
+                    kind="other",
+                    confidence=0.0,
+                    requires_review=False,
+                )
+            )
+
+            summary = sync_metadata(store, [message])
+
+            self.assertEqual(summary["created"], 0)
+            self.assertEqual(store.list_mail_events()[0].kind, "application.acknowledgement")
 
     def test_renders_only_new_relevant_mail_with_source_and_subject(self) -> None:
         message = MailMessageMetadata(

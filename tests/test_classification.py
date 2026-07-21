@@ -25,6 +25,15 @@ class ClassificationTests(unittest.TestCase):
         self.assertFalse(result.requires_review)
         self.assertGreaterEqual(result.confidence, 0.9)
 
+    def test_thank_you_for_interest_is_an_acknowledgement(self) -> None:
+        result = classify_application_message(
+            subject="Adrian, thank you for your interest in Tesla",
+            preview="",
+        )
+
+        self.assertEqual(result.kind, "acknowledgement")
+        self.assertFalse(result.requires_review)
+
     def test_assessment_invitation_requires_immediate_review(self) -> None:
         result = classify_application_message(
             subject="Your HackerRank Software Engineer Intern Coding Test Invitation",

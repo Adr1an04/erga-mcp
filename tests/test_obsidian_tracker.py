@@ -207,6 +207,15 @@ class ObsidianTrackerTests(unittest.TestCase):
                     requires_review=False,
                 ),
                 MailEvent(
+                    message_id="tesla",
+                    received_at=datetime(2026, 7, 12, tzinfo=UTC),
+                    sender="noreply@tesla.example",
+                    subject="Adrian, thank you for your interest in Tesla",
+                    kind="application.acknowledgement",
+                    confidence=0.9,
+                    requires_review=False,
+                ),
+                MailEvent(
                     message_id="legacy",
                     received_at=datetime(2026, 2, 1, tzinfo=UTC),
                     sender="jobs@example.test",
@@ -223,10 +232,10 @@ class ObsidianTrackerTests(unittest.TestCase):
                 events=events,
             )
 
-            self.assertEqual(created, 1)
-            self.assertIn(
-                "| Example Systems | Application confirmed by email |", fall_tracker.read_text()
-            )
+            self.assertEqual(created, 2)
+            rendered = fall_tracker.read_text()
+            self.assertIn("| Example Systems | Application confirmed by email |", rendered)
+            self.assertIn("| Tesla | Application confirmed by email |", rendered)
             self.assertNotIn("Legacy Systems", spring_tracker.read_text())
 
     def test_marks_only_exactly_matched_acknowledgements_as_applied(self) -> None:

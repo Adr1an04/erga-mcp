@@ -281,6 +281,37 @@ class ErgaStore:
             connection.commit()
         return bool(result.rowcount)
 
+    def update_mail_event_classification(self, event: MailEvent) -> bool:
+        """Refresh a retained event when deterministic classification rules improve."""
+        self.initialize()
+        with closing(self._connection()) as connection:
+            result = connection.execute(
+                """
+                UPDATE mail_events
+                SET kind = ?, confidence = ?, requires_review = ?
+                WHERE message_id = ?
+                  AND (kind != ? OR confidence != ? OR requires_review != ?)
+                """,
+                (
+                    event.kind,
+                    event.confidence,
+                    event.requires_review,
+                    event.message_id,
+                    event.kind,
+                    event.confidence,
+                    event.requires_review,
+                ),
+            )
+            if result.rowcount:
+                self._record_audit(
+                    connection,
+                    "mail_event.reclassified",
+                    event.message_id,
+                    {"kind": event.kind, "requires_review": event.requires_review},
+                )
+            connection.commit()
+        return bool(result.rowcount)
+
     def list_mail_events(self) -> list[MailEvent]:
         self.initialize()
         with closing(self._connection()) as connection:

@@ -54,6 +54,7 @@ _ACKNOWLEDGEMENT_MARKERS = (
     "application received",
     "thank you for applying",
     "thanks for applying",
+    "thank you for your interest in",
 )
 
 
