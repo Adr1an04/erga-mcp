@@ -260,7 +260,7 @@ class LiveZohoSyncTests(unittest.TestCase):
         )
         self.assertEqual(
             format_recruiting_alerts(summary["alerts"]),
-            "📬 Recruiting inbox update\n\n"
+            "[Recruiting inbox update]\n\n"
             "Assessment invitation — needs review\n"
             "Received: 2026-07-18T00:00:00+00:00\n"
             "From: recruiting@acme.example\n"

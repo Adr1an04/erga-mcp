@@ -87,7 +87,7 @@ def format_recruiting_alerts(alerts: Sequence[dict[str, str | bool]]) -> str:
         "application.denial": "Application decision",
         "job.candidate": "Potential job lead",
     }
-    blocks = ["📬 Recruiting inbox update"]
+    blocks = ["[Recruiting inbox update]"]
     for alert in alerts:
         label = labels.get(str(alert["kind"]), "Recruiting update")
         review = " — needs review" if alert["requires_review"] else ""
