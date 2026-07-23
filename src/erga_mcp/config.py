@@ -26,6 +26,12 @@ output_root = "output"
 output_pdf_name = "Firstname_Lastname_Resume.pdf"
 latexmk = "latexmk"
 
+[cover_letter]
+# Template contains exactly one {{BODY}} marker. The writing sample is style-only.
+# A relative writing_sample_path resolves from vault_path when configured.
+template_path = ""
+writing_sample_path = ""
+
 [mail]
 # Provider selection is explicit; each connector is independently authorized.
 provider = "zoho"
@@ -68,6 +74,12 @@ class ResumeSettings:
 
 
 @dataclass(frozen=True)
+class CoverLetterSettings:
+    template_path: Path | None
+    writing_sample_path: Path | None
+
+
+@dataclass(frozen=True)
 class TrackerSettings:
     enabled: bool
     tracker_dir: Path | None
@@ -86,6 +98,7 @@ class ErgaConfig:
     data_dir: Path
     vault_path: Path | None
     resume: ResumeSettings
+    cover_letter: CoverLetterSettings
     tracker: TrackerSettings
     contact_outputs: tuple[ContactOutputSettings, ...]
     mail_provider: str
@@ -156,6 +169,7 @@ def load_config(config_path: Path) -> ErgaConfig:
     document = tomllib.loads(config_path.read_text(encoding="utf-8"))
     paths = _section(document, "paths")
     mail = _section(document, "mail")
+    cover_letter = _section(document, "cover_letter")
     tracking = _section(document, "tracking")
     contacts = _section(document, "contacts")
     privacy = _section(document, "privacy")
@@ -163,6 +177,8 @@ def load_config(config_path: Path) -> ErgaConfig:
     data_dir = _path(str(paths.get("data_dir", "state")), config_path.parent)
     vault_value = str(paths.get("vault_path", "")).strip()
     vault_path = _path(vault_value, config_path.parent) if vault_value else None
+    cover_letter_template = str(cover_letter.get("template_path", "")).strip()
+    cover_letter_sample = str(cover_letter.get("writing_sample_path", "")).strip()
     tracker_value = str(tracking.get("tracker_dir", "")).strip()
     tracker_dir = _path(tracker_value, config_path.parent) if tracker_value else None
     tracker_enabled = bool(tracking.get("enabled", False))
@@ -205,6 +221,16 @@ def load_config(config_path: Path) -> ErgaConfig:
         data_dir=data_dir,
         vault_path=vault_path,
         resume=_resume_settings(document, config_path.parent),
+        cover_letter=CoverLetterSettings(
+            template_path=_path(cover_letter_template, config_path.parent)
+            if cover_letter_template
+            else None,
+            writing_sample_path=_path(
+                cover_letter_sample, vault_path if vault_path is not None else config_path.parent
+            )
+            if cover_letter_sample
+            else None,
+        ),
         tracker=TrackerSettings(
             enabled=tracker_enabled, tracker_dir=tracker_dir, active_cycles=active_cycles
         ),

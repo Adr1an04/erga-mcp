@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, StrictInt
 from .cli import DEFAULT_CONFIG_PATH
 from .config import ErgaConfig, load_config
 from .contact_projection import project_recruiter_contacts
+from .cover_letter import create_cover_letter_proposal, load_style_context
 from .cron_setup import install_hermes_monitor_scripts
 from .exporting import export_bundle
 from .integrations.gmail_live import fetch_all_inbox_metadata_with_gws
@@ -1441,6 +1442,51 @@ def build_server(config_path: Path) -> FastMCP:
             "proposal_tex": str(proposal.proposed_tex_path),
             "diff": str(proposal.diff_path),
             "claim_report": str(proposal.claim_report_path),
+        }
+
+    @server.tool(annotations=_READ_ONLY)
+    def cover_letter_style_context() -> dict[str, object]:
+        """Read the configured cover-letter template and user writing sample locally.
+
+        The sample is style reference only, not career evidence. It is not retained by Erga.
+        """
+        settings = config.cover_letter
+        if settings.template_path is None or settings.writing_sample_path is None:
+            raise ValueError(
+                "cover_letter template_path and writing_sample_path must be configured"
+            )
+        style = load_style_context(settings.writing_sample_path)
+        return {
+            "template": settings.template_path.read_text(encoding="utf-8"),
+            "template_path": str(settings.template_path),
+            "writing_sample": style.text,
+            "writing_sample_is_style_only": True,
+            "writing_sample_path": str(style.source_path),
+            "writing_sample_sha256": style.sha256,
+        }
+
+    @server.tool(annotations=_LOCAL_WRITE)
+    def create_cover_letter(package_dir: str, body: str, evidence_ids: list[str]) -> dict[str, str]:
+        """Create a reviewable local cover-letter proposal from configured sources."""
+        settings = config.cover_letter
+        if settings.template_path is None or settings.writing_sample_path is None:
+            raise ValueError(
+                "cover_letter template_path and writing_sample_path must be configured"
+            )
+        package = Path(package_dir).expanduser().resolve()
+        if package.parent.parent != config.resume.output_root.expanduser().resolve():
+            raise ValueError("package_dir must be inside configured output_root")
+        proposal = create_cover_letter_proposal(
+            template_path=settings.template_path,
+            writing_sample_path=settings.writing_sample_path,
+            output_dir=package / "artifacts" / "cover-letter",
+            body=body,
+            evidence=store.approved_evidence(evidence_ids),
+        )
+        return {
+            "proposal": str(proposal.proposed_path),
+            "diff": str(proposal.diff_path),
+            "provenance": str(proposal.provenance_path),
         }
 
     @server.tool(annotations=_LOCAL_EXEC)

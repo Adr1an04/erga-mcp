@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .config import DEFAULT_CONFIG, load_config
 from .contact_projection import project_recruiter_contacts
+from .cover_letter import create_cover_letter_proposal, load_style_context
 from .cron_setup import install_hermes_monitor_scripts
 from .doctor import check_installation
 from .exporting import export_bundle
@@ -182,6 +183,22 @@ def _parser() -> argparse.ArgumentParser:
     resume_package.add_argument("--cycle", required=True)
     resume_package.add_argument("--application-slug", required=True)
     resume_package.add_argument("--job-url", required=True)
+
+    cover_letter = subcommands.add_parser(
+        "cover-letter", help="create reviewable local cover-letter proposals"
+    )
+    cover_letter_commands = cover_letter.add_subparsers(dest="cover_letter_command", required=True)
+    cover_letter_context = cover_letter_commands.add_parser(
+        "context", help="read configured template and style sample without modifying either"
+    )
+    _config_argument(cover_letter_context)
+    cover_letter_propose = cover_letter_commands.add_parser(
+        "propose", help="render a reviewed draft into the configured template"
+    )
+    _config_argument(cover_letter_propose)
+    cover_letter_propose.add_argument("--output-dir", type=Path, required=True)
+    cover_letter_propose.add_argument("--body", required=True)
+    cover_letter_propose.add_argument("--evidence-id", action="append", default=[])
 
     applications = subcommands.add_parser("applications", help="manage local applications")
     _config_argument(applications)
@@ -441,6 +458,40 @@ def main(arguments: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "resume" and args.resume_command == "validate":
         _print_json(asdict(validate_latex_proposal(args.proposal, latexmk=args.latexmk)))
+        return 0
+    if args.command == "cover-letter":
+        cover_letter_settings = load_config(args.config).cover_letter
+        if (
+            cover_letter_settings.template_path is None
+            or cover_letter_settings.writing_sample_path is None
+        ):
+            raise ValueError(
+                "cover_letter template_path and writing_sample_path must be configured"
+            )
+        if args.cover_letter_command == "context":
+            style = load_style_context(cover_letter_settings.writing_sample_path)
+            _print_json(
+                {
+                    "template": cover_letter_settings.template_path.read_text(encoding="utf-8"),
+                    "template_path": str(cover_letter_settings.template_path),
+                    "writing_sample": style.text,
+                    "writing_sample_is_style_only": True,
+                    "writing_sample_path": str(style.source_path),
+                    "writing_sample_sha256": style.sha256,
+                }
+            )
+            return 0
+        _print_json(
+            asdict(
+                create_cover_letter_proposal(
+                    template_path=cover_letter_settings.template_path,
+                    writing_sample_path=cover_letter_settings.writing_sample_path,
+                    output_dir=args.output_dir,
+                    body=args.body,
+                    evidence=store.approved_evidence(args.evidence_id),
+                )
+            )
+        )
         return 0
     if args.command == "applications":
         if args.applications_command == "add":

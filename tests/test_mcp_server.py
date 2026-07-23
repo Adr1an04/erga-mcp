@@ -121,6 +121,8 @@ class McpServerTests(unittest.TestCase):
                     "record_deep_research",
                     "prepare_job_workspace",
                     "create_tailored_resume",
+                    "cover_letter_style_context",
+                    "create_cover_letter",
                     "validate_tailored_resume",
                 },
             )
