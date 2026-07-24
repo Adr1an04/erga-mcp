@@ -12,6 +12,8 @@ from pathlib import Path
 from .config import DEFAULT_CONFIG, load_config
 from .contact_projection import project_recruiter_contacts
 from .cover_letter import create_cover_letter_proposal, load_style_context
+from .cover_letter_settings import as_json as cover_letter_settings_as_json
+from .cover_letter_settings import update_settings as update_cover_letter_settings
 from .cron_setup import install_hermes_monitor_scripts
 from .doctor import check_installation
 from .exporting import export_bundle
@@ -199,6 +201,22 @@ def _parser() -> argparse.ArgumentParser:
     cover_letter_propose.add_argument("--output-dir", type=Path, required=True)
     cover_letter_propose.add_argument("--body", required=True)
     cover_letter_propose.add_argument("--evidence-id", action="append", default=[])
+    cover_letter_settings = cover_letter_commands.add_parser(
+        "settings", help="manage generic cover-letter settings"
+    )
+    cover_letter_settings_commands = cover_letter_settings.add_subparsers(
+        dest="cover_letter_settings_command", required=True
+    )
+    cover_letter_settings_show = cover_letter_settings_commands.add_parser(
+        "show", help="show cover-letter settings"
+    )
+    _config_argument(cover_letter_settings_show)
+    cover_letter_settings_set = cover_letter_settings_commands.add_parser(
+        "set", help="update cover-letter settings"
+    )
+    _config_argument(cover_letter_settings_set)
+    cover_letter_settings_set.add_argument("--template-path")
+    cover_letter_settings_set.add_argument("--writing-sample-path")
 
     applications = subcommands.add_parser("applications", help="manage local applications")
     _config_argument(applications)
@@ -460,6 +478,22 @@ def main(arguments: Sequence[str] | None = None) -> int:
         _print_json(asdict(validate_latex_proposal(args.proposal, latexmk=args.latexmk)))
         return 0
     if args.command == "cover-letter":
+        if args.cover_letter_command == "settings":
+            if args.cover_letter_settings_command == "show":
+                _print_json(cover_letter_settings_as_json(load_config(args.config).cover_letter))
+                return 0
+            _print_json(
+                cover_letter_settings_as_json(
+                    update_cover_letter_settings(
+                        args.config,
+                        {
+                            "template_path": args.template_path,
+                            "writing_sample_path": args.writing_sample_path,
+                        },
+                    )
+                )
+            )
+            return 0
         cover_letter_settings = load_config(args.config).cover_letter
         if (
             cover_letter_settings.template_path is None
