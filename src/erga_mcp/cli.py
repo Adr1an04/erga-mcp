@@ -199,7 +199,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     _config_argument(cover_letter_propose)
     cover_letter_propose.add_argument("--output-dir", type=Path, required=True)
-    cover_letter_propose.add_argument("--body", required=True)
+    cover_letter_body = cover_letter_propose.add_mutually_exclusive_group(required=True)
+    cover_letter_body.add_argument("--body")
+    cover_letter_body.add_argument(
+        "--body-file",
+        type=Path,
+        help="read the draft body from a local UTF-8 text or Markdown file",
+    )
     cover_letter_propose.add_argument("--evidence-id", action="append", default=[])
     cover_letter_settings = cover_letter_commands.add_parser(
         "settings", help="manage generic cover-letter settings"
@@ -521,7 +527,11 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     template_path=cover_letter_settings.template_path,
                     writing_sample_path=cover_letter_settings.writing_sample_path,
                     output_dir=args.output_dir,
-                    body=args.body,
+                    body=(
+                        args.body_file.expanduser().read_text(encoding="utf-8")
+                        if args.body_file is not None
+                        else args.body
+                    ),
                     evidence=store.approved_evidence(args.evidence_id),
                 )
             )

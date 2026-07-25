@@ -56,6 +56,62 @@ class CoverLetterSettingsCliTests(unittest.TestCase):
             self.assertIn('template_path = "templates/cover-letter.md"', stored)
             self.assertIn('writing_sample_path = "Writing Samples/Personal Statement.md"', stored)
 
+    def test_renders_a_cover_letter_from_a_local_body_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.toml"
+            template = root / "template.md"
+            sample = root / "sample.md"
+            body = root / "draft.md"
+            template.write_text("Dear Team,\n\n{{BODY}}\n", encoding="utf-8")
+            sample.write_text("Direct, specific writing.", encoding="utf-8")
+            body.write_text("I would be glad to contribute.", encoding="utf-8")
+            main(["init", "--config", str(config)])
+            self._json_command(
+                [
+                    "cover-letter",
+                    "settings",
+                    "set",
+                    "--config",
+                    str(config),
+                    "--template-path",
+                    str(template),
+                    "--writing-sample-path",
+                    str(sample),
+                ]
+            )
+            evidence = self._json_command(
+                [
+                    "evidence",
+                    "add",
+                    "--config",
+                    str(config),
+                    "--source-ref",
+                    "Career.md#Project",
+                    "--text",
+                    "Built a reliable application tracker.",
+                    "--approved",
+                ]
+            )
+
+            result = self._json_command(
+                [
+                    "cover-letter",
+                    "propose",
+                    "--config",
+                    str(config),
+                    "--output-dir",
+                    str(root / "proposal"),
+                    "--body-file",
+                    str(body),
+                    "--evidence-id",
+                    str(evidence["id"]),
+                ]
+            )
+
+            proposal = Path(str(result["proposed_path"]))
+            self.assertIn("I would be glad to contribute.", proposal.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()
