@@ -30,6 +30,18 @@ _STATUS_ICONS = {
     "researching": "🟡",
     "draft": "⚪",
 }
+_DISPLAY_PRIORITY = {
+    "offer": 0,
+    "interview": 1,
+    "oa": 2,
+    "online assessment": 2,
+    "assessment": 2,
+    "rejected": 3,
+    "withdrawn": 3,
+    "applied": 4,
+    "draft": 5,
+    "researching": 6,
+}
 
 
 @dataclass(frozen=True)
@@ -186,7 +198,10 @@ def render_tracker_message(
         noun = "match" if total == 1 else "matches"
         lines.append(f"Search: {_short(query, limit=80)} · {total} {noun}")
     lines.append("")
-    displayed = snapshot.entries[:max_entries]
+    displayed = sorted(
+        snapshot.entries,
+        key=lambda entry: _DISPLAY_PRIORITY.get(entry.status.casefold(), 7),
+    )[:max_entries]
     current_cycle: str | None = None
     for entry in displayed:
         if entry.cycle != current_cycle:
