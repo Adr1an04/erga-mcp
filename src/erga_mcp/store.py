@@ -356,6 +356,49 @@ class ErgaStore:
                 created_at=_as_datetime(row["created_at"]),
             )
 
+    def update_application_status_from_mail(
+        self, application_id: str, *, status: str, event: MailEvent
+    ) -> Application:
+        """Record a deterministic email-derived status transition with its source event."""
+        normalized = status.strip().casefold()
+        if normalized not in APPLICATION_STATUSES:
+            allowed = ", ".join(sorted(APPLICATION_STATUSES))
+            raise ValueError(f"application status must be one of: {allowed}")
+        self.initialize()
+        with closing(self._connection()) as connection:
+            row = connection.execute(
+                "SELECT * FROM applications WHERE id = ?", (application_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("application does not exist")
+            previous = str(row["status"])
+            if previous != normalized:
+                connection.execute(
+                    "UPDATE applications SET status = ? WHERE id = ?",
+                    (normalized, application_id),
+                )
+                self._record_audit(
+                    connection,
+                    "application.status_updated_from_mail",
+                    application_id,
+                    {
+                        "from": previous,
+                        "mail_event_id": event.message_id,
+                        "mail_kind": event.kind,
+                        "to": normalized,
+                    },
+                )
+                connection.commit()
+            return Application(
+                id=row["id"],
+                company=row["company"],
+                role=row["role"],
+                source_url=row["source_url"],
+                status=normalized,
+                evidence_ids=json.loads(row["evidence_ids_json"]),
+                created_at=_as_datetime(row["created_at"]),
+            )
+
     def list_evidence(self) -> list[Evidence]:
         self.initialize()
         with closing(self._connection()) as connection:

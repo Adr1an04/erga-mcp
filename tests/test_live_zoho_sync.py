@@ -187,6 +187,7 @@ class LiveZohoSyncTests(unittest.TestCase):
                     "job": 1,
                     "other": 1,
                     "created": 3,
+                    "status_transitions": 0,
                     "alerts": [
                         {
                             "kind": "application.acknowledgement",

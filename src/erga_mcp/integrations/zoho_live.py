@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from ..classification import classify_application_message
+from ..mail_status_transitions import apply_mail_status_transition
 from ..models import MailEvent
 from ..recruiter_contacts import record_recruiter_contact_from_mail
 from ..store import ErgaStore
@@ -43,7 +44,7 @@ def sync_metadata(
     store: ErgaStore, messages: Sequence[MailMessageMetadata]
 ) -> dict[str, int | list[dict[str, str | bool]]]:
     """Persist minimal classified metadata and return new relevant-message alerts."""
-    counts = {"application": 0, "job": 0, "other": 0, "created": 0}
+    counts = {"application": 0, "job": 0, "other": 0, "created": 0, "status_transitions": 0}
     alerts: list[dict[str, str | bool]] = []
     for message in messages:
         kind, confidence, requires_review = _classify(message)
@@ -57,8 +58,13 @@ def sync_metadata(
             requires_review=requires_review,
         )
         created = store.record_mail_event(event)
+        reclassified = False
         if not created:
-            store.update_mail_event_classification(event)
+            reclassified = store.update_mail_event_classification(event)
+        if created or reclassified:
+            transitioned = apply_mail_status_transition(store, event)
+            if transitioned is not None:
+                counts["status_transitions"] = int(counts["status_transitions"]) + 1
         contact = record_recruiter_contact_from_mail(store, event)
         if contact is not None:
             counts.setdefault("contacts", 0)
