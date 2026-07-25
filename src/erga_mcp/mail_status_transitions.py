@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 from .models import Application, MailEvent
 from .store import ErgaStore
@@ -47,3 +48,12 @@ def apply_mail_status_transition(store: ErgaStore, event: MailEvent) -> Applicat
         status=target,
         event=event,
     )
+
+
+def reconcile_mail_status_transitions(store: ErgaStore, events: Sequence[MailEvent]) -> int:
+    """Apply the newest eligible exact-match event, including ones stored before deployment."""
+    transitions = 0
+    for event in sorted(events, key=lambda item: item.received_at, reverse=True):
+        if apply_mail_status_transition(store, event) is not None:
+            transitions += 1
+    return transitions

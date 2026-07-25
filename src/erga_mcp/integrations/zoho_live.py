@@ -7,7 +7,10 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from ..classification import classify_application_message
-from ..mail_status_transitions import apply_mail_status_transition
+from ..mail_status_transitions import (
+    apply_mail_status_transition,
+    reconcile_mail_status_transitions,
+)
 from ..models import MailEvent
 from ..recruiter_contacts import record_recruiter_contact_from_mail
 from ..store import ErgaStore
@@ -83,6 +86,9 @@ def sync_metadata(
                         "requires_review": requires_review,
                     }
                 )
+    counts["status_transitions"] = int(
+        counts["status_transitions"]
+    ) + reconcile_mail_status_transitions(store, store.list_mail_events())
     return {**counts, "alerts": alerts}
 
 

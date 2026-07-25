@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 
 from erga_mcp.integrations.zoho import MailMessageMetadata
 from erga_mcp.integrations.zoho_live import sync_metadata
+from erga_mcp.models import MailEvent
 from erga_mcp.store import ErgaStore
 
 
@@ -79,6 +80,22 @@ class MailStatusTransitionTests(unittest.TestCase):
         self.assertEqual(
             [item.status for item in self.store.list_applications()], ["applied", "draft"]
         )
+
+    def test_reconciles_an_existing_exact_match_on_a_later_sync(self) -> None:
+        self.store.record_mail_event(
+            MailEvent(
+                message_id="stored-uber-denial",
+                received_at=datetime(2026, 7, 25, tzinfo=UTC),
+                sender="Talent@uber.com",
+                subject="Thanks for your interest in Uber",
+                kind="application.denial",
+                confidence=0.95,
+                requires_review=True,
+            )
+        )
+        result = sync_metadata(self.store, [])
+        self.assertEqual(self.store.list_applications()[0].status, "rejected")
+        self.assertEqual(result["status_transitions"], 1)
 
 
 if __name__ == "__main__":
