@@ -7,13 +7,44 @@ from tempfile import TemporaryDirectory
 
 from erga_mcp.integrations.obsidian_tracker import (
     import_confirmed_application_tracker_rows,
+    reconcile_application_status_tracker_rows,
     reconcile_confirmed_application_tracker_rows,
     write_job_tracker_note,
 )
-from erga_mcp.models import MailEvent
+from erga_mcp.models import Application, MailEvent
 
 
 class ObsidianTrackerTests(unittest.TestCase):
+    def test_mirrors_an_unambiguous_canonical_rejection(self) -> None:
+        with TemporaryDirectory() as directory:
+            tracker = Path(directory)
+            path = tracker / "Unscheduled Application Tracker.md"
+            path.write_text(
+                "## Application tracker\n\n"
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| Uber | Job Opportunity |  | Link | Applied | 2026-07-20 | "
+                "Await acknowledgement or recruiting update. |  |\n",
+                encoding="utf-8",
+            )
+            application = Application(
+                id="app_uber",
+                company="Uber",
+                role="Job Opportunity",
+                source_url="https://example.test",
+                status="rejected",
+                evidence_ids=[],
+                created_at=datetime(2026, 7, 25, tzinfo=UTC),
+            )
+            self.assertEqual(
+                reconcile_application_status_tracker_rows(
+                    tracker_dir=tracker, applications=[application]
+                ),
+                1,
+            )
+            self.assertIn("| Uber | Job Opportunity |  | Link | Rejected |", path.read_text())
+
     def test_accepts_obsidian_formatted_table_column_widths(self) -> None:
         with TemporaryDirectory() as directory:
             tracker = Path(directory)

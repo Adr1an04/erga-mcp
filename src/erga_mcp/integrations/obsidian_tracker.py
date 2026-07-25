@@ -4,7 +4,7 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 
-from ..models import MailEvent
+from ..models import Application, MailEvent
 
 _TABLE_HEADER = (
     "| Company | Role | Location / work mode | Source | Status | Applied | "
@@ -100,6 +100,59 @@ def reconcile_confirmed_application_tracker_rows(
             updated_cells[5] = match.received_at.date().isoformat()
             updated_cells[6] = "Await acknowledgement or recruiting update."
             lines[index] = "| " + " | ".join(_table_cell(cell) for cell in updated_cells) + " |"
+            updates += 1
+            changed = True
+        if changed:
+            tracker_path.write_text(
+                "\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8"
+            )
+    return updates
+
+
+_STATUS_LABELS = {
+    "draft": ("Draft", "Prepare and submit application."),
+    "applied": ("Applied", "Await acknowledgement or recruiting update."),
+    "oa": ("OA", "Complete assessment and review its deadline."),
+    "assessment": ("OA", "Complete assessment and review its deadline."),
+    "interview": ("Interview", "Prepare for interview and confirm details."),
+    "offer": ("Offer", "Review offer terms and deadline."),
+    "rejected": ("Rejected", "No action - application closed."),
+    "withdrawn": ("Withdrawn", "No action - application withdrawn."),
+}
+
+
+def reconcile_application_status_tracker_rows(
+    *, tracker_dir: Path, applications: Sequence[Application]
+) -> int:
+    """Reflect unambiguous canonical application statuses in existing tracker rows."""
+    applications_by_company: dict[str, list[Application]] = {}
+    for application in applications:
+        applications_by_company.setdefault(application.company.casefold(), []).append(application)
+    updates = 0
+    for tracker_path in sorted(tracker_dir.expanduser().resolve().glob("*.md")):
+        text = tracker_path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        divider_line = _application_table_divider_line(lines)
+        if divider_line is None:
+            continue
+        changed = False
+        for index in range(divider_line + 1, len(lines)):
+            cells = _table_cells(lines[index])
+            if len(cells) != len(_EXPECTED_TABLE_COLUMNS):
+                continue
+            matches = applications_by_company.get(cells[0].casefold(), [])
+            if len(matches) != 1:
+                continue
+            status = _STATUS_LABELS.get(matches[0].status)
+            if status is None:
+                continue
+            label, next_action = status
+            if cells[4] == label and cells[6] == next_action:
+                continue
+            updated = list(cells)
+            updated[4] = label
+            updated[6] = next_action
+            lines[index] = "| " + " | ".join(_table_cell(cell) for cell in updated) + " |"
             updates += 1
             changed = True
         if changed:

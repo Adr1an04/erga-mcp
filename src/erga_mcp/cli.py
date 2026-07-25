@@ -19,6 +19,7 @@ from .doctor import check_installation
 from .exporting import export_bundle
 from .integrations.gmail_live import fetch_inbox_metadata_with_gws
 from .integrations.obsidian import import_markdown_evidence
+from .integrations.obsidian_tracker import reconcile_application_status_tracker_rows
 from .integrations.zoho import ingest_fixture
 from .integrations.zoho_live import (
     fetch_inbox_metadata,
@@ -398,6 +399,12 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 folder=config.mail_folder,
             )
         sync_result = sync_metadata(store, messages)
+        tracker_updates = 0
+        if config.tracker.enabled and config.tracker.tracker_dir is not None:
+            tracker_updates = reconcile_application_status_tracker_rows(
+                tracker_dir=config.tracker.tracker_dir,
+                applications=store.list_applications(),
+            )
         contacts_projected = project_recruiter_contacts(
             store.list_recruiter_contacts(), config.contact_outputs
         )
@@ -405,6 +412,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "provider": config.mail_provider,
             "fetched": len(messages),
             "contacts_projected": contacts_projected,
+            "tracker_updates": tracker_updates,
             **sync_result,
         }
         if args.notify:
