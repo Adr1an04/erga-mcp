@@ -222,6 +222,32 @@ class JobResearchTests(unittest.TestCase):
             self.assertIn("Candidate process report", deep_text)
             self.assertIn("https://www.reddit.com/r/example/comments/123/process/", deep_text)
 
+    def test_secondary_scraped_sources_render_as_readable_citations(self) -> None:
+        with TemporaryDirectory() as directory:
+            package_dir = Path(directory)
+            raw = json.dumps(
+                {
+                    "sources": [
+                        {
+                            "title": "Official role posting",
+                            "url": "https://careers.example.test/jobs/123",
+                            "notes": "Role-specific requirements extracted from the public page.",
+                        }
+                    ]
+                }
+            )
+
+            path = write_secondary_research(
+                package_dir=package_dir,
+                searches=[("Example official role research", raw)],
+                captured_at="2026-07-27T00:00:00+00:00",
+            )
+
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("[Official role posting](https://careers.example.test/jobs/123)", text)
+            self.assertIn("Role-specific requirements extracted from the public page.", text)
+            self.assertNotIn('> {"sources"', text)
+
     def test_secondary_search_results_are_readable_cited_and_separate(self) -> None:
         with TemporaryDirectory() as directory:
             package_dir = Path(directory)

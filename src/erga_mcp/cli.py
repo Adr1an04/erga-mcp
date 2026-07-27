@@ -8,6 +8,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from .config import DEFAULT_CONFIG, load_config
 from .contact_projection import project_recruiter_contacts
@@ -26,8 +27,10 @@ from .integrations.zoho_live import (
     format_recruiting_alerts,
     sync_metadata,
 )
+from .job_discovery import discover_job_research
 from .mail_settings import as_json as mail_settings_as_json
 from .mail_settings import update_settings as update_mail_settings
+from .models import Application
 from .reporting import render_history_digest
 from .resume import (
     create_job_package,
@@ -225,6 +228,19 @@ def _parser() -> argparse.ArgumentParser:
     cover_letter_settings_set.add_argument("--template-path")
     cover_letter_settings_set.add_argument("--writing-sample-path")
 
+    notes = subcommands.add_parser(
+        "notes", help="show one tracked application's status and all saved research"
+    )
+    _config_argument(notes)
+    notes.add_argument("query", help="company or role words, for example: erga notes uber")
+
+    research = subcommands.add_parser(
+        "research",
+        help="search, scrape, and save cited public research for one tracked application",
+    )
+    _config_argument(research)
+    research.add_argument("query", help="company or role words, for example: erga research uber")
+
     applications = subcommands.add_parser("applications", help="manage local applications")
     _config_argument(applications)
     application_commands = applications.add_subparsers(dest="applications_command", required=False)
@@ -296,6 +312,65 @@ def _print_json(value: object) -> None:
     print(json.dumps(value, default=str, sort_keys=True))
 
 
+def _job_url_identity(url: str) -> str:
+    parsed = urlsplit(url)
+    return urlunsplit(
+        (parsed.scheme.casefold(), (parsed.hostname or "").casefold(), parsed.path, "", "")
+    )
+
+
+def _notes_application(query: str, applications: list[Application]) -> Application:
+    terms = [term.casefold() for term in query.split() if term.strip()]
+    if not terms:
+        raise ValueError("notes query must include a company or role word")
+    matches = [
+        application
+        for application in applications
+        if all(term in f"{application.company} {application.role}".casefold() for term in terms)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise ValueError(f"no tracked application matches: {query}")
+    choices = ", ".join(f"{item.company} - {item.role}" for item in matches)
+    raise ValueError(f"multiple tracked applications match {query!r}: {choices}")
+
+
+def _package_for_application(output_root: Path, application: Application) -> Path | None:
+    if not output_root.is_dir():
+        return None
+    identity = _job_url_identity(application.source_url)
+    for manifest_path in output_root.glob("*/*/package.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        job_url = manifest.get("job_url") if isinstance(manifest, dict) else None
+        if isinstance(job_url, str) and _job_url_identity(job_url) == identity:
+            return manifest_path.parent
+    return None
+
+
+def _render_application_notes(application: Application, package_dir: Path | None) -> str:
+    rendered = (
+        f"# {application.company} - {application.role}\n\n"
+        f"Status: {application.status}\n"
+        f"Source: {application.source_url}\n"
+        f"Tracked: {application.created_at.isoformat()}\n"
+    )
+    if package_dir is None:
+        return rendered + "\n## Research\n\nNo local Erga package was found for this application.\n"
+    research_dir = package_dir / "research"
+    research_files = sorted(research_dir.glob("*.md")) if research_dir.is_dir() else []
+    rendered += f"Package: {package_dir}\n\n## Research\n"
+    if not research_files:
+        return rendered + "\nNo saved research yet.\n"
+    for path in research_files:
+        content = path.read_text(encoding="utf-8").strip()
+        rendered += f"\n---\n\n## {path.stem.replace('-', ' ').title()}\n\n{content}\n"
+    return rendered
+
+
 def main(arguments: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(arguments)
     if args.command == "init":
@@ -360,6 +435,28 @@ def main(arguments: Sequence[str] | None = None) -> int:
             }
         )
         return 0
+    if args.command == "notes":
+        config = load_config(args.config)
+        application = _notes_application(args.query, store.list_applications())
+        package_dir = _package_for_application(config.resume.output_root, application)
+        print(_render_application_notes(application, package_dir))
+        return 0
+    if args.command == "research":
+        config = load_config(args.config)
+        application = _notes_application(args.query, store.list_applications())
+        package_dir = _package_for_application(config.resume.output_root, application)
+        if package_dir is None:
+            raise ValueError(
+                "research requires an existing local Erga package for this application"
+            )
+        result = discover_job_research(application=application, package_dir=package_dir)
+        lead_word = "lead" if result.outreach_leads == 1 else "leads"
+        print(
+            f"Research saved: {result.path}\n"
+            f"{result.sources_scraped} sources scraped; {result.outreach_leads} public outreach "
+            f"{lead_word}. No messages were sent."
+        )
+        return 0
     if args.command == "tokens":
         _print_json(store.token_usage_summary(application_id=args.application_id))
         return 0
@@ -408,7 +505,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         contacts_projected = project_recruiter_contacts(
             store.list_recruiter_contacts(), config.contact_outputs
         )
-        result = {
+        sync_result_payload = {
             "provider": config.mail_provider,
             "fetched": len(messages),
             "contacts_projected": contacts_projected,
@@ -422,7 +519,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             if notification:
                 print(notification)
         else:
-            _print_json(result)
+            _print_json(sync_result_payload)
         return 0
     if args.command == "mail" and args.mail_command == "history":
         print(render_history_digest(store, days=args.days))

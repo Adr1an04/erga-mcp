@@ -428,7 +428,7 @@ def _terms(text: str) -> set[str]:
     return {word.casefold() for word in _WORD.findall(text) if word.casefold() not in _STOP_WORDS}
 
 
-def _fetch_job_snapshot_with_deadline(
+def _fetch_public_page_with_deadline(
     job_url: str,
     deadline: float,
     cancellation: _FetchCancellation,
@@ -463,10 +463,40 @@ def _fetch_job_snapshot_with_deadline(
             cancellation.unregister_connection(connection)
             response.close()
             connection.close()
-    text = build_job_snapshot(html)
-    if not text:
-        raise ValueError("job page did not contain readable text")
-    return text
+    if not html.strip():
+        raise ValueError("public page did not contain readable content")
+    return html
+
+
+def fetch_public_page(page_url: str) -> str:
+    """Safely retrieve a public HTML/text page using pinned, validated network connections.
+
+    This primitive is intentionally bounded and does not use browser automation, proxies, or
+    anti-bot bypasses. Callers must treat the returned page as untrusted data.
+    """
+    deadline = time.monotonic() + _JOB_FETCH_TIMEOUT_SECONDS
+    cancellation = _FetchCancellation()
+    result_queue: Queue[Any] = Queue(maxsize=1)
+
+    def fetch() -> None:
+        try:
+            result_queue.put(
+                (True, _fetch_public_page_with_deadline(page_url, deadline, cancellation))
+            )
+        except BaseException as error:
+            result_queue.put((False, error))
+
+    Thread(target=fetch, name="erga-mcp-public-fetch", daemon=True).start()
+    try:
+        succeeded, result = result_queue.get(timeout=_remaining_timeout(deadline))
+    except (Empty, _JobFetchDeadlineExceeded) as error:
+        cancellation.cancel()
+        raise _JobFetchDeadlineExceeded(
+            "public page fetch exceeded the 30 second deadline"
+        ) from error
+    if succeeded:
+        return result
+    raise result
 
 
 def fetch_job_snapshot(job_url: str) -> str:
@@ -480,34 +510,11 @@ def fetch_job_snapshot(job_url: str) -> str:
         raise ValueError(
             "job URL must point to a specific job posting, not a homepage or site resource"
         )
-    deadline = time.monotonic() + _JOB_FETCH_TIMEOUT_SECONDS
-    cancellation = _FetchCancellation()
-    result_queue: Queue[Any] = Queue(maxsize=1)
-
-    def fetch() -> None:
-        try:
-            result_queue.put(
-                (
-                    True,
-                    _fetch_job_snapshot_with_deadline(job_url, deadline, cancellation),
-                )
-            )
-        except BaseException as error:
-            result_queue.put((False, error))
-
-    Thread(
-        target=fetch,
-        name="erga-mcp-job-fetch",
-        daemon=True,
-    ).start()
-    try:
-        succeeded, result = result_queue.get(timeout=_remaining_timeout(deadline))
-    except (Empty, _JobFetchDeadlineExceeded) as error:
-        cancellation.cancel()
-        raise _JobFetchDeadlineExceeded("job page fetch exceeded the 30 second deadline") from error
-    if succeeded:
-        return result
-    raise result
+    page = fetch_public_page(job_url)
+    text = build_job_snapshot(page)
+    if not text:
+        raise ValueError("job page did not contain readable text")
+    return text
 
 
 def select_relevant_evidence(job_description: str, evidence: Sequence[Evidence]) -> list[Evidence]:

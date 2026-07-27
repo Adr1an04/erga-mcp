@@ -751,7 +751,7 @@ def write_secondary_research(
 
 def _find_search_hits(value: object) -> list[dict[str, Any]]:
     if isinstance(value, dict):
-        for key in ("web", "results"):
+        for key in ("web", "results", "sources"):
             candidate = value.get(key)
             if isinstance(candidate, list) and all(isinstance(item, dict) for item in candidate):
                 return candidate
@@ -781,7 +781,9 @@ def _render_search_result(raw_result: str) -> str:
             continue
         title = _clean_text(hit.get("title")) or parsed.hostname
         title = title.replace("[", "").replace("]", "")
-        description = _clean_text(hit.get("description") or hit.get("body"))[:700]
+        description = _clean_text(hit.get("description") or hit.get("body") or hit.get("notes"))[
+            :700
+        ]
         suffix = f" — {description}" if description else ""
         rendered.append(f"- [{title}]({url}){suffix}")
     if rendered:

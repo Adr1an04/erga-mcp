@@ -6,9 +6,11 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from erga_mcp.cli import main
 from erga_mcp.config import load_config
+from erga_mcp.job_discovery import DiscoveryResearchResult
 from erga_mcp.store import ErgaStore
 
 
@@ -36,6 +38,79 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(json.loads(output.getvalue())["mail_events"], 0)
+
+    def test_notes_command_renders_one_tracked_application_and_its_research(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            main(["init", "--config", str(config_path)])
+            config = load_config(config_path)
+            store = ErgaStore(config.data_dir / "erga.sqlite3")
+            application = store.create_application(
+                company="Google",
+                role="Software Engineering Intern",
+                source_url="https://careers.example.test/jobs/google-intern",
+                evidence_ids=[],
+            )
+            store.update_application_status(application.id, status="applied")
+            package = (
+                config.resume.output_root / "summer-2027" / "google-software-engineering-intern"
+            )
+            research = package / "research"
+            research.mkdir(parents=True)
+            (package / "package.json").write_text(
+                json.dumps({"job_url": application.source_url}), encoding="utf-8"
+            )
+            (research / "role-research.md").write_text(
+                "# Google role research\n\nOfficial requirements.", encoding="utf-8"
+            )
+            (research / "secondary-research.md").write_text(
+                "# Secondary online research\n\nCommunity context.", encoding="utf-8"
+            )
+            output = StringIO()
+
+            with redirect_stdout(output):
+                exit_code = main(["notes", "google", "--config", str(config_path)])
+
+            rendered = output.getvalue()
+            self.assertEqual(exit_code, 0)
+            self.assertIn("# Google - Software Engineering Intern", rendered)
+            self.assertIn("Status: applied", rendered)
+            self.assertIn("Official requirements.", rendered)
+            self.assertIn("Community context.", rendered)
+
+    def test_research_command_discovers_and_saves_research_for_one_application(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            main(["init", "--config", str(config_path)])
+            config = load_config(config_path)
+            store = ErgaStore(config.data_dir / "erga.sqlite3")
+            application = store.create_application(
+                company="Google",
+                role="Software Engineering Intern",
+                source_url="https://careers.example.test/jobs/google-intern",
+                evidence_ids=[],
+            )
+            package = config.resume.output_root / "summer-2027" / "google-intern"
+            package.mkdir(parents=True)
+            (package / "package.json").write_text(
+                json.dumps({"job_url": application.source_url}), encoding="utf-8"
+            )
+            output = StringIO()
+            result = DiscoveryResearchResult(
+                path=package / "research" / "discovery-research.md",
+                sources_scraped=3,
+                outreach_leads=1,
+            )
+
+            with patch("erga_mcp.cli.discover_job_research", return_value=result) as discover:
+                with redirect_stdout(output):
+                    exit_code = main(["research", "google", "--config", str(config_path)])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(discover.call_args.kwargs["application"], application)
+            self.assertEqual(discover.call_args.kwargs["package_dir"], package)
+            self.assertIn("3 sources scraped", output.getvalue())
+            self.assertIn("1 public outreach lead", output.getvalue())
 
     def test_tokens_command_reports_input_output_and_total_for_one_application(self) -> None:
         with TemporaryDirectory() as directory:

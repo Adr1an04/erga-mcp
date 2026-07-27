@@ -23,7 +23,12 @@ classifiers = [
   "Operating System :: OS Independent",
   "Topic :: Office/Business",
 ]
-dependencies = ["keyring>=25,<26", "pypdf>=5,<7"]
+dependencies = [
+    "ddgs>=9,<10",
+    "keyring>=25,<26",
+    "pypdf>=5,<7",
+    "scrapling>=0.4,<0.5",
+]
 
 [project.urls]
 Homepage = "https://github.com/Adr1an04/erga-mcp"

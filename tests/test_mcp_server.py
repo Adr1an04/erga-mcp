@@ -117,6 +117,8 @@ class McpServerTests(unittest.TestCase):
                     "install_mail_monitor_scripts",
                     "export_data",
                     "record_secondary_research",
+                    "scrape_public_page",
+                    "extract_public_page",
                     "create_research_brief",
                     "record_deep_research",
                     "prepare_job_workspace",
@@ -152,6 +154,39 @@ class McpServerTests(unittest.TestCase):
             self.assertTrue(mail_sync_annotations.openWorldHint)
             self.assertFalse(resume_annotations.readOnlyHint)
             self.assertFalse(validation_annotations.readOnlyHint)
+
+    def test_scrape_tools_return_bounded_untrusted_content(self) -> None:
+        from erga_mcp.web_scraping import ScrapedPage
+
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            server = build_server(config_path)
+            scraped = ScrapedPage(
+                url="https://example.com/report",
+                title="Public report",
+                text="Bounded research text",
+                links=("https://example.com/more",),
+            )
+            with (
+                patch("erga_mcp.mcp_server.scrape_page", return_value=scraped),
+                patch("erga_mcp.mcp_server.extract_page", return_value="Selected fact"),
+            ):
+                page: Any = asyncio.run(
+                    server.call_tool("scrape_public_page", {"url": scraped.url})
+                )
+                section: Any = asyncio.run(
+                    server.call_tool(
+                        "extract_public_page",
+                        {"url": scraped.url, "css_selector": "article"},
+                    )
+                )
+
+        self.assertEqual(page[1]["text"], "Bounded research text")
+        self.assertEqual(page[1]["links"], ["https://example.com/more"])
+        self.assertTrue(page[1]["untrusted"])
+        self.assertEqual(section[1]["text"], "Selected fact")
+        self.assertTrue(section[1]["untrusted"])
 
     def test_creates_briefs_and_deep_dossiers_only_for_existing_packages(self) -> None:
         with TemporaryDirectory() as directory:
