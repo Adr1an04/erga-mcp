@@ -120,6 +120,7 @@ class McpServerTests(unittest.TestCase):
                     "install_mail_monitor_scripts",
                     "export_data",
                     "record_secondary_research",
+                    "discover_job_research",
                     "scrape_public_page",
                     "extract_public_page",
                     "create_research_brief",

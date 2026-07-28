@@ -746,6 +746,36 @@ class HermesJobUrlRouterTests(unittest.TestCase):
             "Usage: /erga-mail-sync",
         )
 
+    def test_erga_research_command_dispatches_and_renders_a_saved_result(self) -> None:
+        context = _FakePluginContext(
+            result=json.dumps(
+                {
+                    "company": "Example",
+                    "role": "Software Engineer Intern",
+                    "research_note": "/tmp/example/research/discovery-research.md",
+                    "sources_scraped": 3,
+                    "outreach_leads": 1,
+                    "messages_sent": 0,
+                    "community_sources_unverified": True,
+                }
+            )
+        )
+        self.router.register(context)
+
+        self.assertEqual(
+            context.commands["erga-research"](""),
+            "Usage: /erga-research <company or role>",
+        )
+        result = context.commands["erga-research"]("example intern")
+
+        self.assertIn("Research saved for Example — Software Engineer Intern", result)
+        self.assertIn("3 sources scraped; 1 public outreach lead.", result)
+        self.assertIn("Community reports are unverified. No messages were sent.", result)
+        self.assertEqual(
+            context.calls,
+            [("mcp__erga_mcp__discover_job_research", {"query": "example intern"})],
+        )
+
     def test_tracker_command_returns_the_cross_platform_obsidian_card(self) -> None:
         message = (
             "### Erga application tracker\n\n"
