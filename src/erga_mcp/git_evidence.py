@@ -118,7 +118,7 @@ def synthesize_project_research(
             )
             for group in groups
         ),
-        key=lambda bullet: bullet.text.casefold(),
+        key=lambda bullet: (-_subject_priority(bullet.text), bullet.text.casefold()),
     )[:4]
     summary = (
         "Generated locally from Git commit metadata; factual draft only, needs review before "
@@ -134,15 +134,29 @@ def _candidate_subject(candidate: GitEvidenceCandidate) -> str:
 
 
 def _is_obvious_chore(subject: str) -> bool:
-    normalized = re.sub(r"^[a-z]+(?:\([^)]*\))?:\s*", "", subject.casefold())
+    raw = subject.casefold().strip()
+    if raw.startswith(("chore", "ci:", "build:", "test:", "docs:")):
+        return True
+    normalized = re.sub(r"^[a-z]+(?:\([^)]*\))?:\s*", "", raw)
     return bool(
         re.match(
-            r"(?:chore\b|release\b|prepare release\b|bump version\b|"
+            r"(?:release\b|prepare release\b|bump version\b|"
             r"(?:update|configure) (?:ci|workflow|build|dependencies|deps|lockfile)\b|"
             r"(?:ci|build|test|format|formatting|lint|style|prettier|black|isort|ruff)\b)",
             normalized,
         )
     )
+
+
+def _subject_priority(subject: str) -> int:
+    normalized = subject.casefold().strip()
+    if re.match(
+        r"(?:feat|feature|implement|add|build|create|design|architect|engineer):?\b", normalized
+    ):
+        return 2
+    if re.match(r"(?:fix|optimiz|improv|harden|refactor):?\b", normalized):
+        return 1
+    return 0
 
 
 def _subjects_are_similar(left: str, right: str) -> bool:
