@@ -65,7 +65,7 @@ credential store, or an authenticated [`gws`](https://github.com/googleworkspace
 ```bash
 git clone https://github.com/Adr1an04/erga-mcp.git
 cd erga-mcp
-uv sync --extra mcp
+uv sync
 ```
 
 Initialize a private local workspace and verify the installation:
@@ -118,10 +118,10 @@ the [complete getting-started guide](docs/getting-started.md).
 
 ## MCP and Hermes
 
-Install the optional MCP dependencies, then register the local stdio server:
+Install the local MCP server runtime, then register the local stdio server:
 
 ```bash
-uv sync --extra mcp
+uv sync
 
 hermes mcp add erga-mcp \
   --command uv \
@@ -170,6 +170,7 @@ tests/                synthetic unit and MCP integration tests
 ## Documentation
 
 - [`docs/getting-started.md`](docs/getting-started.md) — full setup.
+- [`docs/mcp-clients.md`](docs/mcp-clients.md) — standard stdio and loopback HTTP setup for non-Hermes MCP clients.
 - [`docs/security.md`](docs/security.md) — permissions and safety details.
 - [`docs/FUTURE.md`](docs/FUTURE.md) — ideas for later.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to run checks and contribute.
@@ -192,7 +193,7 @@ Current limitations:
 ## Development
 
 ```bash
-uv sync --extra mcp --extra dev
+uv sync --extra dev
 uv run ruff format --check .
 uv run ruff check .
 uv run mypy src

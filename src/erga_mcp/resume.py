@@ -391,6 +391,7 @@ def validate_latex_proposal(
     command = (
         str(latexmk_executable),
         "-pdf",
+        "-no-shell-escape",
         "-interaction=nonstopmode",
         proposal_path.name,
     )

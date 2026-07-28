@@ -25,7 +25,10 @@ class MailSyncTests(unittest.TestCase):
                 subject="Application received",
                 preview="Thanks for applying",
             )
-            with patch("erga_mcp.cli.fetch_inbox_metadata_with_gws", return_value=[message]):
+            with patch(
+                "erga_mcp.integrations.mail_provider.fetch_all_inbox_metadata_with_gws",
+                return_value=[message],
+            ):
                 self.assertEqual(main(["mail", "sync", "--config", str(config)]), 0)
 
     def test_notify_mode_is_silent_without_new_events_and_formats_new_interviews(self) -> None:
@@ -43,7 +46,10 @@ class MailSyncTests(unittest.TestCase):
 
             first_output = StringIO()
             second_output = StringIO()
-            with patch("erga_mcp.cli.fetch_inbox_metadata_with_gws", return_value=[message]):
+            with patch(
+                "erga_mcp.integrations.mail_provider.fetch_all_inbox_metadata_with_gws",
+                return_value=[message],
+            ):
                 with redirect_stdout(first_output):
                     self.assertEqual(main(["mail", "sync", "--config", str(config), "--notify"]), 0)
                 with redirect_stdout(second_output):
@@ -62,8 +68,13 @@ class MailSyncTests(unittest.TestCase):
                 'accounts_url = "https://accounts.zoho.eu"\n'
             )
             with (
-                patch("erga_mcp.cli.refresh_access_token", return_value="access-token") as refresh,
-                patch("erga_mcp.cli.fetch_inbox_metadata", return_value=[]),
+                patch(
+                    "erga_mcp.integrations.mail_provider.refresh_access_token",
+                    return_value="access-token",
+                ) as refresh,
+                patch(
+                    "erga_mcp.integrations.mail_provider.fetch_all_inbox_metadata", return_value=[]
+                ),
             ):
                 self.assertEqual(main(["mail", "sync", "--config", str(config)]), 0)
 

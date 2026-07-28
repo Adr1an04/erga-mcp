@@ -105,6 +105,7 @@ class McpServerTests(unittest.TestCase):
             self.assertEqual(
                 set(by_name),
                 {
+                    "erga_capabilities",
                     "pipeline_status",
                     "list_applications",
                     "application_tracker",
@@ -154,6 +155,21 @@ class McpServerTests(unittest.TestCase):
             self.assertTrue(mail_sync_annotations.openWorldHint)
             self.assertFalse(resume_annotations.readOnlyHint)
             self.assertFalse(validation_annotations.readOnlyHint)
+
+    def test_rejects_resume_validation_outside_configured_package_artifacts(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            external = root / "external.tex"
+            external.write_text("\\\\begin{document}outside\\\\end{document}\n", encoding="utf-8")
+
+            server = build_server(config_path)
+            with self.assertRaises(Exception) as error:
+                asyncio.run(
+                    server.call_tool("validate_tailored_resume", {"proposal_tex": str(external)})
+                )
+            self.assertIn("inside configured resume output_root", str(error.exception))
 
     def test_scrape_tools_return_bounded_untrusted_content(self) -> None:
         from erga_mcp.web_scraping import ScrapedPage
@@ -275,7 +291,7 @@ class McpServerTests(unittest.TestCase):
         assert tool.annotations is not None
         self.assertFalse(tool.annotations.readOnlyHint)
         self.assertTrue(tool.annotations.openWorldHint)
-        self.assertTrue(tool.annotations.idempotentHint)
+        self.assertFalse(tool.annotations.idempotentHint)
 
         advanced = by_name["prepare_job_workspace"]
         self.assertIn("Advanced second-stage", advanced.description or "")
@@ -283,7 +299,26 @@ class McpServerTests(unittest.TestCase):
             "Do not use this tool for a pasted or bare job URL", advanced.description or ""
         )
 
-    def test_monitor_setup_tool_prepares_scripts_without_creating_delivery_jobs(self) -> None:
+    def test_uses_an_injected_store_factory_for_another_storage_backend(self) -> None:
+        class RecordingStoreFactory:
+            def __init__(self) -> None:
+                self.paths: list[Path] = []
+
+            def create(self, database_path: Path) -> ErgaStore:
+                self.paths.append(database_path)
+                return ErgaStore(database_path)
+
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            factory = RecordingStoreFactory()
+            server = build_server(config_path, store_factory=factory)
+            asyncio.run(server.call_tool("pipeline_status", {}))
+
+        self.assertEqual(len(factory.paths), 1)
+        self.assertEqual(factory.paths[0].name, "erga.sqlite3")
+
+    def test_hermes_monitor_tool_prepares_scripts_without_creating_delivery_jobs(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
             config_path.write_text(DEFAULT_CONFIG)

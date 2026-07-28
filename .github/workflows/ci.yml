@@ -38,7 +38,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --frozen --extra mcp --extra dev
+        run: uv sync --frozen --extra dev
 
       - name: Verify lock file
         run: uv lock --check
@@ -104,7 +104,7 @@ jobs:
           cache-dependency-glob: uv.lock
 
       - name: Install dependencies
-        run: uv sync --frozen --extra mcp --extra dev
+        run: uv sync --frozen --extra dev
 
       - name: Run test suite
         run: uv run python -m unittest discover -s tests -v
@@ -147,7 +147,7 @@ jobs:
         run: |
           uv venv --python 3.11 .package-test
           wheel_path=$(find dist -maxdepth 1 -name '*.whl' -print -quit)
-          uv pip install --python .package-test/bin/python "${wheel_path}[mcp]"
+          uv pip install --python .package-test/bin/python "${wheel_path}"
           .package-test/bin/erga --help
           .package-test/bin/python -c "import erga_mcp; print(erga_mcp.__version__)"
           config_dir=$(mktemp -d)
