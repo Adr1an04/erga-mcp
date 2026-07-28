@@ -5,6 +5,7 @@ import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
 
 from .models import Application, AuditEvent, Evidence, MailEvent, RecruiterContact, TokenUsage
@@ -103,6 +104,19 @@ def _require_token_count(value: object, *, field: str) -> int:
     if value < 0:
         raise ValueError(f"{field} must be non-negative")
     return value
+
+
+class StoreFactory(Protocol):
+    """Construct a store for one configured local workspace."""
+
+    def create(self, database_path: Path) -> ErgaStore: ...
+
+
+class SQLiteStoreFactory:
+    """Default local SQLite construction seam for tests and future storage refactoring."""
+
+    def create(self, database_path: Path) -> ErgaStore:
+        return ErgaStore(database_path)
 
 
 class ErgaStore:

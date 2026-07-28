@@ -7,7 +7,7 @@ Erga is early and small. Issues, bug fixes, and focused improvements are welcome
 ```bash
 git clone https://github.com/Adr1an04/erga-mcp.git
 cd erga-mcp
-uv sync --extra mcp --extra dev
+uv sync --extra dev
 ```
 
 ## Before opening a pull request
@@ -18,7 +18,7 @@ uv run ruff format --check .
 uv run ruff check .
 uv run mypy src
 uv run python -m unittest discover -s tests -v
-uv run python -m unittest tests.test_mcp_stdio -v
+uv run python -m unittest tests.test_mcp_stdio tests.test_mcp_interoperability -v
 uv build
 git diff --check
 ```

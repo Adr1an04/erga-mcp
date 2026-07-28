@@ -10,9 +10,9 @@
 
 ## Local MCP trust boundary
 
-The MCP server is a local **stdio** process. It is not a security sandbox: it runs with the permissions of the Hermes client that starts it. Review the complete executable command, arguments, environment variables, and absolute paths before enabling it.
+The default MCP server is a local **stdio** process. It is not a security sandbox: it runs with the permissions of the client that starts it. Review the complete executable command, arguments, environment variables, and absolute paths before enabling it.
 
-The server is intentionally not a localhost HTTP service. Stdio restricts access to the configured client process and avoids exposing a network listener. The server must keep stdout reserved for MCP protocol traffic; diagnostics belong on stderr.
+Erga also offers an opt-in **loopback-only Streamable HTTP** mode for same-machine native clients that cannot use stdio. It binds only to `localhost`, `127.0.0.1`, or `::1`; any LAN/public binding is rejected. Every HTTP request carrying an `Origin` header is rejected, so browser-hosted clients and CORS are deliberately unsupported. This avoids accidentally widening an unauthenticated local service while preserving native Streamable HTTP clients, which do not send browser Origins. This is not a remote deployment mode: do not proxy or expose it beyond the local machine.
 
 The example configuration passes one non-secret configuration-file path only. Do not pass tokens, a home-directory path, or a broad environment through the MCP configuration. Configure only the project and pipeline paths that the server needs.
 

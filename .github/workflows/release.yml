@@ -34,7 +34,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --frozen --extra mcp --extra dev
+        run: uv sync --frozen --extra dev
 
       - name: Verify release tag matches package version
         env:

@@ -18,7 +18,7 @@ from .cover_letter_settings import update_settings as update_cover_letter_settin
 from .cron_setup import install_hermes_monitor_scripts
 from .doctor import check_installation
 from .exporting import export_bundle
-from .integrations.gmail_live import fetch_inbox_metadata_with_gws
+from .integrations.mail_provider import build_mail_provider
 from .integrations.obsidian import import_markdown_evidence
 from .integrations.obsidian_tracker import reconcile_application_status_tracker_rows
 from .integrations.zoho import ingest_fixture
@@ -480,21 +480,11 @@ def main(arguments: Sequence[str] | None = None) -> int:
         if args.limit < 1 or args.limit > 100:
             raise ValueError("--limit must be between 1 and 100")
         config = load_config(args.config)
-        if config.mail_provider == "gmail":
-            messages = fetch_inbox_metadata_with_gws(
-                gws_command=config.gws_command, limit=args.limit
-            )
-        else:
-            if not config.mail_client_id:
-                raise ValueError("mail client_id must be configured before scheduled Zoho sync")
-            messages = fetch_inbox_metadata(
-                access_token=refresh_access_token(
-                    client_id=config.mail_client_id,
-                    accounts_url=config.mail_accounts_url,
-                ),
-                limit=args.limit,
-                folder=config.mail_folder,
-            )
+        messages = build_mail_provider(config).fetch_inbox_metadata(
+            page_size=args.limit,
+            max_messages=args.limit,
+            include_content=config.mail_provider != "gmail",
+        )
         sync_result = sync_metadata(store, messages)
         tracker_updates = 0
         if config.tracker.enabled and config.tracker.tracker_dir is not None:

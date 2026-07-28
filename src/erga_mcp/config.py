@@ -57,6 +57,11 @@ outputs = []
 # Keep full message bodies and attachments disabled unless a user explicitly enables them.
 retain_message_bodies = false
 retain_attachments = false
+
+[mcp]
+# Tool profiles are capability boundaries, not credentials. The default preserves every legacy tool.
+# Choose read, research, write, or hermes for a narrower MCP client surface.
+tool_profile = "default"
 """
 
 
@@ -93,6 +98,11 @@ class ContactOutputSettings:
 
 
 @dataclass(frozen=True)
+class McpSettings:
+    tool_profile: str
+
+
+@dataclass(frozen=True)
 class ErgaConfig:
     config_path: Path
     data_dir: Path
@@ -108,6 +118,7 @@ class ErgaConfig:
     mail_folder: str
     retain_message_bodies: bool
     retain_attachments: bool
+    mcp: McpSettings
 
 
 def _path(value: str, base_dir: Path) -> Path:
@@ -173,6 +184,7 @@ def load_config(config_path: Path) -> ErgaConfig:
     tracking = _section(document, "tracking")
     contacts = _section(document, "contacts")
     privacy = _section(document, "privacy")
+    mcp = _section(document, "mcp")
 
     data_dir = _path(str(paths.get("data_dir", "state")), config_path.parent)
     vault_value = str(paths.get("vault_path", "")).strip()
@@ -215,6 +227,9 @@ def load_config(config_path: Path) -> ErgaConfig:
     mail_accounts_url = str(mail.get("accounts_url", "https://accounts.zoho.com")).strip()
     if not mail_accounts_url.startswith("https://"):
         raise ValueError("mail accounts_url must use HTTPS")
+    mcp_tool_profile = str(mcp.get("tool_profile", "default")).strip().casefold()
+    if mcp_tool_profile not in {"default", "read", "research", "write", "hermes"}:
+        raise ValueError("mcp tool_profile must be default, read, research, write, or hermes")
 
     return ErgaConfig(
         config_path=config_path,
@@ -242,4 +257,5 @@ def load_config(config_path: Path) -> ErgaConfig:
         mail_folder=str(mail.get("folder", "Job Applications")),
         retain_message_bodies=bool(privacy.get("retain_message_bodies", False)),
         retain_attachments=bool(privacy.get("retain_attachments", False)),
+        mcp=McpSettings(tool_profile=mcp_tool_profile),
     )

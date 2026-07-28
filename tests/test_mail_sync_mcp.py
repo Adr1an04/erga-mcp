@@ -33,9 +33,13 @@ class MailSyncMcpTests(unittest.TestCase):
                 preview="Sensitive preview text must not appear in the command response.",
             )
             with (
-                patch("erga_mcp.mcp_server.refresh_access_token", return_value="test-token"),
                 patch(
-                    "erga_mcp.mcp_server.fetch_all_inbox_metadata", return_value=[message]
+                    "erga_mcp.integrations.mail_provider.refresh_access_token",
+                    return_value="test-token",
+                ),
+                patch(
+                    "erga_mcp.integrations.mail_provider.fetch_all_inbox_metadata",
+                    return_value=[message],
                 ) as fetch,
                 patch(
                     "erga_mcp.mcp_server.reconcile_confirmed_application_tracker_rows",

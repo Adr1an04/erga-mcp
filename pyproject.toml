@@ -26,8 +26,10 @@ classifiers = [
 dependencies = [
     "ddgs>=9,<10",
     "keyring>=25,<26",
+    "mcp>=1.28,<2",
     "pypdf>=5,<7",
     "scrapling>=0.4,<0.5",
+    "uvicorn>=0.30,<1",
 ]
 
 [project.urls]
@@ -37,7 +39,6 @@ Issues = "https://github.com/Adr1an04/erga-mcp/issues"
 Repository = "https://github.com/Adr1an04/erga-mcp.git"
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.28,<2"]
 dev = ["mypy>=1.14", "ruff>=0.9"]
 
 [project.scripts]

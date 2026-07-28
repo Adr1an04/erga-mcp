@@ -382,8 +382,10 @@ source = { editable = "." }
 dependencies = [
     { name = "ddgs" },
     { name = "keyring" },
+    { name = "mcp" },
     { name = "pypdf" },
     { name = "scrapling" },
+    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -391,21 +393,19 @@ dev = [
     { name = "mypy" },
     { name = "ruff" },
 ]
-mcp = [
-    { name = "mcp" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "ddgs", specifier = ">=9,<10" },
     { name = "keyring", specifier = ">=25,<26" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28,<2" },
+    { name = "mcp", specifier = ">=1.28,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },
     { name = "pypdf", specifier = ">=5,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
     { name = "scrapling", specifier = ">=0.4,<0.5" },
+    { name = "uvicorn", specifier = ">=0.30,<1" },
 ]
-provides-extras = ["mcp", "dev"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "fake-useragent"

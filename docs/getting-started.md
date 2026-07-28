@@ -5,7 +5,7 @@
 ```bash
 git clone https://github.com/Adr1an04/erga-mcp.git
 cd erga-mcp
-uv sync --extra mcp --extra dev
+uv sync --extra dev
 uv run erga init --config ~/.config/erga-mcp/config.toml
 ```
 
@@ -161,7 +161,7 @@ Hermes exposes tools prefixed with `mcp__erga_mcp__`:
 
 - `intake_job_url` — the primary first-turn action for a bare job URL, Markdown/chat link, or URL followed by preview text. It accepts the URL alone, atomically publishes the complete local review package, writes detailed source-cited posting research and an idempotent local application record, deterministically reorders existing résumé bullets/projects/all skill categories, compiles the exact configured PDF, creates/synchronizes the appropriate Obsidian cycle tracker, and reuses current repeats of the same listing (including tracking-only URL variants). Legacy packages are upgraded once using a freshly sanitized snapshot; incomplete legacy files are retained under `legacy-backup/` after a clean rebuild. Jobs with no discoverable time bucket go to `Unscheduled Application Tracker.md` and `Unscheduled Application Notes/`.
 - `record_secondary_research` — records bounded host-provided web/community search results after intake, clearly separated from official-posting facts and labeled unverified.
-- `install_mail_monitor_scripts` — prepares deterministic no-agent mail-alert and history scripts under the Hermes scripts directory. It does not create a delivery job by itself.
+- `install_mail_monitor_scripts` — a Hermes-only compatibility helper used by `/setup-erga-monitor`; it only prepares scripts and cannot create delivery jobs by itself. Other MCP clients should ignore it.
 - `export_data` — creates a private ZIP containing local records, history, evidence, and generated job packages for native attachment delivery.
 - `prepare_job_workspace` — an advanced second-stage variant for callers that already have company, role, cycle, and slug metadata and explicitly need tracker integration. It is not the entry point for pasted links.
 - `create_tailored_resume` — writes only a reviewable tailored `.tex`, diff, and claim report inside that package, gated by supplied approved evidence IDs and configured editable sections.

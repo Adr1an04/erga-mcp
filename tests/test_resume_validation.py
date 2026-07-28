@@ -27,6 +27,7 @@ class ResumeValidationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertIn("proposal.tex", result.stdout)
             self.assertEqual(run.call_args.args[0][-1], "proposal.tex")
+            self.assertIn("-no-shell-escape", run.call_args.args[0])
             self.assertEqual(
                 proposal.read_text(encoding="utf-8"), "\\begin{document}ok\\end{document}\n"
             )
