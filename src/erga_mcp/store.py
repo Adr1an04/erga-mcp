@@ -8,7 +8,15 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
-from .models import Application, AuditEvent, Evidence, MailEvent, RecruiterContact, TokenUsage
+from .models import (
+    Application,
+    AuditEvent,
+    Evidence,
+    GitEvidenceCandidate,
+    MailEvent,
+    RecruiterContact,
+    TokenUsage,
+)
 
 APPLICATION_STATUSES = frozenset(
     {
@@ -30,6 +38,22 @@ CREATE TABLE IF NOT EXISTS evidence (
     text TEXT NOT NULL,
     approved INTEGER NOT NULL,
     created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS git_evidence_candidates (
+    id TEXT PRIMARY KEY,
+    repo_path TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    commit_range TEXT NOT NULL,
+    text TEXT NOT NULL,
+    approved INTEGER NOT NULL DEFAULT 0,
+    approved_evidence_id TEXT REFERENCES evidence(id),
+    created_at TEXT NOT NULL,
+    UNIQUE(repo_path, commit_sha)
+);
+CREATE TABLE IF NOT EXISTS git_scan_checkpoints (
+    repo_path TEXT PRIMARY KEY,
+    commit_sha TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS applications (
     id TEXT PRIMARY KEY,
@@ -160,6 +184,131 @@ class ErgaStore:
             self._record_audit(connection, "evidence.added", evidence.id, {"approved": approved})
             connection.commit()
         return evidence
+
+    def git_scan_checkpoint(self, repo_path: str) -> str | None:
+        self.initialize()
+        with closing(self._connection()) as connection:
+            row = connection.execute(
+                "SELECT commit_sha FROM git_scan_checkpoints WHERE repo_path = ?", (repo_path,)
+            ).fetchone()
+        return str(row["commit_sha"]) if row is not None else None
+
+    def add_git_candidate(
+        self, *, repo_path: str, commit_sha: str, commit_range: str, text: str
+    ) -> GitEvidenceCandidate | None:
+        self.initialize()
+        candidate = GitEvidenceCandidate(
+            id=f"gitcand_{uuid4().hex}",
+            repo_path=repo_path,
+            commit_sha=commit_sha,
+            commit_range=commit_range,
+            text=text,
+            approved=False,
+            approved_evidence_id=None,
+            created_at=_now(),
+        )
+        with closing(self._connection()) as connection:
+            result = connection.execute(
+                """
+                INSERT INTO git_evidence_candidates VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(repo_path, commit_sha) DO NOTHING
+                """,
+                (
+                    candidate.id,
+                    candidate.repo_path,
+                    candidate.commit_sha,
+                    candidate.commit_range,
+                    candidate.text,
+                    candidate.approved,
+                    candidate.approved_evidence_id,
+                    _as_text(candidate.created_at),
+                ),
+            )
+            if result.rowcount:
+                self._record_audit(
+                    connection,
+                    "git_evidence.candidate_created",
+                    candidate.id,
+                    {"commit": commit_sha},
+                )
+                connection.commit()
+                return candidate
+        return None
+
+    def save_git_scan_checkpoint(self, *, repo_path: str, commit_sha: str) -> None:
+        self.initialize()
+        with closing(self._connection()) as connection:
+            connection.execute(
+                """
+                INSERT INTO git_scan_checkpoints VALUES (?, ?, ?)
+                ON CONFLICT(repo_path) DO UPDATE SET commit_sha = excluded.commit_sha,
+                    updated_at = excluded.updated_at
+                """,
+                (repo_path, commit_sha, _as_text(_now())),
+            )
+            connection.commit()
+
+    def list_git_candidates(self) -> list[GitEvidenceCandidate]:
+        self.initialize()
+        with closing(self._connection()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM git_evidence_candidates ORDER BY created_at"
+            ).fetchall()
+        return [self._git_candidate_from_row(row) for row in rows]
+
+    def approve_git_candidate(self, candidate_id: str) -> Evidence:
+        self.initialize()
+        with closing(self._connection()) as connection:
+            row = connection.execute(
+                "SELECT * FROM git_evidence_candidates WHERE id = ?", (candidate_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("git evidence candidate does not exist")
+            if bool(row["approved"]):
+                raise ValueError("git evidence candidate is already approved")
+            evidence = Evidence(
+                id=f"ev_{uuid4().hex}",
+                source_ref=(f"git:{row['repo_path']}@{row['commit_sha']} ({row['commit_range']})"),
+                text=row["text"],
+                approved=True,
+                created_at=_now(),
+            )
+            connection.execute(
+                "INSERT INTO evidence VALUES (?, ?, ?, ?, ?)",
+                (
+                    evidence.id,
+                    evidence.source_ref,
+                    evidence.text,
+                    evidence.approved,
+                    _as_text(evidence.created_at),
+                ),
+            )
+            connection.execute(
+                "UPDATE git_evidence_candidates SET approved = 1, "
+                "approved_evidence_id = ? WHERE id = ?",
+                (evidence.id, candidate_id),
+            )
+            self._record_audit(
+                connection,
+                "git_evidence.candidate_approved",
+                candidate_id,
+                {"evidence_id": evidence.id},
+            )
+            connection.commit()
+        return evidence
+
+    @staticmethod
+    def _git_candidate_from_row(row: sqlite3.Row) -> GitEvidenceCandidate:
+        return GitEvidenceCandidate(
+            id=row["id"],
+            repo_path=row["repo_path"],
+            commit_sha=row["commit_sha"],
+            commit_range=row["commit_range"],
+            text=row["text"],
+            approved=bool(row["approved"]),
+            approved_evidence_id=row["approved_evidence_id"],
+            created_at=_as_datetime(row["created_at"]),
+        )
 
     def create_application(
         self, *, company: str, role: str, source_url: str, evidence_ids: list[str]

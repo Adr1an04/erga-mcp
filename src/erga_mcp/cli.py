@@ -18,6 +18,7 @@ from .cover_letter_settings import update_settings as update_cover_letter_settin
 from .cron_setup import install_hermes_monitor_scripts
 from .doctor import check_installation
 from .exporting import export_bundle
+from .git_evidence import discover_worktrees, scan_commits, validate_worktree
 from .integrations.mail_provider import build_mail_provider
 from .integrations.obsidian import import_markdown_evidence
 from .integrations.obsidian_tracker import reconcile_application_status_tracker_rows
@@ -81,6 +82,29 @@ def _parser() -> argparse.ArgumentParser:
     evidence_add.add_argument("--source-ref", required=True)
     evidence_add.add_argument("--text", required=True)
     evidence_add.add_argument("--approved", action="store_true")
+
+    git = subcommands.add_parser("git", help="scan local git worktrees for reviewable evidence")
+    git_commands = git.add_subparsers(dest="git_command", required=True)
+    git_scan = git_commands.add_parser(
+        "scan", help="scan bounded new commits into unapproved candidates"
+    )
+    _config_argument(git_scan)
+    git_scan.add_argument("repo", type=Path, nargs="?")
+    git_scan.add_argument("--all", action="store_true", help="scan every worktree below --root")
+    git_scan.add_argument(
+        "--root",
+        type=Path,
+        action="append",
+        default=[],
+        help="directory to search when using --all",
+    )
+    git_candidates = git_commands.add_parser("candidates", help="list git evidence candidates")
+    _config_argument(git_candidates)
+    git_approve = git_commands.add_parser(
+        "approve", help="approve one candidate as regular evidence"
+    )
+    _config_argument(git_approve)
+    git_approve.add_argument("candidate_id")
 
     obsidian = subcommands.add_parser("obsidian", help="import configured Obsidian evidence")
     obsidian_commands = obsidian.add_subparsers(dest="obsidian_command", required=True)
@@ -459,6 +483,57 @@ def main(arguments: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "tokens":
         _print_json(store.token_usage_summary(application_id=args.application_id))
+        return 0
+    if args.command == "git":
+        if args.git_command == "candidates":
+            _print_json([asdict(candidate) for candidate in store.list_git_candidates()])
+            return 0
+        if args.git_command == "approve":
+            _print_json(asdict(store.approve_git_candidate(args.candidate_id)))
+            return 0
+        if bool(args.all) == (args.repo is not None):
+            raise ValueError("git scan requires exactly one of a repository path or --all")
+        repositories = discover_worktrees(args.root) if args.all else [validate_worktree(args.repo)]
+        created = 0
+        checkpoints: dict[str, str | None] = {}
+        previous_checkpoints: dict[str, str | None] = {}
+        for repo in repositories:
+            repo_path = str(repo)
+            previous_checkpoint = store.git_scan_checkpoint(repo_path)
+            previous_checkpoints[repo_path] = previous_checkpoint
+            commits, checkpoint = scan_commits(repo, previous_checkpoint)
+            for commit in commits:
+                commit_range = (
+                    f"{commit.parents[0]}..{commit.sha}" if commit.parents else commit.sha
+                )
+                candidate = store.add_git_candidate(
+                    repo_path=repo_path,
+                    commit_sha=commit.sha,
+                    commit_range=commit_range,
+                    text=(
+                        f"Git commit: {commit.subject}\n"
+                        f"Changed files: {', '.join(commit.files[:10])}"
+                    ),
+                )
+                created += candidate is not None
+            if checkpoint is not None:
+                store.save_git_scan_checkpoint(repo_path=repo_path, commit_sha=checkpoint)
+            checkpoints[repo_path] = checkpoint
+        payload: dict[str, object] = {
+            "checkpoints": checkpoints,
+            "created": created,
+            "repositories_scanned": len(repositories),
+        }
+        if len(repositories) == 1:
+            repo_path = str(repositories[0])
+            payload.update(
+                {
+                    "checkpoint": checkpoints[repo_path],
+                    "previous_checkpoint": previous_checkpoints[repo_path],
+                    "repo_path": repo_path,
+                }
+            )
+        _print_json(payload)
         return 0
     if args.command == "evidence" and args.evidence_command == "add":
         evidence = store.add_evidence(

@@ -14,6 +14,18 @@ class Evidence:
 
 
 @dataclass(frozen=True)
+class GitEvidenceCandidate:
+    id: str
+    repo_path: str
+    commit_sha: str
+    commit_range: str
+    text: str
+    approved: bool
+    approved_evidence_id: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class Application:
     id: str
     company: str
