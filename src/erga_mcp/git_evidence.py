@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from .models import GitEvidenceCandidate, GitResearchBullet
 
 DEFAULT_COMMIT_LIMIT = 200
 _LOW_SIGNAL_SUFFIXES = (".lock", ".md", ".rst", ".txt")
@@ -86,6 +89,78 @@ def _is_high_signal(commit: GitCommit) -> bool:
         and not path.casefold().endswith(_LOW_SIGNAL_SUFFIXES)
         for path in commit.files
     )
+
+
+def synthesize_project_research(
+    repo_path: str, candidates: list[GitEvidenceCandidate]
+) -> tuple[str, list[GitResearchBullet]]:
+    """Create a deterministic, local-only review draft from saved commit metadata."""
+    groups: list[list[tuple[GitEvidenceCandidate, str]]] = []
+    for candidate in candidates:
+        subject = _candidate_subject(candidate)
+        if not subject or _is_obvious_chore(subject):
+            continue
+        for group in groups:
+            if _subjects_are_similar(subject, group[0][1]):
+                group.append((candidate, subject))
+                if len(_subject_words(subject)) > len(_subject_words(group[0][1])):
+                    group.insert(0, group.pop())
+                break
+        else:
+            groups.append([(candidate, subject)])
+
+    bullets = sorted(
+        (
+            GitResearchBullet(
+                text=group[0][1],
+                source_candidate_ids=[candidate.id for candidate, _ in group],
+                source_commit_shas=[candidate.commit_sha for candidate, _ in group],
+            )
+            for group in groups
+        ),
+        key=lambda bullet: bullet.text.casefold(),
+    )[:4]
+    summary = (
+        "Generated locally from Git commit metadata; factual draft only, needs review before "
+        f"approval or resume use. Repository: {repo_path}."
+    )
+    return summary, bullets
+
+
+def _candidate_subject(candidate: GitEvidenceCandidate) -> str:
+    prefix = "Git commit: "
+    first_line = candidate.text.splitlines()[0] if candidate.text else ""
+    return first_line.removeprefix(prefix).strip()
+
+
+def _is_obvious_chore(subject: str) -> bool:
+    normalized = re.sub(r"^[a-z]+(?:\([^)]*\))?:\s*", "", subject.casefold())
+    return bool(
+        re.match(
+            r"(?:chore\b|release\b|prepare release\b|bump version\b|"
+            r"(?:update|configure) (?:ci|workflow|build|dependencies|deps|lockfile)\b|"
+            r"(?:ci|build|test|format|formatting|lint|style|prettier|black|isort|ruff)\b)",
+            normalized,
+        )
+    )
+
+
+def _subjects_are_similar(left: str, right: str) -> bool:
+    left_words = _subject_words(left)
+    right_words = _subject_words(right)
+    if not left_words or not right_words:
+        return False
+    overlap = len(left_words & right_words)
+    return overlap >= 2 and overlap / len(left_words | right_words) >= 0.5
+
+
+def _subject_words(subject: str) -> set[str]:
+    ignored = {"add", "implement", "for", "the", "a", "an", "to", "with", "and", "of"}
+    return {
+        word
+        for word in re.findall(r"[a-z0-9]+", subject.casefold())
+        if len(word) > 1 and word not in ignored
+    }
 
 
 def _run_git(repo: Path, *arguments: str) -> subprocess.CompletedProcess[str]:

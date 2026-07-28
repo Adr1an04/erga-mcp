@@ -77,6 +77,66 @@ class GitEvidenceCliTests(unittest.TestCase):
             self.assertTrue(evidence["approved"])
             self.assertIn(commit_sha, evidence["source_ref"])
 
+    def test_scan_persists_local_commit_metadata_research_draft(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            repo = root / "sample-repo"
+            repo.mkdir()
+            self._git(repo, "init")
+            self._git(repo, "config", "user.email", "test@example.test")
+            self._git(repo, "config", "user.name", "Test User")
+            scheduler_sha = self._commit(
+                repo,
+                "src/scheduler.py",
+                "def schedule(): pass\n",
+                "Implement asynchronous job scheduler",
+            )
+            retry_sha = self._commit(
+                repo,
+                "src/retry.py",
+                "def retry(): pass\n",
+                "Add retry controls",
+            )
+            retry_workers_sha = self._commit(
+                repo,
+                "src/retry_workers.py",
+                "def retry_workers(): pass\n",
+                "Add retry controls for worker queues",
+            )
+            self._commit(
+                repo, ".github/workflows/ci.yml", "name: CI\n", "chore: update CI workflow"
+            )
+            self._commit(repo, "src/version.py", "VERSION = '1.0.0'\n", "Release version 1.0.0")
+            self._commit(repo, "src/style.py", "VALUE=1\n", "Format codebase")
+            main(["init", "--config", str(config_path)])
+
+            scan_code, scan = self._run(["git", "scan", str(repo), "--config", str(config_path)])
+            research_code, drafts = self._run(["git", "research", "--config", str(config_path)])
+            _, status = self._run(["status", "--config", str(config_path)])
+
+            self.assertEqual(scan_code, 0)
+            self.assertEqual(research_code, 0)
+            self.assertEqual(scan["research_drafts"], 1)
+            self.assertEqual(len(drafts), 1)
+            draft = drafts[0]
+            self.assertTrue(draft["generated_from_commit_metadata"])
+            self.assertTrue(draft["needs_review"])
+            self.assertIn("needs review", draft["summary"].casefold())
+            self.assertEqual(len(draft["bullet_candidates"]), 2)
+            self.assertEqual(
+                [bullet["text"] for bullet in draft["bullet_candidates"]],
+                ["Add retry controls for worker queues", "Implement asynchronous job scheduler"],
+            )
+            source_shas = {
+                sha for bullet in draft["bullet_candidates"] for sha in bullet["source_commit_shas"]
+            }
+            self.assertEqual(source_shas, {scheduler_sha, retry_sha, retry_workers_sha})
+            self.assertTrue(
+                all(bullet["source_candidate_ids"] for bullet in draft["bullet_candidates"])
+            )
+            self.assertEqual(status["evidence"], 0)
+
     def test_incremental_scan_only_creates_new_high_signal_candidates(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

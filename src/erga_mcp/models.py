@@ -26,6 +26,24 @@ class GitEvidenceCandidate:
 
 
 @dataclass(frozen=True)
+class GitResearchBullet:
+    text: str
+    source_candidate_ids: list[str]
+    source_commit_shas: list[str]
+
+
+@dataclass(frozen=True)
+class GitResearchDraft:
+    id: str
+    repo_path: str
+    summary: str
+    bullet_candidates: list[GitResearchBullet]
+    generated_from_commit_metadata: bool
+    needs_review: bool
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class Application:
     id: str
     company: str

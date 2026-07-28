@@ -18,7 +18,12 @@ from .cover_letter_settings import update_settings as update_cover_letter_settin
 from .cron_setup import install_hermes_monitor_scripts
 from .doctor import check_installation
 from .exporting import export_bundle
-from .git_evidence import discover_worktrees, scan_commits, validate_worktree
+from .git_evidence import (
+    discover_worktrees,
+    scan_commits,
+    synthesize_project_research,
+    validate_worktree,
+)
 from .integrations.mail_provider import build_mail_provider
 from .integrations.obsidian import import_markdown_evidence
 from .integrations.obsidian_tracker import reconcile_application_status_tracker_rows
@@ -100,6 +105,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     git_candidates = git_commands.add_parser("candidates", help="list git evidence candidates")
     _config_argument(git_candidates)
+    git_research = git_commands.add_parser(
+        "research", help="list local commit-metadata research drafts that need review"
+    )
+    _config_argument(git_research)
     git_approve = git_commands.add_parser(
         "approve", help="approve one candidate as regular evidence"
     )
@@ -488,6 +497,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
         if args.git_command == "candidates":
             _print_json([asdict(candidate) for candidate in store.list_git_candidates()])
             return 0
+        if args.git_command == "research":
+            _print_json([asdict(draft) for draft in store.list_git_research_drafts()])
+            return 0
         if args.git_command == "approve":
             _print_json(asdict(store.approve_git_candidate(args.candidate_id)))
             return 0
@@ -497,6 +509,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         created = 0
         checkpoints: dict[str, str | None] = {}
         previous_checkpoints: dict[str, str | None] = {}
+        research_drafts = []
         for repo in repositories:
             repo_path = str(repo)
             previous_checkpoint = store.git_scan_checkpoint(repo_path)
@@ -516,6 +529,14 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     ),
                 )
                 created += candidate is not None
+            summary, bullets = synthesize_project_research(
+                repo_path, store.list_git_candidates(repo_path=repo_path)
+            )
+            research_drafts.append(
+                store.save_git_research_draft(
+                    repo_path=repo_path, summary=summary, bullet_candidates=bullets
+                )
+            )
             if checkpoint is not None:
                 store.save_git_scan_checkpoint(repo_path=repo_path, commit_sha=checkpoint)
             checkpoints[repo_path] = checkpoint
@@ -523,6 +544,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "checkpoints": checkpoints,
             "created": created,
             "repositories_scanned": len(repositories),
+            "research_drafts": len(research_drafts),
         }
         if len(repositories) == 1:
             repo_path = str(repositories[0])

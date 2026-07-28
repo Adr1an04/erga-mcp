@@ -13,6 +13,8 @@ from .models import (
     AuditEvent,
     Evidence,
     GitEvidenceCandidate,
+    GitResearchBullet,
+    GitResearchDraft,
     MailEvent,
     RecruiterContact,
     TokenUsage,
@@ -54,6 +56,15 @@ CREATE TABLE IF NOT EXISTS git_scan_checkpoints (
     repo_path TEXT PRIMARY KEY,
     commit_sha TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS git_research_drafts (
+    id TEXT PRIMARY KEY,
+    repo_path TEXT NOT NULL UNIQUE,
+    summary TEXT NOT NULL,
+    bullet_candidates_json TEXT NOT NULL,
+    generated_from_commit_metadata INTEGER NOT NULL,
+    needs_review INTEGER NOT NULL,
+    created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS applications (
     id TEXT PRIMARY KEY,
@@ -248,13 +259,89 @@ class ErgaStore:
             )
             connection.commit()
 
-    def list_git_candidates(self) -> list[GitEvidenceCandidate]:
+    def list_git_candidates(self, *, repo_path: str | None = None) -> list[GitEvidenceCandidate]:
+        self.initialize()
+        query = "SELECT * FROM git_evidence_candidates"
+        parameters: tuple[str, ...] = ()
+        if repo_path is not None:
+            query += " WHERE repo_path = ?"
+            parameters = (repo_path,)
+        query += " ORDER BY created_at"
+        with closing(self._connection()) as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [self._git_candidate_from_row(row) for row in rows]
+
+    def save_git_research_draft(
+        self,
+        *,
+        repo_path: str,
+        summary: str,
+        bullet_candidates: list[GitResearchBullet],
+    ) -> GitResearchDraft:
+        """Persist an unapproved deterministic draft; it never creates Evidence."""
+        self.initialize()
+        created_at = _now()
+        draft = GitResearchDraft(
+            id=f"gitdraft_{uuid4().hex}",
+            repo_path=repo_path,
+            summary=summary,
+            bullet_candidates=bullet_candidates,
+            generated_from_commit_metadata=True,
+            needs_review=True,
+            created_at=created_at,
+        )
+        serialized_bullets = json.dumps(
+            [
+                {
+                    "text": bullet.text,
+                    "source_candidate_ids": bullet.source_candidate_ids,
+                    "source_commit_shas": bullet.source_commit_shas,
+                }
+                for bullet in bullet_candidates
+            ]
+        )
+        with closing(self._connection()) as connection:
+            connection.execute(
+                """
+                INSERT INTO git_research_drafts VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(repo_path) DO UPDATE SET
+                    summary = excluded.summary,
+                    bullet_candidates_json = excluded.bullet_candidates_json,
+                    generated_from_commit_metadata = excluded.generated_from_commit_metadata,
+                    needs_review = excluded.needs_review,
+                    created_at = excluded.created_at
+                """,
+                (
+                    draft.id,
+                    draft.repo_path,
+                    draft.summary,
+                    serialized_bullets,
+                    draft.generated_from_commit_metadata,
+                    draft.needs_review,
+                    _as_text(draft.created_at),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM git_research_drafts WHERE repo_path = ?", (repo_path,)
+            ).fetchone()
+            assert row is not None
+            saved = self._git_research_draft_from_row(row)
+            self._record_audit(
+                connection,
+                "git_evidence.research_draft_generated",
+                saved.id,
+                {"bullets": len(saved.bullet_candidates), "repo_path": repo_path},
+            )
+            connection.commit()
+        return saved
+
+    def list_git_research_drafts(self) -> list[GitResearchDraft]:
         self.initialize()
         with closing(self._connection()) as connection:
             rows = connection.execute(
-                "SELECT * FROM git_evidence_candidates ORDER BY created_at"
+                "SELECT * FROM git_research_drafts ORDER BY created_at DESC"
             ).fetchall()
-        return [self._git_candidate_from_row(row) for row in rows]
+        return [self._git_research_draft_from_row(row) for row in rows]
 
     def approve_git_candidate(self, candidate_id: str) -> Evidence:
         self.initialize()
@@ -307,6 +394,26 @@ class ErgaStore:
             text=row["text"],
             approved=bool(row["approved"]),
             approved_evidence_id=row["approved_evidence_id"],
+            created_at=_as_datetime(row["created_at"]),
+        )
+
+    @staticmethod
+    def _git_research_draft_from_row(row: sqlite3.Row) -> GitResearchDraft:
+        bullets = [
+            GitResearchBullet(
+                text=str(item["text"]),
+                source_candidate_ids=[str(value) for value in item["source_candidate_ids"]],
+                source_commit_shas=[str(value) for value in item["source_commit_shas"]],
+            )
+            for item in json.loads(row["bullet_candidates_json"])
+        ]
+        return GitResearchDraft(
+            id=row["id"],
+            repo_path=row["repo_path"],
+            summary=row["summary"],
+            bullet_candidates=bullets,
+            generated_from_commit_metadata=bool(row["generated_from_commit_metadata"]),
+            needs_review=bool(row["needs_review"]),
             created_at=_as_datetime(row["created_at"]),
         )
 
