@@ -21,6 +21,75 @@ _IGNORED_HTML = frozenset(
 _BLOCK_HTML = frozenset(
     {"article", "br", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "main", "p", "section"}
 )
+_JOB_HOST_SUFFIXES = (
+    "applytojob.com",
+    "ashbyhq.com",
+    "bamboohr.com",
+    "breezy.hr",
+    "careers-page.com",
+    "eightfold.ai",
+    "greenhouse.io",
+    "icims.com",
+    "jobvite.com",
+    "lever.co",
+    "myworkdayjobs.com",
+    "myworkdaysite.com",
+    "oraclecloud.com",
+    "phenompeople.com",
+    "pinpointhq.com",
+    "recruitee.com",
+    "rippling-ats.com",
+    "smartrecruiters.com",
+    "successfactors.com",
+    "teamtailor.com",
+    "workable.com",
+)
+_NON_JOB_HOST_SUFFIXES = (
+    "calendly.com",
+    "github.com",
+    "modelcontextprotocol.io",
+    "playwright.dev",
+    "reddit.com",
+)
+_JOB_HOST_LABELS = frozenset({"apply", "career", "careers", "jobs", "recruiting"})
+_JOB_PATH_SEGMENTS = frozenset(
+    {
+        "apply",
+        "career",
+        "career-opportunities",
+        "careers",
+        "job",
+        "job-detail",
+        "job-details",
+        "job-openings",
+        "jobs",
+        "join-us",
+        "open-roles",
+        "opening",
+        "openings",
+        "opportunities",
+        "opportunity",
+        "position",
+        "positions",
+        "roles",
+        "vacancies",
+        "vacancy",
+    }
+)
+_JOB_QUERY_KEYS = frozenset({"gh_jid", "jk", "job", "job_id", "jobid", "posting_id", "position"})
+_JOB_ROLE_SIGNAL = re.compile(
+    r"\b(?:intern(?:ship)?|engineer|developer|designer|analyst|manager|specialist|"
+    r"associate|coordinator|scientist|architect|administrator|recruiter|director|"
+    r"owner|writer|counsel|technician|representative|fellow|trader)\b",
+    re.IGNORECASE,
+)
+_JOB_CONTENT_SIGNALS = (
+    re.compile(r"\b(?:job description|responsibilities|what you(?:'|’)ll do)\b", re.IGNORECASE),
+    re.compile(r"\b(?:qualifications|requirements|what we(?:'|’)re looking for)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:apply now|apply for this (?:job|role|position)|submit application)\b", re.IGNORECASE
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -176,6 +245,68 @@ def _greenhouse_job_posting(snapshot: str) -> dict[str, Any] | None:
         snapshot,
         r'"post_type"\s*:\s*"job_post"',
         _find_greenhouse_posting,
+    )
+
+
+def _hostname_matches(hostname: str, suffixes: tuple[str, ...]) -> bool:
+    return any(hostname == suffix or hostname.endswith(f".{suffix}") for suffix in suffixes)
+
+
+def _is_non_job_host(job_url: str) -> bool:
+    return _hostname_matches((urlsplit(job_url).hostname or "").casefold(), _NON_JOB_HOST_SUFFIXES)
+
+
+def _is_specific_ats_url(job_url: str) -> bool:
+    parsed = urlsplit(job_url)
+    hostname = (parsed.hostname or "").casefold()
+    path_parts = [part.casefold() for part in parsed.path.split("/") if part]
+    return len(path_parts) >= 2 and _hostname_matches(hostname, _JOB_HOST_SUFFIXES)
+
+
+def _has_career_host_and_detail_path(job_url: str) -> bool:
+    parsed = urlsplit(job_url)
+    hostname_parts = set((parsed.hostname or "").casefold().split("."))
+    path_parts = {part.casefold() for part in parsed.path.split("/") if part}
+    return bool(hostname_parts & _JOB_HOST_LABELS) and bool(path_parts & _JOB_PATH_SEGMENTS)
+
+
+def _credible_structured_job_posting(snapshot: str) -> bool:
+    posting = _structured_job_posting(snapshot)
+    if posting is None:
+        return False
+    title = posting.get("title")
+    description = posting.get("description")
+    organization = posting.get("hiringOrganization")
+    has_organization = isinstance(organization, dict) and bool(
+        str(organization.get("name", "")).strip()
+    )
+    has_identifier = bool(str(posting.get("identifier", "")).strip())
+    return bool(str(title or "").strip() and str(description or "").strip()) and (
+        has_organization or has_identifier
+    )
+
+
+def require_job_posting(snapshot: str, *, job_url: str) -> None:
+    """Reject generic public pages before intake can create an application package."""
+    if _is_non_job_host(job_url):
+        raise ValueError(
+            "page does not contain enough evidence of a specific job posting; "
+            "use scrape_public_page for non-job research links"
+        )
+    if _credible_structured_job_posting(snapshot) or _greenhouse_job_posting(snapshot) is not None:
+        return
+    if _is_specific_ats_url(job_url):
+        return
+    content = official_job_text(snapshot)
+    has_role = _JOB_ROLE_SIGNAL.search(content) is not None
+    has_all_posting_sections = all(
+        signal.search(content) is not None for signal in _JOB_CONTENT_SIGNALS
+    )
+    if _has_career_host_and_detail_path(job_url) and has_role and has_all_posting_sections:
+        return
+    raise ValueError(
+        "page does not contain enough evidence of a specific job posting; "
+        "use scrape_public_page for non-job research links"
     )
 
 
