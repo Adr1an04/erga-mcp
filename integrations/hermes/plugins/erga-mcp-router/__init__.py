@@ -21,6 +21,7 @@ _DEFAULT_RESEARCH_TOOL_NAME = "mcp__erga_mcp__record_secondary_research"
 _DEFAULT_MONITOR_TOOL_NAME = "mcp__erga_mcp__install_mail_monitor_scripts"
 _DEFAULT_EXPORT_TOOL_NAME = "mcp__erga_mcp__export_data"
 _DEFAULT_TRACKER_TOOL_NAME = "mcp__erga_mcp__application_tracker"
+_DEFAULT_DISCOVERY_RESEARCH_TOOL_NAME = "mcp__erga_mcp__discover_job_research"
 _DEFAULT_MAIL_SYNC_TOOL_NAME = "mcp__erga_mcp__sync_recruiting_mail"
 _DEFAULT_WEB_SEARCH_TOOL_NAME = "web_search"
 _DEFAULT_CRON_TOOL_NAME = "cronjob"
@@ -632,6 +633,9 @@ def register(
     monitor_tool = os.getenv("ERGA_MCP_MONITOR_TOOL", _DEFAULT_MONITOR_TOOL_NAME).strip()
     export_tool = os.getenv("ERGA_MCP_EXPORT_TOOL", _DEFAULT_EXPORT_TOOL_NAME).strip()
     tracker_tool = os.getenv("ERGA_MCP_TRACKER_TOOL", _DEFAULT_TRACKER_TOOL_NAME).strip()
+    discovery_research_tool = os.getenv(
+        "ERGA_MCP_DISCOVERY_RESEARCH_TOOL", _DEFAULT_DISCOVERY_RESEARCH_TOOL_NAME
+    ).strip()
     mail_sync_tool = os.getenv("ERGA_MCP_MAIL_SYNC_TOOL", _DEFAULT_MAIL_SYNC_TOOL_NAME).strip()
     cron_tool = os.getenv("ERGA_MCP_CRON_TOOL", _DEFAULT_CRON_TOOL_NAME).strip()
     token_tool = os.getenv("ERGA_MCP_TOKEN_TOOL", _DEFAULT_TOKEN_TOOL_NAME).strip()
@@ -897,6 +901,39 @@ def register(
             return "Erga tracker failed: the tracker tool returned no display message."
         return str(payload["message"])
 
+    def discovery_research_command(raw_args: str) -> str:
+        query = raw_args.strip()
+        if not query:
+            return "Usage: /erga-research <company or role>"
+        try:
+            research = ctx.dispatch_tool(discovery_research_tool, {"query": query})
+        except Exception as exc:
+            return f"Erga research failed: {exc}"
+        error_text = _dispatch_error_text(research)
+        if error_text:
+            return f"Erga research failed: {error_text}"
+        payload = next(
+            (
+                item
+                for item in _nested_objects(research)
+                if isinstance(item.get("company"), str)
+                and isinstance(item.get("role"), str)
+                and isinstance(item.get("research_note"), str)
+                and isinstance(item.get("sources_scraped"), int)
+                and isinstance(item.get("outreach_leads"), int)
+            ),
+            None,
+        )
+        if payload is None:
+            return "Erga research failed: the research tool returned no saved result."
+        lead_word = "lead" if payload["outreach_leads"] == 1 else "leads"
+        return (
+            f"Research saved for {payload['company']} — {payload['role']}: "
+            f"{payload['research_note']}\n"
+            f"{payload['sources_scraped']} sources scraped; {payload['outreach_leads']} public "
+            f"outreach {lead_word}. Community reports are unverified. No messages were sent."
+        )
+
     def mail_sync_command(raw_args: str) -> str:
         if raw_args.strip():
             return "Usage: /erga-mail-sync"
@@ -960,6 +997,12 @@ def register(
             "Show or search the local Obsidian application tracker in a compact message card."
         ),
         args_hint="[company, role, status, or cycle]",
+    )
+    ctx.register_command(
+        "erga-research",
+        handler=discovery_research_command,
+        description="Run bounded public research for one tracked Erga application.",
+        args_hint="<company or role>",
     )
     ctx.register_command(
         "erga-mail-sync",

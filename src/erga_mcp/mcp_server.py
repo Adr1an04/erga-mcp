@@ -19,7 +19,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, StrictInt
 
-from .cli import DEFAULT_CONFIG_PATH
+from .cli import DEFAULT_CONFIG_PATH, _notes_application, _package_for_application
 from .config import ErgaConfig, load_config
 from .contact_projection import project_recruiter_contacts
 from .cover_letter import create_cover_letter_proposal, load_style_context
@@ -33,6 +33,7 @@ from .integrations.obsidian_tracker import (
     write_job_tracker_note,
 )
 from .integrations.zoho_live import sync_metadata
+from .job_discovery import discover_job_research as run_job_discovery
 from .job_intake import fetch_job_snapshot, select_relevant_evidence
 from .job_research import (
     JobResearch,
@@ -93,6 +94,7 @@ _READ_TOOL_NAMES = frozenset(
     }
 )
 _NETWORK_READ_TOOL_NAMES = frozenset({"scrape_public_page", "extract_public_page"})
+_NETWORK_WRITE_TOOL_NAMES = frozenset({"discover_job_research"})
 _LOCAL_WRITE_TOOL_NAMES = frozenset(
     {
         "record_token_usage",
@@ -111,6 +113,7 @@ _ALL_TOOL_NAMES = frozenset(
     {
         *_READ_TOOL_NAMES,
         *_NETWORK_READ_TOOL_NAMES,
+        *_NETWORK_WRITE_TOOL_NAMES,
         *_LOCAL_WRITE_TOOL_NAMES,
         *_HERMES_TOOL_NAMES,
         "intake_job_url",
@@ -1385,6 +1388,26 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         return {
             "secondary_research_note": str(path),
             "searches_recorded": len(normalized),
+        }
+
+    @profile_tool("discover_job_research", annotations=_NETWORK_READ_AND_WRITE)
+    def discover_job_research(query: str) -> dict[str, object]:
+        """Run bounded public research for one tracked application and save a local cited note."""
+        application = _notes_application(query, store.list_applications())
+        package_dir = _package_for_application(config.resume.output_root, application)
+        if package_dir is None:
+            raise ValueError(
+                "research requires an existing local Erga package for this application"
+            )
+        result = run_job_discovery(application=application, package_dir=package_dir)
+        return {
+            "company": application.company,
+            "role": application.role,
+            "research_note": str(result.path),
+            "sources_scraped": result.sources_scraped,
+            "outreach_leads": result.outreach_leads,
+            "messages_sent": 0,
+            "community_sources_unverified": True,
         }
 
     @profile_tool(
