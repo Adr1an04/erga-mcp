@@ -11,6 +11,8 @@ from threading import Barrier
 from typing import Any, cast
 from unittest.mock import patch
 
+from mcp.server.fastmcp.exceptions import ToolError
+
 from erga_mcp.config import DEFAULT_CONFIG
 from erga_mcp.mcp_server import (
     IntakeJobResult,
@@ -361,6 +363,67 @@ class McpServerTests(unittest.TestCase):
             self.assertEqual(archive.suffix, ".zip")
             self.assertEqual(archive.parent, Path(str(exported["export_root"])))
 
+    def test_intake_rejects_a_non_job_page_before_writing_a_package(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "resume.tex").write_text(
+                "\\section{Experience}\nVerified work.\n", encoding="utf-8"
+            )
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace('template_path = ""', 'template_path = "resume.tex"'),
+                encoding="utf-8",
+            )
+            server = build_server(config_path)
+            with patch(
+                "erga_mcp.mcp_server.fetch_job_snapshot",
+                return_value="GitHub repository and source code for a project.",
+            ):
+                with self.assertRaisesRegex(ToolError, "specific job posting"):
+                    asyncio.run(
+                        server.call_tool(
+                            "intake_job_url",
+                            {"job_url": "https://github.com/example/project"},
+                        )
+                    )
+
+            self.assertFalse((root / "output").exists())
+
+    def test_advanced_workspace_setup_rejects_a_non_job_page_before_writing(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "resume.tex").write_text(
+                "\\section{Experience}\nVerified work.\n", encoding="utf-8"
+            )
+            (root / "vault").mkdir()
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace('vault_path = ""', 'vault_path = "vault"').replace(
+                    'template_path = ""', 'template_path = "resume.tex"'
+                ),
+                encoding="utf-8",
+            )
+            server = build_server(config_path)
+            with patch(
+                "erga_mcp.mcp_server.fetch_job_snapshot",
+                return_value="GitHub repository and source code for a project.",
+            ):
+                with self.assertRaisesRegex(ToolError, "specific job posting"):
+                    asyncio.run(
+                        server.call_tool(
+                            "prepare_job_workspace",
+                            {
+                                "job_url": "https://github.com/example/project",
+                                "company": "Example",
+                                "role": "Engineer",
+                                "cycle": "fall-2026",
+                                "application_slug": "example-engineer",
+                            },
+                        )
+                    )
+
+            self.assertFalse((root / "output").exists())
+
     def test_intakes_one_url_end_to_end_and_safely_reuses_an_exact_repeat(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -450,7 +513,7 @@ class McpServerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             server = build_server(config_path)
-            job_url = "https://jobs.example.test/python-intern"
+            job_url = "https://jobs.example.test/jobs/python-intern"
             validation = LatexValidation(command=("latexmk",), returncode=0, stdout="", stderr="")
 
             def compile_success(proposal_path: Path, **_: Any) -> LatexValidation:
@@ -460,7 +523,11 @@ class McpServerTests(unittest.TestCase):
             with (
                 patch(
                     "erga_mcp.mcp_server.fetch_job_snapshot",
-                    return_value="Python FastAPI low-latency software internship",
+                    return_value=(
+                        "Python FastAPI low-latency software internship. "
+                        "Responsibilities include building reliable services. "
+                        "Requirements include Python experience. Apply now."
+                    ),
                 ),
                 patch(
                     "erga_mcp.mcp_server.validate_latex_proposal",
@@ -505,7 +572,7 @@ class McpServerTests(unittest.TestCase):
                 ).replace("editable_sections = []", 'editable_sections = ["experience"]'),
                 encoding="utf-8",
             )
-            job_url = "https://jobs.example.test/python-intern"
+            job_url = "https://jobs.example.test/jobs/python-intern"
             legacy = root / "output" / "fall-2026" / "legacy-python-intern"
             (legacy / "artifacts").mkdir(parents=True)
             (legacy / "artifacts" / "old-resume.tex").write_text(
@@ -525,7 +592,11 @@ class McpServerTests(unittest.TestCase):
             with (
                 patch(
                     "erga_mcp.mcp_server.fetch_job_snapshot",
-                    return_value="Python software engineering internship",
+                    return_value=(
+                        "Python software engineering internship. "
+                        "Responsibilities include building production services. "
+                        "Requirements include Python experience. Apply now."
+                    ),
                 ),
                 patch(
                     "erga_mcp.mcp_server.validate_latex_proposal",
