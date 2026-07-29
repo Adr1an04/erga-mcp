@@ -538,6 +538,83 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         )
         self.assertIn("Erga Git research complete", response)
 
+    def test_erga_review_renders_one_manual_draft_without_approving_evidence(self) -> None:
+        context = _FakePluginContext(
+            result=json.dumps(
+                {
+                    "draft": {
+                        "id": "gitdraft_manual",
+                        "title": "Personal finance tracker",
+                        "description": "Built an offline budgeting application.",
+                        "source": "manual",
+                        "review_status": "pending",
+                        "needs_review": True,
+                    },
+                    "position": 1,
+                    "total": 2,
+                    "evidence_approved": False,
+                    "resume_changed": False,
+                }
+            )
+        )
+        self.router.register(context)
+
+        response = context.commands["erga-review"]("")
+
+        self.assertEqual(
+            context.calls,
+            [("mcp__erga_mcp__review_git_drafts", {"action": "show", "draft_id": None})],
+        )
+        self.assertIn("Personal finance tracker", response)
+        self.assertIn("Source: manual", response)
+        self.assertIn("Draft 1 of 2", response)
+        self.assertIn("/erga-review next gitdraft_manual", response)
+        self.assertIn("No evidence was approved and no résumé was changed", response)
+
+    def test_erga_review_parses_edit_arguments_without_treating_them_as_source_content(
+        self,
+    ) -> None:
+        context = _FakePluginContext(
+            result=json.dumps(
+                {
+                    "draft": {
+                        "id": "gitdraft_manual",
+                        "title": "Edited title",
+                        "description": "Edited description.",
+                        "source": "manual",
+                        "review_status": "pending",
+                        "needs_review": True,
+                    },
+                    "position": 1,
+                    "total": 1,
+                    "evidence_approved": False,
+                    "resume_changed": False,
+                }
+            )
+        )
+        self.router.register(context)
+
+        response = context.commands["erga-review"](
+            'edit gitdraft_manual --title "Edited title" --description "Edited description."'
+        )
+
+        self.assertEqual(
+            context.calls,
+            [
+                (
+                    "mcp__erga_mcp__review_git_drafts",
+                    {
+                        "action": "edit",
+                        "draft_id": "gitdraft_manual",
+                        "title": "Edited title",
+                        "description": "Edited description.",
+                    },
+                )
+            ],
+        )
+        self.assertIn("Edited title", response)
+        self.assertNotIn("gitdraft_manual --title", response)
+
     def test_retries_only_transient_mcp_startup_errors(self) -> None:
         url = "https://jobs.ashbyhq.com/example/00000000-0000-0000-0000-000000000000"
         tool_name = "mcp__erga_mcp__intake_job_url"

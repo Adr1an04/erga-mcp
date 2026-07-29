@@ -114,6 +114,7 @@ _LOCAL_WRITE_TOOL_NAMES = frozenset(
         "cover_letter_style_context",
         "validate_tailored_resume",
         "research_git_worktrees",
+        "review_git_drafts",
     }
 )
 _HERMES_TOOL_NAMES = frozenset({"sync_recruiting_mail", "install_mail_monitor_scripts"})
@@ -1069,6 +1070,53 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
     def research_git_worktrees(roots: list[str]) -> dict[str, object]:
         """Create unapproved local diff research drafts below explicitly supplied roots."""
         return _git_research_report(store, roots)
+
+    @profile_tool(
+        "review_git_drafts",
+        title="Review one persisted Git or manual project draft",
+        description=(
+            "Display or explicitly navigate, save, skip, edit, or add a local review draft. "
+            "Saving never approves evidence or changes a resume; Git provenance remains local."
+        ),
+        annotations=_LOCAL_WRITE,
+    )
+    def review_git_drafts(
+        action: str = "show",
+        draft_id: str | None = None,
+        title: str = "",
+        description: str = "",
+    ) -> dict[str, object]:
+        """Operate one persisted review draft at a time without an evidence-approval route."""
+        if action == "add":
+            if draft_id is not None:
+                raise ValueError("adding a manual project draft does not accept a draft ID")
+            store.add_manual_git_research_draft(title=title, description=description)
+            draft, position, total = store.review_git_research_draft(action="show", draft_id=None)
+        else:
+            if action == "edit" and (not title or not description):
+                raise ValueError("editing a review draft requires title and description")
+            if action != "edit" and (title or description):
+                raise ValueError("title and description are only valid when adding or editing")
+            draft, position, total = store.review_git_research_draft(
+                action=action,
+                draft_id=draft_id,
+                title=title or None,
+                description=description or None,
+            )
+        return {
+            "draft": {
+                "id": draft.id,
+                "title": draft.title,
+                "description": draft.description,
+                "source": draft.source,
+                "review_status": draft.review_status,
+                "needs_review": draft.needs_review,
+            },
+            "position": position,
+            "total": total,
+            "evidence_approved": False,
+            "resume_changed": False,
+        }
 
     @profile_tool("record_token_usage", annotations=_LOCAL_WRITE)
     def record_token_usage(

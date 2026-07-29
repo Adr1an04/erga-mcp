@@ -47,6 +47,10 @@ class GitResearchDraft:
     source_commit_shas: list[str]
     source_files: list[str]
     diff_hashes: list[str]
+    source: str
+    title: str
+    description: str
+    review_status: str
     created_at: datetime
 
 

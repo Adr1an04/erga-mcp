@@ -26,6 +26,37 @@ from erga_mcp.store import ErgaStore
 
 
 class McpServerTests(unittest.TestCase):
+    def test_review_tool_adds_and_saves_manual_draft_without_approving_evidence(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            server = build_server(config_path)
+
+            added_result: Any = asyncio.run(
+                server.call_tool(
+                    "review_git_drafts",
+                    {
+                        "action": "add",
+                        "title": "Personal finance tracker",
+                        "description": "Built an offline budgeting application.",
+                    },
+                )
+            )
+            added = cast(dict[str, Any], added_result[1])
+            saved_result: Any = asyncio.run(
+                server.call_tool(
+                    "review_git_drafts",
+                    {"action": "save", "draft_id": added["draft"]["id"]},
+                )
+            )
+            saved = cast(dict[str, Any], saved_result[1])
+
+        self.assertEqual(added["draft"]["source"], "manual")
+        self.assertEqual(added["draft"]["title"], "Personal finance tracker")
+        self.assertEqual(saved["draft"]["review_status"], "saved")
+        self.assertFalse(saved["evidence_approved"])
+        self.assertFalse(saved["resume_changed"])
+
     def test_git_research_tool_returns_redacted_provenance_for_explicit_local_roots(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -198,6 +229,7 @@ class McpServerTests(unittest.TestCase):
                     "create_cover_letter",
                     "validate_tailored_resume",
                     "research_git_worktrees",
+                    "review_git_drafts",
                 },
             )
             for name in {

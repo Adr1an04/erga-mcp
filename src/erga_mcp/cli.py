@@ -108,6 +108,20 @@ def _parser() -> argparse.ArgumentParser:
     )
     git_candidates = git_commands.add_parser("candidates", help="list git evidence candidates")
     _config_argument(git_candidates)
+    git_manual_add = git_commands.add_parser(
+        "manual-add", help="add a user-supplied project as an unapproved review draft"
+    )
+    _config_argument(git_manual_add)
+    git_manual_add.add_argument("--title", required=True)
+    git_manual_add.add_argument("--description", required=True)
+    git_review = git_commands.add_parser(
+        "review", help="review one persisted Git or manual project draft"
+    )
+    _config_argument(git_review)
+    git_review.add_argument("action", choices=("show", "next", "back", "save", "skip", "edit"))
+    git_review.add_argument("draft_id", nargs="?")
+    git_review.add_argument("--title")
+    git_review.add_argument("--description")
     git_research = git_commands.add_parser(
         "research", help="run or list local review-only git research drafts"
     )
@@ -507,6 +521,40 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if args.command == "git":
         if args.git_command == "candidates":
             _print_json([asdict(candidate) for candidate in store.list_git_candidates()])
+            return 0
+        if args.git_command == "manual-add":
+            _print_json(
+                asdict(
+                    store.add_manual_git_research_draft(
+                        title=args.title, description=args.description
+                    )
+                )
+            )
+            return 0
+        if args.git_command == "review":
+            if args.action == "show" and args.draft_id is not None:
+                raise ValueError("git review show does not accept a draft ID")
+            if args.action != "show" and not args.draft_id:
+                raise ValueError(f"git review {args.action} requires a draft ID")
+            if args.action == "edit" and (not args.title or not args.description):
+                raise ValueError("git review edit requires --title and --description")
+            if args.action != "edit" and (args.title is not None or args.description is not None):
+                raise ValueError("--title and --description are only valid with git review edit")
+            draft, position, total = store.review_git_research_draft(
+                action=args.action,
+                draft_id=args.draft_id,
+                title=args.title,
+                description=args.description,
+            )
+            _print_json(
+                {
+                    "draft": asdict(draft),
+                    "position": position,
+                    "total": total,
+                    "evidence_approved": False,
+                    "resume_changed": False,
+                }
+            )
             return 0
         if args.git_command == "research":
             if not args.all:

@@ -289,6 +289,42 @@ class GitEvidenceCliTests(unittest.TestCase):
 
             self.assertEqual([item.commit_sha for item in observations], [sha])
 
+    def test_manual_project_intake_creates_an_unapproved_review_draft_without_evidence(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            main(["init", "--config", str(config_path)])
+
+            code, draft = self._run(
+                [
+                    "git",
+                    "manual-add",
+                    "--title",
+                    "Personal finance tracker",
+                    "--description",
+                    "Built an offline budgeting application.",
+                    "--config",
+                    str(config_path),
+                ]
+            )
+            save_code, saved = self._run(
+                ["git", "review", "save", str(draft["id"]), "--config", str(config_path)]
+            )
+            _, status = self._run(["status", "--config", str(config_path)])
+
+            self.assertEqual(code, 0)
+            self.assertEqual(draft["source"], "manual")
+            self.assertEqual(draft["title"], "Personal finance tracker")
+            self.assertEqual(draft["description"], "Built an offline budgeting application.")
+            self.assertTrue(draft["needs_review"])
+            self.assertEqual(draft["review_status"], "pending")
+            self.assertEqual(save_code, 0)
+            self.assertEqual(saved["draft"]["review_status"], "saved")
+            self.assertFalse(saved["evidence_approved"])
+            self.assertFalse(saved["resume_changed"])
+            self.assertEqual(status["evidence"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

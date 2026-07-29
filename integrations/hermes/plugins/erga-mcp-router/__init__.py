@@ -25,6 +25,7 @@ _DEFAULT_TRACKER_TOOL_NAME = "mcp__erga_mcp__application_tracker"
 _DEFAULT_DISCOVERY_RESEARCH_TOOL_NAME = "mcp__erga_mcp__discover_job_research"
 _DEFAULT_MAIL_SYNC_TOOL_NAME = "mcp__erga_mcp__sync_recruiting_mail"
 _DEFAULT_GIT_RESEARCH_TOOL_NAME = "mcp__erga_mcp__research_git_worktrees"
+_DEFAULT_GIT_REVIEW_TOOL_NAME = "mcp__erga_mcp__review_git_drafts"
 _DEFAULT_GIT_RESEARCH_ROOT_ENV = "ERGA_MCP_GIT_RESEARCH_ROOT"
 _DEFAULT_WEB_SEARCH_TOOL_NAME = "web_search"
 _DEFAULT_CRON_TOOL_NAME = "cronjob"
@@ -643,6 +644,7 @@ def register(
     git_research_tool = os.getenv(
         "ERGA_MCP_GIT_RESEARCH_TOOL", _DEFAULT_GIT_RESEARCH_TOOL_NAME
     ).strip()
+    git_review_tool = os.getenv("ERGA_MCP_GIT_REVIEW_TOOL", _DEFAULT_GIT_REVIEW_TOOL_NAME).strip()
     cron_tool = os.getenv("ERGA_MCP_CRON_TOOL", _DEFAULT_CRON_TOOL_NAME).strip()
     token_tool = os.getenv("ERGA_MCP_TOKEN_TOOL", _DEFAULT_TOKEN_TOOL_NAME).strip()
     ready_timeout, retry_interval = _readiness_settings()
@@ -1027,6 +1029,83 @@ def register(
             lines.append("**Needs your review** — nothing was added to your résumé or evidence.")
         return "\n".join(lines)
 
+    def erga_review_command(raw_args: str) -> str:
+        usage = (
+            "Usage: /erga-review [next|back|save|skip] [draft-id] | "
+            "edit <draft-id> --title <title> --description <description> | "
+            "add --title <title> --description <description>"
+        )
+        try:
+            arguments = shlex.split(raw_args)
+        except ValueError:
+            return usage
+        if not arguments:
+            tool_arguments: dict[str, str | None] = {"action": "show", "draft_id": None}
+        elif len(arguments) == 2 and arguments[0] in {"next", "back", "save", "skip"}:
+            tool_arguments = {"action": arguments[0], "draft_id": arguments[1]}
+        elif arguments[0] in {"add", "edit"}:
+            action = arguments[0]
+            if action == "edit":
+                if len(arguments) < 2:
+                    return usage
+                draft_id = arguments[1]
+                option_arguments = arguments[2:]
+            else:
+                draft_id = None
+                option_arguments = arguments[1:]
+            if len(option_arguments) != 4:
+                return usage
+            options = dict(zip(option_arguments[::2], option_arguments[1::2], strict=True))
+            if set(options) != {"--title", "--description"} or not all(options.values()):
+                return usage
+            tool_arguments = {
+                "action": action,
+                "draft_id": draft_id,
+                "title": options["--title"],
+                "description": options["--description"],
+            }
+        else:
+            return usage
+        try:
+            reviewed = ctx.dispatch_tool(git_review_tool, tool_arguments)
+        except Exception as exc:
+            return f"Erga review failed: {exc}"
+        error_text = _dispatch_error_text(reviewed)
+        if error_text:
+            return f"Erga review failed: {error_text}"
+        payload = next(
+            (
+                item
+                for item in _nested_objects(reviewed)
+                if isinstance(item.get("draft"), dict)
+                and isinstance(item.get("position"), int)
+                and isinstance(item.get("total"), int)
+                and item.get("evidence_approved") is False
+                and item.get("resume_changed") is False
+            ),
+            None,
+        )
+        if payload is None:
+            return "Erga review failed: the review tool returned no safe draft."
+        draft = payload["draft"]
+        assert isinstance(draft, dict)
+        title = draft.get("title")
+        description = draft.get("description")
+        source = draft.get("source")
+        draft_id = draft.get("id")
+        if not all(
+            isinstance(value, str) and value for value in (title, description, source, draft_id)
+        ):
+            return "Erga review failed: the review tool returned an incomplete draft."
+        return (
+            f"**{title}**\n{description}\nSource: {source}\n"
+            f"Draft {payload['position']} of {payload['total']} · "
+            f"status: {draft.get('review_status', 'pending')}\n"
+            f"Commands: /erga-review next {draft_id} · /erga-review back {draft_id} · "
+            f"/erga-review save {draft_id} · /erga-review skip {draft_id}\n"
+            "No evidence was approved and no résumé was changed."
+        )
+
     def export_command(raw_args: str) -> str:
         if raw_args.strip():
             return "Usage: /export-erga"
@@ -1086,6 +1165,14 @@ def register(
             "Run local diff-based Git research below explicit roots; create review-only drafts."
         ),
         args_hint="<local-root> [additional-local-root ...]",
+    )
+    ctx.register_command(
+        "erga-review",
+        handler=erga_review_command,
+        description=(
+            "Review one persisted Git or manual project draft at a time; no evidence is approved."
+        ),
+        args_hint="[next|back|save|skip] [draft-id]",
     )
     ctx.register_command(
         "export-erga",

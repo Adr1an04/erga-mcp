@@ -77,6 +77,10 @@ CREATE TABLE IF NOT EXISTS git_research_drafts (
     bullet_candidates_json TEXT NOT NULL,
     generated_from_commit_metadata INTEGER NOT NULL,
     needs_review INTEGER NOT NULL,
+    source TEXT NOT NULL DEFAULT 'git',
+    title TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    review_status TEXT NOT NULL DEFAULT 'pending',
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS applications (
@@ -192,6 +196,10 @@ class ErgaStore:
                 ("source_commit_shas_json", "TEXT NOT NULL DEFAULT '[]'"),
                 ("source_files_json", "TEXT NOT NULL DEFAULT '[]'"),
                 ("diff_hashes_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("source", "TEXT NOT NULL DEFAULT 'git'"),
+                ("title", "TEXT NOT NULL DEFAULT ''"),
+                ("description", "TEXT NOT NULL DEFAULT ''"),
+                ("review_status", "TEXT NOT NULL DEFAULT 'pending'"),
             ):
                 if name not in existing_columns:
                     connection.execute(
@@ -367,6 +375,10 @@ class ErgaStore:
             diff_hashes=sorted(
                 {value for bullet in bullet_candidates for value in bullet.diff_hashes}
             ),
+            source="git",
+            title=Path(repo_path).name or repo_path,
+            description=summary,
+            review_status="pending",
             created_at=created_at,
         )
         serialized_bullets = json.dumps(
@@ -389,8 +401,8 @@ class ErgaStore:
                     id, repo_path, summary, bullet_candidates_json,
                     generated_from_commit_metadata, needs_review, created_at,
                     generated_from_git_diffs, source_commit_shas_json, source_files_json,
-                    diff_hashes_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    diff_hashes_json, source, title, description, review_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(repo_path) DO UPDATE SET
                     summary = excluded.summary,
                     bullet_candidates_json = excluded.bullet_candidates_json,
@@ -400,6 +412,10 @@ class ErgaStore:
                     source_commit_shas_json = excluded.source_commit_shas_json,
                     source_files_json = excluded.source_files_json,
                     diff_hashes_json = excluded.diff_hashes_json,
+                    source = excluded.source,
+                    title = excluded.title,
+                    description = excluded.description,
+                    review_status = 'pending',
                     created_at = excluded.created_at
                 """,
                 (
@@ -414,6 +430,10 @@ class ErgaStore:
                     json.dumps(draft.source_commit_shas),
                     json.dumps(draft.source_files),
                     json.dumps(draft.diff_hashes),
+                    draft.source,
+                    draft.title,
+                    draft.description,
+                    draft.review_status,
                 ),
             )
             row = connection.execute(
@@ -437,6 +457,139 @@ class ErgaStore:
                 "SELECT * FROM git_research_drafts ORDER BY created_at DESC"
             ).fetchall()
         return [self._git_research_draft_from_row(row) for row in rows]
+
+    def add_manual_git_research_draft(self, *, title: str, description: str) -> GitResearchDraft:
+        """Persist a user-supplied project as an unapproved, review-only manual draft."""
+        normalized_title = " ".join(title.split())
+        normalized_description = " ".join(description.split())
+        if not normalized_title or not normalized_description:
+            raise ValueError("manual project title and description must not be empty")
+        self.initialize()
+        draft = GitResearchDraft(
+            id=f"gitdraft_{uuid4().hex}",
+            repo_path=f"manual:{uuid4().hex}",
+            summary=normalized_description,
+            bullet_candidates=[],
+            generated_from_commit_metadata=False,
+            generated_from_git_diffs=False,
+            needs_review=True,
+            source_commit_shas=[],
+            source_files=[],
+            diff_hashes=[],
+            source="manual",
+            title=normalized_title,
+            description=normalized_description,
+            review_status="pending",
+            created_at=_now(),
+        )
+        with closing(self._connection()) as connection:
+            connection.execute(
+                """
+                INSERT INTO git_research_drafts (
+                    id, repo_path, summary, bullet_candidates_json,
+                    generated_from_commit_metadata, needs_review, created_at,
+                    generated_from_git_diffs, source_commit_shas_json, source_files_json,
+                    diff_hashes_json, source, title, description, review_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    draft.id,
+                    draft.repo_path,
+                    draft.summary,
+                    "[]",
+                    False,
+                    True,
+                    _as_text(draft.created_at),
+                    False,
+                    "[]",
+                    "[]",
+                    "[]",
+                    draft.source,
+                    draft.title,
+                    draft.description,
+                    draft.review_status,
+                ),
+            )
+            self._record_audit(
+                connection, "git_evidence.manual_draft_added", draft.id, {"source": "manual"}
+            )
+            connection.commit()
+        return draft
+
+    def review_git_research_draft(
+        self,
+        *,
+        action: str,
+        draft_id: str | None,
+        title: str | None = None,
+        description: str | None = None,
+    ) -> tuple[GitResearchDraft, int, int]:
+        """Navigate or save/edit a draft without approving evidence or changing a resume."""
+        if action not in {"show", "next", "back", "save", "skip", "edit"}:
+            raise ValueError("review action must be show, next, back, save, skip, or edit")
+        self.initialize()
+        with closing(self._connection()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM git_research_drafts WHERE review_status != 'skipped' "
+                "ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+            if not rows:
+                raise ValueError("no review drafts are available")
+            identifiers = [str(row["id"]) for row in rows]
+            if action == "show":
+                index = 0
+            else:
+                if draft_id not in identifiers:
+                    raise ValueError("review draft does not exist")
+                index = identifiers.index(draft_id)
+                if action == "next":
+                    index = min(index + 1, len(rows) - 1)
+                elif action == "back":
+                    index = max(index - 1, 0)
+                elif action == "save":
+                    connection.execute(
+                        "UPDATE git_research_drafts SET review_status = 'saved' WHERE id = ?",
+                        (draft_id,),
+                    )
+                elif action == "skip":
+                    connection.execute(
+                        "UPDATE git_research_drafts SET review_status = 'skipped' WHERE id = ?",
+                        (draft_id,),
+                    )
+                    remaining = [row for row in rows if str(row["id"]) != draft_id]
+                    if not remaining:
+                        raise ValueError("no review drafts are available")
+                    index = min(index, len(remaining) - 1)
+                    rows = remaining
+                elif action == "edit":
+                    normalized_title = " ".join((title or "").split())
+                    normalized_description = " ".join((description or "").split())
+                    if not normalized_title or not normalized_description:
+                        raise ValueError("edited draft title and description must not be empty")
+                    connection.execute(
+                        "UPDATE git_research_drafts SET title = ?, description = ?, "
+                        "summary = ? WHERE id = ?",
+                        (
+                            normalized_title,
+                            normalized_description,
+                            normalized_description,
+                            draft_id,
+                        ),
+                    )
+                self._record_audit(
+                    connection, "git_evidence.review_draft_" + action, str(draft_id), {}
+                )
+                connection.commit()
+                rows = connection.execute(
+                    "SELECT * FROM git_research_drafts WHERE review_status != 'skipped' "
+                    "ORDER BY created_at DESC, id DESC"
+                ).fetchall()
+                identifiers = [str(row["id"]) for row in rows]
+                if action in {"save", "edit"}:
+                    assert draft_id is not None
+                    index = identifiers.index(draft_id)
+            row = rows[index]
+        return self._git_research_draft_from_row(row), index + 1, len(rows)
 
     def approve_git_candidate(self, candidate_id: str) -> Evidence:
         self.initialize()
@@ -529,6 +682,10 @@ class ErgaStore:
             source_commit_shas=[str(value) for value in json.loads(row["source_commit_shas_json"])],
             source_files=[str(value) for value in json.loads(row["source_files_json"])],
             diff_hashes=[str(value) for value in json.loads(row["diff_hashes_json"])],
+            source=str(row["source"]),
+            title=str(row["title"]) or Path(str(row["repo_path"])).name,
+            description=str(row["description"]) or str(row["summary"]),
+            review_status=str(row["review_status"]),
             created_at=_as_datetime(row["created_at"]),
         )
 

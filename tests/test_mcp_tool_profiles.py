@@ -59,6 +59,7 @@ class McpToolProfileTests(unittest.TestCase):
                 "validate_tailored_resume",
                 "cover_letter_style_context",
                 "research_git_worktrees",
+                "review_git_drafts",
             },
         )
 
