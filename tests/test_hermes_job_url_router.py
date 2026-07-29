@@ -35,6 +35,7 @@ class _FakePluginContext:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.hooks: dict[str, Any] = {}
         self.commands: dict[str, Any] = {}
+        self.discord_button_handlers: dict[str, Any] = {}
 
     def dispatch_tool(self, name: str, arguments: dict[str, Any]) -> str:
         """Match Hermes 0.18.2's stable two-positional-argument dispatch usage."""
@@ -51,6 +52,9 @@ class _FakePluginContext:
 
     def register_command(self, name: str, *, handler: Any, **_: Any) -> None:
         self.commands[name] = handler
+
+    def register_discord_button_handler(self, action_id: str, handler: Any) -> None:
+        self.discord_button_handlers[action_id] = handler
 
 
 class _FakeClock:
@@ -570,6 +574,69 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertIn("Draft 1 of 2", response)
         self.assertIn("/erga-review next gitdraft_manual", response)
         self.assertIn("No evidence was approved and no résumé was changed", response)
+
+    def test_erga_review_returns_discord_buttons_when_the_host_supports_them(self) -> None:
+        class Button:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        class Response:
+            def __init__(self, *, text: str, buttons: tuple[Any, ...]) -> None:
+                self.text = text
+                self.buttons = buttons
+
+        context = _FakePluginContext(
+            result=json.dumps(
+                {
+                    "draft": {
+                        "id": "gitdraft_manual",
+                        "title": "Personal finance tracker",
+                        "description": "Built an offline budgeting application.",
+                        "source": "manual",
+                        "review_status": "pending",
+                        "needs_review": True,
+                    },
+                    "position": 1,
+                    "total": 2,
+                    "evidence_approved": False,
+                    "resume_changed": False,
+                }
+            )
+        )
+        plugins = ModuleType("hermes_cli.plugins")
+        plugins.DiscordButton = Button
+        plugins.DiscordCommandResponse = Response
+        hermes_cli = ModuleType("hermes_cli")
+        hermes_cli.__version__ = "0.18.2"
+        hermes_cli.plugins = plugins
+
+        with patch.dict(
+            sys.modules,
+            {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins},
+        ):
+            self.router.register(context)
+            response = context.commands["erga-review"]("")
+
+        self.assertIsInstance(response, Response)
+        self.assertEqual(
+            [button.action_id for button in response.buttons],
+            [
+                "erga.review.back",
+                "erga.review.skip",
+                "erga.review.save",
+                "erga.review.next",
+            ],
+        )
+        self.assertEqual(response.buttons[-1].payload, "gitdraft_manual")
+        self.assertEqual(
+            set(context.discord_button_handlers),
+            {
+                "erga.review.back",
+                "erga.review.skip",
+                "erga.review.save",
+                "erga.review.next",
+            },
+        )
 
     def test_erga_review_parses_edit_arguments_without_treating_them_as_source_content(
         self,

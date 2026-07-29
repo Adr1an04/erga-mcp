@@ -631,6 +631,16 @@ def register(
 ) -> None:
     """Register deterministic job-link routing and an explicit slash-command fallback."""
     _require_compatible_hermes()
+    try:
+        from hermes_cli.plugins import DiscordButton, DiscordCommandResponse
+    except (ImportError, AttributeError):
+        DiscordButton = None
+        DiscordCommandResponse = None
+    supports_discord_buttons = (
+        DiscordButton is not None
+        and DiscordCommandResponse is not None
+        and callable(getattr(ctx, "register_discord_button_handler", None))
+    )
     monotonic_clock = monotonic or time.monotonic
     sleep_for = sleep or time.sleep
     tool_name = os.getenv("ERGA_MCP_TOOL", _DEFAULT_TOOL_NAME).strip()
@@ -1097,7 +1107,7 @@ def register(
             isinstance(value, str) and value for value in (title, description, source, draft_id)
         ):
             return "Erga review failed: the review tool returned an incomplete draft."
-        return (
+        review_text = (
             f"**{title}**\n{description}\nSource: {source}\n"
             f"Draft {payload['position']} of {payload['total']} · "
             f"status: {draft.get('review_status', 'pending')}\n"
@@ -1105,6 +1115,33 @@ def register(
             f"/erga-review save {draft_id} · /erga-review skip {draft_id}\n"
             "No evidence was approved and no résumé was changed."
         )
+        if supports_discord_buttons:
+            assert DiscordButton is not None
+            assert DiscordCommandResponse is not None
+            return DiscordCommandResponse(
+                text=review_text,
+                buttons=(
+                    DiscordButton(label="Back", action_id="erga.review.back", payload=draft_id),
+                    DiscordButton(label="Skip", action_id="erga.review.skip", payload=draft_id),
+                    DiscordButton(
+                        label="Save",
+                        action_id="erga.review.save",
+                        payload=draft_id,
+                        style="success",
+                    ),
+                    DiscordButton(label="Next", action_id="erga.review.next", payload=draft_id),
+                ),
+            )
+        return review_text
+
+    if supports_discord_buttons:
+        for action in ("back", "skip", "save", "next"):
+            ctx.register_discord_button_handler(
+                f"erga.review.{action}",
+                lambda interaction, action=action: erga_review_command(
+                    f"{action} {interaction.payload}"
+                ),
+            )
 
     def export_command(raw_args: str) -> str:
         if raw_args.strip():
