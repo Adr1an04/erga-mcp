@@ -482,6 +482,7 @@ class HermesJobUrlRouterTests(unittest.TestCase):
                     "drafts": [
                         {
                             "repo_path": "/tmp/projects/example",
+                            "work_types": ["UI", "implementation"],
                             "source_commit_shas": ["abc123"],
                             "source_files": ["src/routes.py"],
                             "diff_hashes": ["d" * 64],
@@ -503,11 +504,13 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertIn("1 repositories scanned", response)
         self.assertIn("2 observations created", response)
         self.assertIn("1 review draft", response)
-        self.assertIn("abc123", response)
-        self.assertIn("src/routes.py", response)
-        self.assertIn("d" * 64, response)
-        self.assertIn("needs review", response.casefold())
-        self.assertNotIn("summary", response.casefold())
+        self.assertIn("Example — work found", response)
+        self.assertIn("user-interface work", response)
+        self.assertIn("general implementation work", response)
+        self.assertIn("Needs your review", response)
+        self.assertNotIn("abc123", response)
+        self.assertNotIn("src/routes.py", response)
+        self.assertNotIn("d" * 64, response)
 
     def test_git_research_command_defaults_to_the_current_users_projects_root(self) -> None:
         home = Path("/tmp/people")

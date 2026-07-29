@@ -1002,27 +1002,29 @@ def register(
             f"{payload['observations_created']} observations created · "
             f"{payload['research_drafts']} review drafts.",
         ]
-        for index, draft in enumerate(payload["drafts"], start=1):
+        for draft in payload["drafts"]:
             if not isinstance(draft, dict):
                 continue
             repo_path = draft.get("repo_path")
-            commit_shas = draft.get("source_commit_shas")
-            source_files = draft.get("source_files")
-            diff_hashes = draft.get("diff_hashes")
-            if not (
-                isinstance(repo_path, str)
-                and isinstance(commit_shas, list)
-                and isinstance(source_files, list)
-                and isinstance(diff_hashes, list)
-            ):
+            work_types = draft.get("work_types")
+            if not (isinstance(repo_path, str) and isinstance(work_types, list)):
                 continue
-            lines.append(
-                f"Draft {index}: {repo_path}\n"
-                f"Commits: {', '.join(str(value) for value in commit_shas) or 'none'}\n"
-                f"Files: {', '.join(str(value) for value in source_files) or 'none'}\n"
-                f"Diff hashes: {', '.join(str(value) for value in diff_hashes) or 'none'}\n"
-                "Needs review; no evidence was auto-approved and no resume was edited."
-            )
+            display_names = {
+                "API": "application/API work",
+                "UI": "user-interface work",
+                "implementation": "general implementation work",
+                "persistence": "data-storage work",
+                "security": "security-focused work",
+                "testing": "testing and reliability work",
+            }
+            work = [display_names[item] for item in work_types if item in display_names]
+            project_name = Path(repo_path).name.replace("-", " ").replace("_", " ").title()
+            lines.extend([f"\n**{project_name} — work found**"])
+            if work:
+                lines.append(f"Found: {', '.join(work)}.")
+            else:
+                lines.append("Found substantive local code changes.")
+            lines.append("**Needs your review** — nothing was added to your résumé or evidence.")
         return "\n".join(lines)
 
     def export_command(raw_args: str) -> str:

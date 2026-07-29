@@ -327,6 +327,13 @@ def _git_research_report(store: ErgaStore, roots: list[str]) -> dict[str, object
         drafts.append(
             {
                 "repo_path": draft.repo_path,
+                "work_types": sorted(
+                    {
+                        kind
+                        for observation in store.list_git_change_observations(repo_path=repo_path)
+                        for kind in observation.change_kinds
+                    }
+                ),
                 "source_commit_shas": sorted(
                     {sha for bullet in draft.bullet_candidates for sha in bullet.source_commit_shas}
                 ),
