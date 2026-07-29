@@ -60,6 +60,7 @@ class McpToolProfileTests(unittest.TestCase):
                 "cover_letter_style_context",
                 "research_git_worktrees",
                 "review_git_drafts",
+                "review_git_draft_prompt",
             },
         )
 

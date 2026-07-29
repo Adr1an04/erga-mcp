@@ -86,11 +86,122 @@ class McpServerTests(unittest.TestCase):
             "Erga MCP",
         )
         self.assertIn("2026-07-28", payload["result"]["supportedVersions"])
+        self.assertEqual(payload["result"]["ttlMs"], 60_000)
+        self.assertEqual(payload["result"]["cacheScope"], "private")
         self.assertEqual(tools_response.status_code, 200)
+        tools_payload = tools_response.json()["result"]
+        self.assertEqual(tools_payload["ttlMs"], 60_000)
+        self.assertEqual(tools_payload["cacheScope"], "private")
         self.assertNotIn("Mcp-Session-Id", tools_response.headers)
-        tool_names = {tool["name"] for tool in tools_response.json()["result"]["tools"]}
+        tool_names = {tool["name"] for tool in tools_payload["tools"]}
+
         self.assertIn("erga_capabilities", tool_names)
         self.assertEqual(browser_response.status_code, 403)
+
+    def test_modern_review_prompt_requires_explicit_save_before_changing_a_draft(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            store = ErgaStore(Path(directory) / "state" / "erga.sqlite3")
+            draft = store.add_manual_git_research_draft(
+                title="Offline planner",
+                description="Built a local-first planning tool.",
+            )
+            app = build_streamable_http_app(build_server(config_path))
+            headers = {
+                "MCP-Protocol-Version": "2026-07-28",
+                "Mcp-Method": "tools/call",
+                "Mcp-Name": "review_git_draft_prompt",
+            }
+            params = {
+                "name": "review_git_draft_prompt",
+                "arguments": {"draft_id": draft.id},
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientInfo": {
+                        "name": "Erga protocol test",
+                        "version": "1.0",
+                    },
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                },
+            }
+            with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+                initial = client.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": "review-1",
+                        "method": "tools/call",
+                        "params": params,
+                    },
+                    headers=headers,
+                )
+                initial_result = initial.json()["result"]
+                self.assertEqual(
+                    store.review_git_research_draft(action="show", draft_id=draft.id)[
+                        0
+                    ].review_status,
+                    "pending",
+                )
+                tampered = client.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": "review-tampered",
+                        "method": "tools/call",
+                        "params": {
+                            **params,
+                            "inputResponses": {
+                                "review_decision": {
+                                    "action": "accept",
+                                    "content": {"decision": "save"},
+                                }
+                            },
+                            "requestState": initial_result["requestState"] + "tampered",
+                        },
+                    },
+                    headers=headers,
+                )
+                self.assertEqual(tampered.status_code, 400)
+                self.assertEqual(tampered.json()["error"]["code"], -32602)
+                self.assertEqual(
+                    store.review_git_research_draft(action="show", draft_id=draft.id)[
+                        0
+                    ].review_status,
+                    "pending",
+                )
+                resumed = client.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": "review-2",
+                        "method": "tools/call",
+                        "params": {
+                            **params,
+                            "inputResponses": {
+                                "review_decision": {
+                                    "action": "accept",
+                                    "content": {"decision": "save"},
+                                }
+                            },
+                            "requestState": initial_result["requestState"],
+                        },
+                    },
+                    headers=headers,
+                )
+
+        self.assertEqual(initial.status_code, 200)
+        self.assertEqual(initial_result["resultType"], "input_required")
+        self.assertEqual(
+            initial_result["inputRequests"]["review_decision"]["params"]["requestedSchema"][
+                "properties"
+            ]["decision"]["enum"],
+            ["save", "skip"],
+        )
+        resumed_result = resumed.json()["result"]["structuredContent"]
+        self.assertEqual(resumed_result["draft"]["review_status"], "saved")
+        self.assertFalse(resumed_result["evidence_approved"])
+        self.assertFalse(resumed_result["resume_changed"])
 
     def test_review_tool_adds_and_saves_manual_draft_without_approving_evidence(self) -> None:
         with TemporaryDirectory() as directory:
@@ -296,6 +407,7 @@ class McpServerTests(unittest.TestCase):
                     "validate_tailored_resume",
                     "research_git_worktrees",
                     "review_git_drafts",
+                    "review_git_draft_prompt",
                 },
             )
             for name in {

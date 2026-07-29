@@ -16,8 +16,15 @@ from typing import Annotated, Any, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import uvicorn
-from mcp.server.mcpserver import MCPServer
-from mcp.types import ToolAnnotations
+from mcp.server import CacheHint
+from mcp.server.mcpserver import Context, MCPServer
+from mcp.types import (
+    ElicitRequest,
+    ElicitRequestFormParams,
+    ElicitResult,
+    InputRequiredResult,
+    ToolAnnotations,
+)
 from pydantic import BaseModel, Field, StrictInt
 from starlette.applications import Starlette
 from starlette.routing import Mount
@@ -118,6 +125,7 @@ _LOCAL_WRITE_TOOL_NAMES = frozenset(
         "validate_tailored_resume",
         "research_git_worktrees",
         "review_git_drafts",
+        "review_git_draft_prompt",
     }
 )
 _HERMES_TOOL_NAMES = frozenset({"sync_recruiting_mail", "install_mail_monitor_scripts"})
@@ -942,6 +950,10 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
     server = MCPServer(
         "Erga MCP",
         version="0.1.0",
+        cache_hints={
+            "server/discover": CacheHint(ttl_ms=60_000),
+            "tools/list": CacheHint(ttl_ms=60_000),
+        },
         instructions=(
             "When a user provides a job-posting URL, including a bare link or a link followed "
             "by an unfurled preview, call intake_job_url first with the complete URL unchanged. "
@@ -1121,6 +1133,66 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "evidence_approved": False,
             "resume_changed": False,
         }
+
+    @profile_tool(
+        "review_git_draft_prompt",
+        title="Prompt for an explicit Git-project review decision",
+        description=(
+            "On MCP 2026-07-28 clients, display one local draft and ask for an explicit Save or "
+            "Skip decision. Save or Skip changes only the local draft review status; neither "
+            "approves evidence nor changes a resume. Older clients receive the draft without a "
+            "prompt and must use review_git_drafts explicitly."
+        ),
+        annotations=_LOCAL_WRITE,
+    )
+    async def review_git_draft_prompt(
+        draft_id: str,
+        ctx: Context,
+    ) -> dict[str, object] | InputRequiredResult:
+        """Use a sealed MCP multi-round-trip request for one explicit review decision."""
+        shown = review_git_drafts(action="show", draft_id=draft_id)
+        if ctx.protocol_version != "2026-07-28":
+            return shown
+
+        response = (ctx.input_responses or {}).get("review_decision")
+        if response is not None:
+            if not isinstance(response, ElicitResult) or response.action != "accept":
+                return shown
+            decision = (response.content or {}).get("decision")
+            if decision not in {"save", "skip"}:
+                return shown
+            if ctx.request_state != draft_id:
+                raise ValueError("review decision does not match the requested draft")
+            return review_git_drafts(action=decision, draft_id=draft_id)
+
+        draft_data = cast(dict[str, object], shown["draft"])
+        title = cast(str, draft_data["title"])
+        return InputRequiredResult(
+            input_requests={
+                "review_decision": ElicitRequest(
+                    params=ElicitRequestFormParams(
+                        message=(
+                            f"Review local project draft: {title}. Save keeps it as a reviewable "
+                            "draft; Skip marks it skipped. Neither action approves evidence or "
+                            "changes a resume."
+                        ),
+                        requested_schema={
+                            "type": "object",
+                            "properties": {
+                                "decision": {
+                                    "type": "string",
+                                    "enum": ["save", "skip"],
+                                    "description": "Choose Save only after reviewing the draft.",
+                                }
+                            },
+                            "required": ["decision"],
+                            "additionalProperties": False,
+                        },
+                    )
+                )
+            },
+            request_state=draft_id,
+        )
 
     @profile_tool("record_token_usage", annotations=_LOCAL_WRITE)
     def record_token_usage(
