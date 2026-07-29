@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import tempfile
 import threading
@@ -23,6 +24,7 @@ _DEFAULT_EXPORT_TOOL_NAME = "mcp__erga_mcp__export_data"
 _DEFAULT_TRACKER_TOOL_NAME = "mcp__erga_mcp__application_tracker"
 _DEFAULT_DISCOVERY_RESEARCH_TOOL_NAME = "mcp__erga_mcp__discover_job_research"
 _DEFAULT_MAIL_SYNC_TOOL_NAME = "mcp__erga_mcp__sync_recruiting_mail"
+_DEFAULT_GIT_RESEARCH_TOOL_NAME = "mcp__erga_mcp__research_git_worktrees"
 _DEFAULT_WEB_SEARCH_TOOL_NAME = "web_search"
 _DEFAULT_CRON_TOOL_NAME = "cronjob"
 _DEFAULT_TOKEN_TOOL_NAME = "mcp__erga_mcp__record_token_usage"
@@ -637,6 +639,9 @@ def register(
         "ERGA_MCP_DISCOVERY_RESEARCH_TOOL", _DEFAULT_DISCOVERY_RESEARCH_TOOL_NAME
     ).strip()
     mail_sync_tool = os.getenv("ERGA_MCP_MAIL_SYNC_TOOL", _DEFAULT_MAIL_SYNC_TOOL_NAME).strip()
+    git_research_tool = os.getenv(
+        "ERGA_MCP_GIT_RESEARCH_TOOL", _DEFAULT_GIT_RESEARCH_TOOL_NAME
+    ).strip()
     cron_tool = os.getenv("ERGA_MCP_CRON_TOOL", _DEFAULT_CRON_TOOL_NAME).strip()
     token_tool = os.getenv("ERGA_MCP_TOKEN_TOOL", _DEFAULT_TOKEN_TOOL_NAME).strip()
     ready_timeout, retry_interval = _readiness_settings()
@@ -959,6 +964,63 @@ def register(
             return "Erga mail sync failed: the mail-sync tool returned no display message."
         return str(payload["message"])
 
+    def git_research_command(raw_args: str) -> str:
+        try:
+            roots = shlex.split(raw_args)
+        except ValueError:
+            return "Usage: /erga-git-research <local-root> [additional-local-root ...]"
+        if not roots:
+            return "Usage: /erga-git-research <local-root> [additional-local-root ...]"
+        try:
+            research = ctx.dispatch_tool(git_research_tool, {"roots": roots})
+        except Exception as exc:
+            return f"Erga Git research failed: {exc}"
+        error_text = _dispatch_error_text(research)
+        if error_text:
+            return f"Erga Git research failed: {error_text}"
+        payload = next(
+            (
+                item
+                for item in _nested_objects(research)
+                if isinstance(item.get("repositories_scanned"), int)
+                and isinstance(item.get("observations_created"), int)
+                and isinstance(item.get("research_drafts"), int)
+                and isinstance(item.get("drafts"), list)
+                and item.get("auto_approved") is False
+            ),
+            None,
+        )
+        if payload is None:
+            return "Erga Git research failed: the research tool returned no safe report."
+        lines = [
+            "Erga Git research complete (local diffs only).",
+            f"{payload['repositories_scanned']} repositories scanned · "
+            f"{payload['observations_created']} observations created · "
+            f"{payload['research_drafts']} review drafts.",
+        ]
+        for index, draft in enumerate(payload["drafts"], start=1):
+            if not isinstance(draft, dict):
+                continue
+            repo_path = draft.get("repo_path")
+            commit_shas = draft.get("source_commit_shas")
+            source_files = draft.get("source_files")
+            diff_hashes = draft.get("diff_hashes")
+            if not (
+                isinstance(repo_path, str)
+                and isinstance(commit_shas, list)
+                and isinstance(source_files, list)
+                and isinstance(diff_hashes, list)
+            ):
+                continue
+            lines.append(
+                f"Draft {index}: {repo_path}\n"
+                f"Commits: {', '.join(str(value) for value in commit_shas) or 'none'}\n"
+                f"Files: {', '.join(str(value) for value in source_files) or 'none'}\n"
+                f"Diff hashes: {', '.join(str(value) for value in diff_hashes) or 'none'}\n"
+                "Needs review; no evidence was auto-approved and no resume was edited."
+            )
+        return "\n".join(lines)
+
     def export_command(raw_args: str) -> str:
         if raw_args.strip():
             return "Usage: /export-erga"
@@ -1010,6 +1072,14 @@ def register(
         description=(
             "Synchronize configured recruiting mail and summarize only metadata-safe results."
         ),
+    )
+    ctx.register_command(
+        "erga-git-research",
+        handler=git_research_command,
+        description=(
+            "Run local diff-based Git research below explicit roots; create review-only drafts."
+        ),
+        args_hint="<local-root> [additional-local-root ...]",
     )
     ctx.register_command(
         "export-erga",

@@ -25,6 +25,13 @@ from .contact_projection import project_recruiter_contacts
 from .cover_letter import create_cover_letter_proposal, load_style_context
 from .cron_setup import install_hermes_monitor_scripts
 from .exporting import export_bundle
+from .git_evidence import (
+    analyze_commits,
+    commits_missing_observations,
+    discover_worktrees,
+    scan_commits,
+    synthesize_diff_research,
+)
 from .http_transport import HttpTransportSettings, protect_http_app
 from .integrations.mail_provider import build_mail_provider
 from .integrations.obsidian_tracker import (
@@ -106,6 +113,7 @@ _LOCAL_WRITE_TOOL_NAMES = frozenset(
         "create_cover_letter",
         "cover_letter_style_context",
         "validate_tailored_resume",
+        "research_git_worktrees",
     }
 )
 _HERMES_TOOL_NAMES = frozenset({"sync_recruiting_mail", "install_mail_monitor_scripts"})
@@ -286,6 +294,65 @@ def _json_value(value: object) -> object:
     if isinstance(value, list):
         return [_json_value(item) for item in value]
     return value
+
+
+def _git_research_report(store: ErgaStore, roots: list[str]) -> dict[str, object]:
+    """Run bounded local diff research and redact raw source and diff text from the response."""
+    normalized_roots = [Path(root).expanduser() for root in roots if root.strip()]
+    if not normalized_roots:
+        raise ValueError("research_git_worktrees requires at least one explicit local root")
+    repositories = discover_worktrees(normalized_roots)
+    observations_created = 0
+    drafts: list[dict[str, object]] = []
+    for repo in repositories:
+        repo_path = str(repo)
+        commits, checkpoint = scan_commits(repo, store.git_scan_checkpoint(repo_path))
+        candidates = store.list_git_candidates(repo_path=repo_path)
+        observations = store.list_git_change_observations(repo_path=repo_path)
+        observed_shas = {item.commit_sha for item in observations}
+        missing = commits_missing_observations(repo, candidates, observed_shas)
+        for observation in analyze_commits(repo, [*commits, *missing]):
+            observations_created += store.save_git_change_observation(observation)
+        summary, bullets = synthesize_diff_research(
+            repo_path,
+            store.list_git_change_observations(repo_path=repo_path),
+            candidates,
+        )
+        draft = store.save_git_research_draft(
+            repo_path=repo_path,
+            summary=summary,
+            bullet_candidates=bullets,
+            generated_from_git_diffs=True,
+        )
+        drafts.append(
+            {
+                "repo_path": draft.repo_path,
+                "source_commit_shas": sorted(
+                    {sha for bullet in draft.bullet_candidates for sha in bullet.source_commit_shas}
+                ),
+                "source_files": sorted(
+                    {path for bullet in draft.bullet_candidates for path in bullet.source_files}
+                ),
+                "diff_hashes": sorted(
+                    {
+                        diff_hash
+                        for bullet in draft.bullet_candidates
+                        for diff_hash in bullet.diff_hashes
+                    }
+                ),
+                "needs_review": draft.needs_review,
+                "auto_approved": False,
+            }
+        )
+        if checkpoint is not None:
+            store.save_git_scan_checkpoint(repo_path=repo_path, commit_sha=checkpoint)
+    return {
+        "repositories_scanned": len(repositories),
+        "observations_created": observations_created,
+        "research_drafts": len(drafts),
+        "drafts": drafts,
+        "auto_approved": False,
+    }
 
 
 def _combine_token_summaries(
@@ -981,6 +1048,20 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             dict[str, object],
             store.token_usage_summary(application_id=normalized or None),
         )
+
+    @profile_tool(
+        "research_git_worktrees",
+        title="Research explicit local Git worktrees from diffs",
+        description=(
+            "Run end-to-end local diff-based Git research below explicit existing local roots. "
+            "This tool never defaults to home-directory scanning, uses no network, returns only "
+            "review-required provenance, and never auto-approves evidence or edits a resume."
+        ),
+        annotations=_LOCAL_WRITE,
+    )
+    def research_git_worktrees(roots: list[str]) -> dict[str, object]:
+        """Create unapproved local diff research drafts below explicitly supplied roots."""
+        return _git_research_report(store, roots)
 
     @profile_tool("record_token_usage", annotations=_LOCAL_WRITE)
     def record_token_usage(

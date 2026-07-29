@@ -26,6 +26,73 @@ from erga_mcp.store import ErgaStore
 
 
 class McpServerTests(unittest.TestCase):
+    def test_git_research_tool_returns_redacted_provenance_for_explicit_local_roots(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            repo = root / "projects" / "sample-repo"
+            repo.mkdir(parents=True)
+            for arguments in (
+                ("init",),
+                ("config", "user.email", "test@example.test"),
+                ("config", "user.name", "Test User"),
+            ):
+                subprocess.run(["git", *arguments], cwd=repo, check=True, capture_output=True)
+            source = repo / "src" / "research" / "routes.py"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                "def create_research_job():\n    return {'route': 'POST /jobs/research'}\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "commit", "-m", "updates"], cwd=repo, check=True, capture_output=True
+            )
+            commit_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            server = build_server(config_path)
+
+            result: Any = asyncio.run(
+                server.call_tool("research_git_worktrees", {"roots": [str(root / "projects")]})
+            )
+            payload = cast(dict[str, Any], result[1])
+
+        self.assertEqual(payload["repositories_scanned"], 1)
+        self.assertEqual(payload["observations_created"], 1)
+        self.assertEqual(payload["research_drafts"], 1)
+        self.assertFalse(payload["auto_approved"])
+        self.assertEqual(len(payload["drafts"]), 1)
+        draft = payload["drafts"][0]
+        self.assertEqual(draft["source_commit_shas"], [commit_sha])
+        self.assertEqual(draft["source_files"], ["src/research/routes.py"])
+        self.assertTrue(draft["diff_hashes"])
+        rendered = json.dumps(payload)
+        self.assertNotIn("def create_research_job", rendered)
+        self.assertNotIn("POST /jobs/research", rendered)
+        self.assertNotIn("summary", draft)
+        self.assertNotIn("bullet_candidates", draft)
+
+    def test_git_research_tool_requires_existing_explicit_roots(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            server = build_server(config_path)
+
+            with self.assertRaisesRegex(Exception, "at least one explicit local root"):
+                asyncio.run(server.call_tool("research_git_worktrees", {"roots": []}))
+            with self.assertRaisesRegex(Exception, "existing directory"):
+                asyncio.run(
+                    server.call_tool(
+                        "research_git_worktrees", {"roots": [str(Path(directory) / "missing")]}
+                    )
+                )
+
     def test_opaque_ats_ids_produce_stable_distinct_package_slugs(self) -> None:
         first = _metadata_from_url(
             "https://jobs.ashbyhq.com/example/00000000-0000-0000-0000-000000000001",
@@ -130,6 +197,7 @@ class McpServerTests(unittest.TestCase):
                     "cover_letter_style_context",
                     "create_cover_letter",
                     "validate_tailored_resume",
+                    "research_git_worktrees",
                 },
             )
             for name in {

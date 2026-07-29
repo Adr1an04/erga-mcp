@@ -471,6 +471,56 @@ class HermesJobUrlRouterTests(unittest.TestCase):
 
             self.assertIsNone(transformed)
 
+    def test_git_research_command_dispatches_explicit_roots_with_provenance_only(self) -> None:
+        context = _FakePluginContext(
+            result=json.dumps(
+                {
+                    "repositories_scanned": 1,
+                    "observations_created": 2,
+                    "research_drafts": 1,
+                    "auto_approved": False,
+                    "drafts": [
+                        {
+                            "repo_path": "/tmp/projects/example",
+                            "source_commit_shas": ["abc123"],
+                            "source_files": ["src/routes.py"],
+                            "diff_hashes": ["d" * 64],
+                            "needs_review": True,
+                            "auto_approved": False,
+                        }
+                    ],
+                }
+            )
+        )
+        self.router.register(context)
+
+        response = context.commands["erga-git-research"]("/tmp/projects")
+
+        self.assertEqual(
+            context.calls,
+            [("mcp__erga_mcp__research_git_worktrees", {"roots": ["/tmp/projects"]})],
+        )
+        self.assertIn("1 repositories scanned", response)
+        self.assertIn("2 observations created", response)
+        self.assertIn("1 review draft", response)
+        self.assertIn("abc123", response)
+        self.assertIn("src/routes.py", response)
+        self.assertIn("d" * 64, response)
+        self.assertIn("needs review", response.casefold())
+        self.assertNotIn("summary", response.casefold())
+
+    def test_git_research_command_requires_explicit_roots(self) -> None:
+        context = _FakePluginContext()
+        self.router.register(context)
+
+        response = context.commands["erga-git-research"]("")
+
+        self.assertEqual(
+            response,
+            "Usage: /erga-git-research <local-root> [additional-local-root ...]",
+        )
+        self.assertEqual(context.calls, [])
+
     def test_retries_only_transient_mcp_startup_errors(self) -> None:
         url = "https://jobs.ashbyhq.com/example/00000000-0000-0000-0000-000000000000"
         tool_name = "mcp__erga_mcp__intake_job_url"
