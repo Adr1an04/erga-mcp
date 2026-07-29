@@ -18,6 +18,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import uvicorn
 from mcp.server import CacheHint
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import (
     ElicitRequest,
     ElicitRequestFormParams,
@@ -129,6 +130,14 @@ _LOCAL_WRITE_TOOL_NAMES = frozenset(
     }
 )
 _HERMES_TOOL_NAMES = frozenset({"sync_recruiting_mail", "install_mail_monitor_scripts"})
+_LOOPBACK_HOST_HEADERS = [
+    "127.0.0.1",
+    "127.0.0.1:*",
+    "localhost",
+    "localhost:*",
+    "[::1]",
+    "[::1]:*",
+]
 _ALL_TOOL_NAMES = frozenset(
     {
         *_READ_TOOL_NAMES,
@@ -1878,6 +1887,10 @@ def build_streamable_http_app(
     transport_app = server.streamable_http_app(
         host=transport_settings.host,
         stateless_http=True,
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=_LOOPBACK_HOST_HEADERS,
+        ),
     )
 
     @asynccontextmanager

@@ -78,6 +78,20 @@ class McpServerTests(unittest.TestCase):
                 browser_response = client.post(
                     "/mcp", json=request, headers={**headers, "Origin": "https://evil.test"}
                 )
+                loopback_host_responses = {
+                    host: client.post("/mcp", json=request, headers={**headers, "Host": host})
+                    for host in {
+                        "127.0.0.1",
+                        "127.0.0.1:8765",
+                        "localhost",
+                        "localhost:8765",
+                        "[::1]",
+                        "[::1]:8765",
+                    }
+                }
+                hostile_host_response = client.post(
+                    "/mcp", json=request, headers={**headers, "Host": "evil.test"}
+                )
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -97,6 +111,56 @@ class McpServerTests(unittest.TestCase):
 
         self.assertIn("erga_capabilities", tool_names)
         self.assertEqual(browser_response.status_code, 403)
+        for host, host_response in loopback_host_responses.items():
+            with self.subTest(host=host):
+                self.assertEqual(host_response.status_code, 200)
+        self.assertEqual(hostile_host_response.status_code, 421)
+
+    def test_legacy_streamable_http_is_stateless_and_host_guarded(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            app = build_streamable_http_app(build_server(config_path))
+            initialize_request = {
+                "jsonrpc": "2.0",
+                "id": "legacy-initialize",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "legacy-fixture", "version": "1.0"},
+                },
+            }
+            list_request = {
+                "jsonrpc": "2.0",
+                "id": "legacy-list-tools",
+                "method": "tools/list",
+                "params": {},
+            }
+            with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+                initialized = client.post(
+                    "/mcp",
+                    json=initialize_request,
+                    headers={"Mcp-Method": "initialize", "Host": "127.0.0.1"},
+                )
+                listed = client.post(
+                    "/mcp",
+                    json=list_request,
+                    headers={"Mcp-Method": "tools/list", "Host": "127.0.0.1"},
+                )
+                hostile = client.post(
+                    "/mcp",
+                    json=list_request,
+                    headers={"Mcp-Method": "tools/list", "Host": "evil.test"},
+                )
+
+        self.assertEqual(initialized.status_code, 200)
+        self.assertIn('"protocolVersion":"2025-06-18"', initialized.text)
+        self.assertNotIn("Mcp-Session-Id", initialized.headers)
+        self.assertEqual(listed.status_code, 200)
+        self.assertIn('"tools"', listed.text)
+        self.assertNotIn("Mcp-Session-Id", listed.headers)
+        self.assertEqual(hostile.status_code, 421)
 
     def test_modern_review_prompt_requires_explicit_save_before_changing_a_draft(self) -> None:
         with TemporaryDirectory() as directory:
