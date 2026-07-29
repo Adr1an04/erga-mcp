@@ -19,8 +19,11 @@ from .cron_setup import install_hermes_monitor_scripts
 from .doctor import check_installation
 from .exporting import export_bundle
 from .git_evidence import (
+    analyze_commits,
+    commits_missing_observations,
     discover_worktrees,
     scan_commits,
+    synthesize_diff_research,
     synthesize_project_research,
     validate_worktree,
 )
@@ -106,9 +109,17 @@ def _parser() -> argparse.ArgumentParser:
     git_candidates = git_commands.add_parser("candidates", help="list git evidence candidates")
     _config_argument(git_candidates)
     git_research = git_commands.add_parser(
-        "research", help="list local commit-metadata research drafts that need review"
+        "research", help="run or list local review-only git research drafts"
     )
     _config_argument(git_research)
+    git_research.add_argument("--all", action="store_true", help="run research below --root")
+    git_research.add_argument(
+        "--root",
+        type=Path,
+        action="append",
+        default=[],
+        help="directory to search when using --all",
+    )
     git_approve = git_commands.add_parser(
         "approve", help="approve one candidate as regular evidence"
     )
@@ -498,7 +509,50 @@ def main(arguments: Sequence[str] | None = None) -> int:
             _print_json([asdict(candidate) for candidate in store.list_git_candidates()])
             return 0
         if args.git_command == "research":
-            _print_json([asdict(draft) for draft in store.list_git_research_drafts()])
+            if not args.all:
+                _print_json([asdict(draft) for draft in store.list_git_research_drafts()])
+                return 0
+            if not args.root:
+                raise ValueError("git research --all requires at least one --root")
+            repositories = discover_worktrees(args.root)
+            observations_created = 0
+            drafts: list[dict[str, object]] = []
+            research_checkpoints: dict[str, str | None] = {}
+            for repo in repositories:
+                repo_path = str(repo)
+                commits, checkpoint = scan_commits(repo, store.git_scan_checkpoint(repo_path))
+                candidates = store.list_git_candidates(repo_path=repo_path)
+                observations = store.list_git_change_observations(repo_path=repo_path)
+                missing = commits_missing_observations(
+                    repo, candidates, {item.commit_sha for item in observations}
+                )
+                for observation in analyze_commits(repo, [*commits, *missing]):
+                    observations_created += store.save_git_change_observation(observation)
+                summary, bullets = synthesize_diff_research(
+                    repo_path,
+                    store.list_git_change_observations(repo_path=repo_path),
+                    candidates,
+                )
+                draft = store.save_git_research_draft(
+                    repo_path=repo_path,
+                    summary=summary,
+                    bullet_candidates=bullets,
+                    generated_from_git_diffs=True,
+                )
+                drafts.append({**asdict(draft), "auto_approved": False})
+                if checkpoint is not None:
+                    store.save_git_scan_checkpoint(repo_path=repo_path, commit_sha=checkpoint)
+                research_checkpoints[repo_path] = checkpoint
+            _print_json(
+                {
+                    "repositories_scanned": len(repositories),
+                    "observations_created": observations_created,
+                    "research_drafts": len(drafts),
+                    "drafts": drafts,
+                    "checkpoints": research_checkpoints,
+                    "auto_approved": False,
+                }
+            )
             return 0
         if args.git_command == "approve":
             _print_json(asdict(store.approve_git_candidate(args.candidate_id)))

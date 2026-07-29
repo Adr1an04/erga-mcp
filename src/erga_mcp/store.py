@@ -12,6 +12,7 @@ from .models import (
     Application,
     AuditEvent,
     Evidence,
+    GitChangeObservation,
     GitEvidenceCandidate,
     GitResearchBullet,
     GitResearchDraft,
@@ -56,6 +57,18 @@ CREATE TABLE IF NOT EXISTS git_scan_checkpoints (
     repo_path TEXT PRIMARY KEY,
     commit_sha TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS git_change_observations (
+    repo_path TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    files_json TEXT NOT NULL,
+    additions INTEGER NOT NULL,
+    deletions INTEGER NOT NULL,
+    symbols_json TEXT NOT NULL,
+    change_kinds_json TEXT NOT NULL,
+    diff_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(repo_path, commit_sha)
 );
 CREATE TABLE IF NOT EXISTS git_research_drafts (
     id TEXT PRIMARY KEY,
@@ -170,6 +183,20 @@ class ErgaStore:
     def initialize(self) -> None:
         with closing(self._connection()) as connection:
             connection.executescript(_SCHEMA)
+            existing_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(git_research_drafts)").fetchall()
+            }
+            for name, definition in (
+                ("generated_from_git_diffs", "INTEGER NOT NULL DEFAULT 0"),
+                ("source_commit_shas_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("source_files_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("diff_hashes_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ):
+                if name not in existing_columns:
+                    connection.execute(
+                        f"ALTER TABLE git_research_drafts ADD COLUMN {name} {definition}"
+                    )
             connection.commit()
 
     def add_evidence(self, *, source_ref: str, text: str, approved: bool) -> Evidence:
@@ -271,12 +298,54 @@ class ErgaStore:
             rows = connection.execute(query, parameters).fetchall()
         return [self._git_candidate_from_row(row) for row in rows]
 
+    def save_git_change_observation(self, observation: GitChangeObservation) -> bool:
+        """Persist bounded diff facts only; raw diff text is intentionally never stored."""
+        self.initialize()
+        with closing(self._connection()) as connection:
+            result = connection.execute(
+                """
+                INSERT INTO git_change_observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(repo_path, commit_sha) DO NOTHING
+                """,
+                (
+                    observation.repo_path,
+                    observation.commit_sha,
+                    json.dumps(observation.files),
+                    observation.additions,
+                    observation.deletions,
+                    json.dumps(observation.symbols),
+                    json.dumps(observation.change_kinds),
+                    observation.diff_hash,
+                    _as_text(_now()),
+                ),
+            )
+            if result.rowcount:
+                self._record_audit(
+                    connection,
+                    "git_evidence.diff_observation_created",
+                    observation.commit_sha,
+                    {"repo_path": observation.repo_path, "diff_hash": observation.diff_hash},
+                )
+                connection.commit()
+                return True
+        return False
+
+    def list_git_change_observations(self, *, repo_path: str) -> list[GitChangeObservation]:
+        self.initialize()
+        with closing(self._connection()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM git_change_observations WHERE repo_path = ? ORDER BY created_at",
+                (repo_path,),
+            ).fetchall()
+        return [self._git_change_observation_from_row(row) for row in rows]
+
     def save_git_research_draft(
         self,
         *,
         repo_path: str,
         summary: str,
         bullet_candidates: list[GitResearchBullet],
+        generated_from_git_diffs: bool = False,
     ) -> GitResearchDraft:
         """Persist an unapproved deterministic draft; it never creates Evidence."""
         self.initialize()
@@ -287,7 +356,17 @@ class ErgaStore:
             summary=summary,
             bullet_candidates=bullet_candidates,
             generated_from_commit_metadata=True,
+            generated_from_git_diffs=generated_from_git_diffs,
             needs_review=True,
+            source_commit_shas=sorted(
+                {sha for bullet in bullet_candidates for sha in bullet.source_commit_shas}
+            ),
+            source_files=sorted(
+                {path for bullet in bullet_candidates for path in bullet.source_files}
+            ),
+            diff_hashes=sorted(
+                {value for bullet in bullet_candidates for value in bullet.diff_hashes}
+            ),
             created_at=created_at,
         )
         serialized_bullets = json.dumps(
@@ -296,6 +375,9 @@ class ErgaStore:
                     "text": bullet.text,
                     "source_candidate_ids": bullet.source_candidate_ids,
                     "source_commit_shas": bullet.source_commit_shas,
+                    "source_files": bullet.source_files,
+                    "diff_hashes": bullet.diff_hashes,
+                    "confidence": bullet.confidence,
                 }
                 for bullet in bullet_candidates
             ]
@@ -303,12 +385,21 @@ class ErgaStore:
         with closing(self._connection()) as connection:
             connection.execute(
                 """
-                INSERT INTO git_research_drafts VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO git_research_drafts (
+                    id, repo_path, summary, bullet_candidates_json,
+                    generated_from_commit_metadata, needs_review, created_at,
+                    generated_from_git_diffs, source_commit_shas_json, source_files_json,
+                    diff_hashes_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(repo_path) DO UPDATE SET
                     summary = excluded.summary,
                     bullet_candidates_json = excluded.bullet_candidates_json,
                     generated_from_commit_metadata = excluded.generated_from_commit_metadata,
                     needs_review = excluded.needs_review,
+                    generated_from_git_diffs = excluded.generated_from_git_diffs,
+                    source_commit_shas_json = excluded.source_commit_shas_json,
+                    source_files_json = excluded.source_files_json,
+                    diff_hashes_json = excluded.diff_hashes_json,
                     created_at = excluded.created_at
                 """,
                 (
@@ -319,6 +410,10 @@ class ErgaStore:
                     draft.generated_from_commit_metadata,
                     draft.needs_review,
                     _as_text(draft.created_at),
+                    draft.generated_from_git_diffs,
+                    json.dumps(draft.source_commit_shas),
+                    json.dumps(draft.source_files),
+                    json.dumps(draft.diff_hashes),
                 ),
             )
             row = connection.execute(
@@ -398,12 +493,28 @@ class ErgaStore:
         )
 
     @staticmethod
+    def _git_change_observation_from_row(row: sqlite3.Row) -> GitChangeObservation:
+        return GitChangeObservation(
+            repo_path=str(row["repo_path"]),
+            commit_sha=str(row["commit_sha"]),
+            files=[str(value) for value in json.loads(row["files_json"])],
+            additions=int(row["additions"]),
+            deletions=int(row["deletions"]),
+            symbols=[str(value) for value in json.loads(row["symbols_json"])],
+            change_kinds=[str(value) for value in json.loads(row["change_kinds_json"])],
+            diff_hash=str(row["diff_hash"]),
+        )
+
+    @staticmethod
     def _git_research_draft_from_row(row: sqlite3.Row) -> GitResearchDraft:
         bullets = [
             GitResearchBullet(
                 text=str(item["text"]),
                 source_candidate_ids=[str(value) for value in item["source_candidate_ids"]],
                 source_commit_shas=[str(value) for value in item["source_commit_shas"]],
+                source_files=[str(value) for value in item.get("source_files", [])],
+                diff_hashes=[str(value) for value in item.get("diff_hashes", [])],
+                confidence=float(item.get("confidence", 0.5)),
             )
             for item in json.loads(row["bullet_candidates_json"])
         ]
@@ -413,7 +524,11 @@ class ErgaStore:
             summary=row["summary"],
             bullet_candidates=bullets,
             generated_from_commit_metadata=bool(row["generated_from_commit_metadata"]),
+            generated_from_git_diffs=bool(row["generated_from_git_diffs"]),
             needs_review=bool(row["needs_review"]),
+            source_commit_shas=[str(value) for value in json.loads(row["source_commit_shas_json"])],
+            source_files=[str(value) for value in json.loads(row["source_files_json"])],
+            diff_hashes=[str(value) for value in json.loads(row["diff_hashes_json"])],
             created_at=_as_datetime(row["created_at"]),
         )
 

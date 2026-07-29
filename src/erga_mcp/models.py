@@ -30,6 +30,9 @@ class GitResearchBullet:
     text: str
     source_candidate_ids: list[str]
     source_commit_shas: list[str]
+    source_files: list[str]
+    diff_hashes: list[str]
+    confidence: float
 
 
 @dataclass(frozen=True)
@@ -39,8 +42,24 @@ class GitResearchDraft:
     summary: str
     bullet_candidates: list[GitResearchBullet]
     generated_from_commit_metadata: bool
+    generated_from_git_diffs: bool
     needs_review: bool
+    source_commit_shas: list[str]
+    source_files: list[str]
+    diff_hashes: list[str]
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class GitChangeObservation:
+    repo_path: str
+    commit_sha: str
+    files: list[str]
+    additions: int
+    deletions: int
+    symbols: list[str]
+    change_kinds: list[str]
+    diff_hash: str
 
 
 @dataclass(frozen=True)

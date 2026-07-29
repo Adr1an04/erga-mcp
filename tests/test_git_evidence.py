@@ -223,6 +223,57 @@ class GitEvidenceCliTests(unittest.TestCase):
 
             self.assertNotIn(merge_sha, [candidate["commit_sha"] for candidate in candidates])
 
+    def test_research_all_scans_vague_commit_from_diff_and_persists_reviewable_draft(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            repo = root / "projects" / "sample-repo"
+            repo.mkdir(parents=True)
+            self._git(repo, "init")
+            self._git(repo, "config", "user.email", "test@example.test")
+            self._git(repo, "config", "user.name", "Test User")
+            commit_sha = self._commit(
+                repo,
+                "src/research/routes.py",
+                ("def create_research_job():\n    return {'route': 'POST /jobs/research'}\n"),
+                "updates",
+            )
+            main(["init", "--config", str(config_path)])
+            self._run(["git", "scan", str(repo), "--config", str(config_path)])
+
+            code, report = self._run(
+                [
+                    "git",
+                    "research",
+                    "--all",
+                    "--root",
+                    str(root / "projects"),
+                    "--config",
+                    str(config_path),
+                ]
+            )
+            _, drafts = self._run(["git", "research", "--config", str(config_path)])
+            _, status = self._run(["status", "--config", str(config_path)])
+
+            self.assertEqual(code, 0)
+            self.assertEqual(report["repositories_scanned"], 1)
+            self.assertEqual(report["observations_created"], 1)
+            self.assertEqual(report["research_drafts"], 1)
+            self.assertEqual(len(report["drafts"]), 1)
+            draft = report["drafts"][0]
+            self.assertTrue(draft["generated_from_git_diffs"])
+            self.assertTrue(draft["needs_review"])
+            self.assertFalse(draft["auto_approved"])
+            self.assertIn("POST /jobs/research", draft["summary"])
+            self.assertNotIn("updates", draft["summary"].casefold())
+            self.assertEqual(draft["source_commit_shas"], [commit_sha])
+            self.assertEqual(draft["source_files"], ["src/research/routes.py"])
+            self.assertTrue(draft["diff_hashes"])
+            self.assertNotIn("def create_research_job", json.dumps(report))
+            self.assertEqual(len(drafts), 1)
+            self.assertTrue(drafts[0]["generated_from_git_diffs"])
+            self.assertEqual(status["evidence"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
