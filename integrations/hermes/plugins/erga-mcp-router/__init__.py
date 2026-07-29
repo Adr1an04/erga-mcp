@@ -25,6 +25,7 @@ _DEFAULT_TRACKER_TOOL_NAME = "mcp__erga_mcp__application_tracker"
 _DEFAULT_DISCOVERY_RESEARCH_TOOL_NAME = "mcp__erga_mcp__discover_job_research"
 _DEFAULT_MAIL_SYNC_TOOL_NAME = "mcp__erga_mcp__sync_recruiting_mail"
 _DEFAULT_GIT_RESEARCH_TOOL_NAME = "mcp__erga_mcp__research_git_worktrees"
+_DEFAULT_GIT_RESEARCH_ROOT_ENV = "ERGA_MCP_GIT_RESEARCH_ROOT"
 _DEFAULT_WEB_SEARCH_TOOL_NAME = "web_search"
 _DEFAULT_CRON_TOOL_NAME = "cronjob"
 _DEFAULT_TOKEN_TOOL_NAME = "mcp__erga_mcp__record_token_usage"
@@ -970,7 +971,10 @@ def register(
         except ValueError:
             return "Usage: /erga-git-research <local-root> [additional-local-root ...]"
         if not roots:
-            return "Usage: /erga-git-research <local-root> [additional-local-root ...]"
+            default_root = os.getenv(_DEFAULT_GIT_RESEARCH_ROOT_ENV, "").strip()
+            if not default_root:
+                return "Set ERGA_MCP_GIT_RESEARCH_ROOT or use: /erga-git-research <local-root>"
+            roots = [default_root]
         try:
             research = ctx.dispatch_tool(git_research_tool, {"roots": roots})
         except Exception as exc:

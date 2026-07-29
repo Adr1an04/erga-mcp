@@ -509,17 +509,27 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertIn("needs review", response.casefold())
         self.assertNotIn("summary", response.casefold())
 
-    def test_git_research_command_requires_explicit_roots(self) -> None:
-        context = _FakePluginContext()
-        self.router.register(context)
-
-        response = context.commands["erga-git-research"]("")
+    def test_git_research_command_uses_configured_default_root_without_arguments(self) -> None:
+        default_root = "/tmp/projects"
+        context = _FakePluginContext(
+            result=json.dumps(
+                {
+                    "repositories_scanned": 0,
+                    "observations_created": 0,
+                    "research_drafts": 0,
+                    "auto_approved": False,
+                    "drafts": [],
+                }
+            )
+        )
+        with patch.dict(os.environ, {"ERGA_MCP_GIT_RESEARCH_ROOT": default_root}, clear=False):
+            self.router.register(context)
+            response = context.commands["erga-git-research"]("")
 
         self.assertEqual(
-            response,
-            "Usage: /erga-git-research <local-root> [additional-local-root ...]",
+            context.calls, [("mcp__erga_mcp__research_git_worktrees", {"roots": [default_root]})]
         )
-        self.assertEqual(context.calls, [])
+        self.assertIn("Erga Git research complete", response)
 
     def test_retries_only_transient_mcp_startup_errors(self) -> None:
         url = "https://jobs.ashbyhq.com/example/00000000-0000-0000-0000-000000000000"
