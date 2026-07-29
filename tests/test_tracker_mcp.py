@@ -38,7 +38,7 @@ class TrackerMcpTests(unittest.TestCase):
             result: Any = asyncio.run(
                 build_server(config_path).call_tool("application_tracker", {})
             )
-            payload = cast(dict[str, Any], result[1])
+            payload = cast(dict[str, Any], result.structured_content)
 
             self.assertEqual(payload["summary"], {"applied": 1})
             self.assertIn("Erga application tracker", payload["message"])
@@ -93,7 +93,7 @@ class TrackerMcpTests(unittest.TestCase):
             result: Any = asyncio.run(
                 build_server(config_path).call_tool("application_tracker", {})
             )
-            payload = cast(dict[str, Any], result[1])
+            payload = cast(dict[str, Any], result.structured_content)
 
         self.assertIn("Tokens: 1,400 in · 600 out · 2,000 total", payload["message"])
         self.assertEqual(payload["token_usage"]["total_tokens"], 2_000)
@@ -106,7 +106,7 @@ class TrackerMcpTests(unittest.TestCase):
             result: Any = asyncio.run(
                 build_server(config_path).call_tool("application_tracker", {})
             )
-            payload = cast(dict[str, Any], result[1])
+            payload = cast(dict[str, Any], result.structured_content)
 
         self.assertFalse(payload["enabled"])
         self.assertIn("not configured", payload["message"])

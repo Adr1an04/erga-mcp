@@ -36,11 +36,11 @@ async def _assert_protocol_contract(read_stream: Any, write_stream: Any) -> None
         tools = await session.list_tools()
         by_name = {tool.name: tool for tool in tools.tools}
         assert {"erga_capabilities", "intake_job_url", "pipeline_status"}.issubset(by_name)
-        assert by_name["intake_job_url"].inputSchema["required"] == ["job_url"]
+        assert by_name["intake_job_url"].input_schema["required"] == ["job_url"]
         capabilities = await session.call_tool("erga_capabilities", {})
-        assert not capabilities.isError
+        assert not capabilities.is_error
         status = await session.call_tool("pipeline_status", {})
-        assert not status.isError
+        assert not status.is_error
 
 
 def _wait_for_loopback_server(process: subprocess.Popen[str], port: int) -> None:
@@ -90,7 +90,8 @@ def _running_http_server(config_path: Path, port: int) -> Iterator[subprocess.Po
 class McpInteroperabilityTests(unittest.TestCase):
     def test_official_python_sdk_uses_actual_streamable_http_server(self) -> None:
         async def connect(url: str) -> None:
-            async with streamable_http_client(url) as (read_stream, write_stream, _):
+            async with streamable_http_client(url) as transport:
+                read_stream, write_stream, *_ = transport
                 await _assert_protocol_contract(read_stream, write_stream)
 
         with TemporaryDirectory() as directory:

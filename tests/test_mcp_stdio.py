@@ -33,9 +33,9 @@ class McpStdioTests(unittest.TestCase):
                     by_name = {tool.name: tool for tool in tools.tools}
                     self.assertIn("intake_job_url", by_name)
                     intake = by_name["intake_job_url"]
-                    self.assertEqual(intake.inputSchema["required"], ["job_url"])
+                    self.assertEqual(intake.input_schema["required"], ["job_url"])
                     status = await session.call_tool("pipeline_status", {})
-                    self.assertFalse(status.isError)
+                    self.assertFalse(status.is_error)
 
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"

@@ -98,14 +98,14 @@ class McpToolProfileTests(unittest.TestCase):
             annotations = tools[name].annotations
             self.assertIsNotNone(annotations)
             assert annotations is not None
-            self.assertTrue(annotations.readOnlyHint)
-            self.assertTrue(annotations.idempotentHint)
-            self.assertTrue(annotations.openWorldHint)
+            self.assertTrue(annotations.read_only_hint)
+            self.assertTrue(annotations.idempotent_hint)
+            self.assertTrue(annotations.open_world_hint)
         for name in {"intake_job_url", "validate_tailored_resume"}:
             annotations = tools[name].annotations
             self.assertIsNotNone(annotations)
             assert annotations is not None
-            self.assertFalse(annotations.idempotentHint)
+            self.assertFalse(annotations.idempotent_hint)
 
 
 if __name__ == "__main__":

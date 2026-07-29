@@ -11,7 +11,8 @@ from threading import Barrier
 from typing import Any, cast
 from unittest.mock import patch
 
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
+from starlette.testclient import TestClient
 
 from erga_mcp.config import DEFAULT_CONFIG
 from erga_mcp.mcp_server import (
@@ -20,12 +21,77 @@ from erga_mcp.mcp_server import (
     _compile_intake_proposal,
     _metadata_from_url,
     build_server,
+    build_streamable_http_app,
 )
 from erga_mcp.resume import LatexValidation
 from erga_mcp.store import ErgaStore
 
 
 class McpServerTests(unittest.TestCase):
+    def test_modern_streamable_http_discovery_is_stateless_and_origin_guarded(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            app = build_streamable_http_app(build_server(config_path))
+            request = {
+                "jsonrpc": "2.0",
+                "id": "discover-1",
+                "method": "server/discover",
+                "params": {
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientInfo": {
+                            "name": "Erga protocol test",
+                            "version": "1.0",
+                        },
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                    }
+                },
+            }
+            headers = {
+                "MCP-Protocol-Version": "2026-07-28",
+                "Mcp-Method": "server/discover",
+                "Mcp-Name": "",
+            }
+            tools_request = {
+                "jsonrpc": "2.0",
+                "id": "tools-1",
+                "method": "tools/list",
+                "params": {
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientInfo": {
+                            "name": "Erga protocol test",
+                            "version": "1.0",
+                        },
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                    }
+                },
+            }
+            with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+                response = client.post("/mcp", json=request, headers=headers)
+                tools_response = client.post(
+                    "/mcp",
+                    json=tools_request,
+                    headers={**headers, "Mcp-Method": "tools/list"},
+                )
+                browser_response = client.post(
+                    "/mcp", json=request, headers={**headers, "Origin": "https://evil.test"}
+                )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            payload["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+            "Erga MCP",
+        )
+        self.assertIn("2026-07-28", payload["result"]["supportedVersions"])
+        self.assertEqual(tools_response.status_code, 200)
+        self.assertNotIn("Mcp-Session-Id", tools_response.headers)
+        tool_names = {tool["name"] for tool in tools_response.json()["result"]["tools"]}
+        self.assertIn("erga_capabilities", tool_names)
+        self.assertEqual(browser_response.status_code, 403)
+
     def test_review_tool_adds_and_saves_manual_draft_without_approving_evidence(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
@@ -42,14 +108,14 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
             )
-            added = cast(dict[str, Any], added_result[1])
+            added = cast(dict[str, Any], added_result.structured_content)
             saved_result: Any = asyncio.run(
                 server.call_tool(
                     "review_git_drafts",
                     {"action": "save", "draft_id": added["draft"]["id"]},
                 )
             )
-            saved = cast(dict[str, Any], saved_result[1])
+            saved = cast(dict[str, Any], saved_result.structured_content)
 
         self.assertEqual(added["draft"]["source"], "manual")
         self.assertEqual(added["draft"]["title"], "Personal finance tracker")
@@ -92,7 +158,7 @@ class McpServerTests(unittest.TestCase):
             result: Any = asyncio.run(
                 server.call_tool("research_git_worktrees", {"roots": [str(root / "projects")]})
             )
-            payload = cast(dict[str, Any], result[1])
+            payload = cast(dict[str, Any], result.structured_content)
 
         self.assertEqual(payload["repositories_scanned"], 1)
         self.assertEqual(payload["observations_created"], 1)
@@ -242,8 +308,8 @@ class McpServerTests(unittest.TestCase):
                 annotations = by_name[name].annotations
                 self.assertIsNotNone(annotations)
                 assert annotations is not None
-                self.assertTrue(annotations.readOnlyHint)
-                self.assertFalse(annotations.openWorldHint)
+                self.assertTrue(annotations.read_only_hint)
+                self.assertFalse(annotations.open_world_hint)
             workspace_annotations = by_name["prepare_job_workspace"].annotations
             mail_sync_annotations = by_name["sync_recruiting_mail"].annotations
             resume_annotations = by_name["create_tailored_resume"].annotations
@@ -252,12 +318,12 @@ class McpServerTests(unittest.TestCase):
             assert mail_sync_annotations is not None
             assert resume_annotations is not None
             assert validation_annotations is not None
-            self.assertFalse(workspace_annotations.readOnlyHint)
-            self.assertTrue(workspace_annotations.openWorldHint)
-            self.assertFalse(mail_sync_annotations.readOnlyHint)
-            self.assertTrue(mail_sync_annotations.openWorldHint)
-            self.assertFalse(resume_annotations.readOnlyHint)
-            self.assertFalse(validation_annotations.readOnlyHint)
+            self.assertFalse(workspace_annotations.read_only_hint)
+            self.assertTrue(workspace_annotations.open_world_hint)
+            self.assertFalse(mail_sync_annotations.read_only_hint)
+            self.assertTrue(mail_sync_annotations.open_world_hint)
+            self.assertFalse(resume_annotations.read_only_hint)
+            self.assertFalse(validation_annotations.read_only_hint)
 
     def test_rejects_resume_validation_outside_configured_package_artifacts(self) -> None:
         with TemporaryDirectory() as directory:
@@ -301,11 +367,11 @@ class McpServerTests(unittest.TestCase):
                     )
                 )
 
-        self.assertEqual(page[1]["text"], "Bounded research text")
-        self.assertEqual(page[1]["links"], ["https://example.com/more"])
-        self.assertTrue(page[1]["untrusted"])
-        self.assertEqual(section[1]["text"], "Selected fact")
-        self.assertTrue(section[1]["untrusted"])
+        self.assertEqual(page.structured_content["text"], "Bounded research text")
+        self.assertEqual(page.structured_content["links"], ["https://example.com/more"])
+        self.assertTrue(page.structured_content["untrusted"])
+        self.assertEqual(section.structured_content["text"], "Selected fact")
+        self.assertTrue(section.structured_content["untrusted"])
 
     def test_creates_briefs_and_deep_dossiers_only_for_existing_packages(self) -> None:
         with TemporaryDirectory() as directory:
@@ -361,9 +427,12 @@ class McpServerTests(unittest.TestCase):
                     )
                 )
 
-        self.assertEqual(Path(cast(dict[str, Any], brief[1])["research_brief"]).name, "oa-brief.md")
         self.assertEqual(
-            Path(cast(dict[str, Any], deep[1])["deep_research_note"]).name,
+            Path(cast(dict[str, Any], brief.structured_content)["research_brief"]).name,
+            "oa-brief.md",
+        )
+        self.assertEqual(
+            Path(cast(dict[str, Any], deep.structured_content)["deep_research_note"]).name,
             "interview-deep-research.md",
         )
 
@@ -382,19 +451,19 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("including a bare URL", description)
         self.assertIn("unfurled title and job-description preview", description)
         self.assertIn("do not browse or merely summarize", description)
-        self.assertEqual(tool.inputSchema["required"], ["job_url"])
-        job_url_schema = tool.inputSchema["properties"]["job_url"]
+        self.assertEqual(tool.input_schema["required"], ["job_url"])
+        job_url_schema = tool.input_schema["properties"]["job_url"]
         self.assertEqual(job_url_schema["format"], "uri")
         self.assertIn("copied unchanged", job_url_schema["description"])
-        self.assertIsNotNone(tool.outputSchema)
-        assert tool.outputSchema is not None
-        self.assertIn("package_dir", tool.outputSchema["properties"])
-        self.assertIn("reused", tool.outputSchema["properties"])
+        self.assertIsNotNone(tool.output_schema)
+        assert tool.output_schema is not None
+        self.assertIn("package_dir", tool.output_schema["properties"])
+        self.assertIn("reused", tool.output_schema["properties"])
         self.assertIsNotNone(tool.annotations)
         assert tool.annotations is not None
-        self.assertFalse(tool.annotations.readOnlyHint)
-        self.assertTrue(tool.annotations.openWorldHint)
-        self.assertFalse(tool.annotations.idempotentHint)
+        self.assertFalse(tool.annotations.read_only_hint)
+        self.assertTrue(tool.annotations.open_world_hint)
+        self.assertFalse(tool.annotations.idempotent_hint)
 
         advanced = by_name["prepare_job_workspace"]
         self.assertIn("Advanced second-stage", advanced.description or "")
@@ -444,7 +513,7 @@ class McpServerTests(unittest.TestCase):
                     server.call_tool("install_mail_monitor_scripts", {"history_days": 14})
                 )
 
-            self.assertEqual(result[1], prepared)
+            self.assertEqual(result.structured_content, prepared)
             install.assert_called_once_with(
                 config_path=config_path,
                 scripts_dir=hermes_home / "scripts",
@@ -458,7 +527,7 @@ class McpServerTests(unittest.TestCase):
             config_path.write_text(DEFAULT_CONFIG)
             result: Any = asyncio.run(build_server(config_path).call_tool("export_data", {}))
 
-            exported = cast(dict[str, object], result[1])
+            exported = cast(dict[str, object], result.structured_content)
             archive = Path(str(exported["archive"]))
             self.assertTrue(archive.is_file())
             self.assertEqual(archive.suffix, ".zip")
@@ -569,8 +638,8 @@ class McpServerTests(unittest.TestCase):
                     server.call_tool("intake_job_url", {"job_url": job_url})
                 )
 
-            first = cast(dict[str, Any], first_call[1])
-            second = cast(dict[str, Any], second_call[1])
+            first = cast(dict[str, Any], first_call.structured_content)
+            second = cast(dict[str, Any], second_call.structured_content)
             self.assertEqual(first["reused"], False)
             self.assertEqual(second["reused"], True)
             self.assertEqual(second["package_dir"], first["package_dir"])
@@ -637,7 +706,7 @@ class McpServerTests(unittest.TestCase):
             ):
                 call: Any = asyncio.run(server.call_tool("intake_job_url", {"job_url": job_url}))
 
-            result = cast(dict[str, Any], call[1])
+            result = cast(dict[str, Any], call.structured_content)
             proposed = Path(result["proposal_tex"]).read_text(encoding="utf-8")
             self.assertLess(proposed.index("Built Python"), proposed.index("Designed marketing"))
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
@@ -706,7 +775,7 @@ class McpServerTests(unittest.TestCase):
             ):
                 call: Any = asyncio.run(server.call_tool("intake_job_url", {"job_url": job_url}))
 
-            result = cast(dict[str, Any], call[1])
+            result = cast(dict[str, Any], call.structured_content)
             repaired = Path(result["package_dir"])
             self.assertEqual(repaired, legacy)
             self.assertTrue((repaired / "source" / "resume.tex").is_file())
@@ -816,8 +885,8 @@ class McpServerTests(unittest.TestCase):
                     server.call_tool("intake_job_url", {"job_url": job_url})
                 )
 
-            first = cast(dict[str, Any], first_call[1])
-            second = cast(dict[str, Any], second_call[1])
+            first = cast(dict[str, Any], first_call.structured_content)
+            second = cast(dict[str, Any], second_call.structured_content)
             self.assertTrue(Path(first["research_note"]).is_file())
             self.assertIsNotNone(first["application_id"])
             self.assertEqual(Path(first["package_dir"]).parent.name, "fall-2026")
@@ -846,7 +915,7 @@ class McpServerTests(unittest.TestCase):
                 )
 
             applications: Any = asyncio.run(server.call_tool("list_applications", {}))
-            self.assertEqual(len(applications[1]), 1)
+            self.assertEqual(len(applications.structured_content), 1)
 
     def test_tracking_only_url_changes_reuse_the_same_completed_package(self) -> None:
         with TemporaryDirectory() as directory:
@@ -881,8 +950,8 @@ class McpServerTests(unittest.TestCase):
                     )
                 )
 
-            first = cast(dict[str, Any], first_call[1])
-            second = cast(dict[str, Any], second_call[1])
+            first = cast(dict[str, Any], first_call.structured_content)
+            second = cast(dict[str, Any], second_call.structured_content)
             self.assertEqual(first["package_dir"], second["package_dir"])
             self.assertTrue(second["reused"])
             self.assertEqual(second["validation"]["returncode"], 1)
@@ -929,7 +998,7 @@ class McpServerTests(unittest.TestCase):
             ):
                 result: Any = asyncio.run(server.call_tool("intake_job_url", {"job_url": job_url}))
 
-            structured = cast(dict[str, Any], result[1])
+            structured = cast(dict[str, Any], result.structured_content)
             self.assertFalse(structured["reused"])
             self.assertTrue(Path(structured["package_dir"]).is_dir())
             self.assertEqual(Path(structured["package_dir"]).name, slug)
@@ -982,8 +1051,8 @@ class McpServerTests(unittest.TestCase):
                     server.call_tool("intake_job_url", {"job_url": job_url})
                 )
 
-            first = cast(dict[str, Any], first_call[1])
-            second = cast(dict[str, Any], second_call[1])
+            first = cast(dict[str, Any], first_call.structured_content)
+            second = cast(dict[str, Any], second_call.structured_content)
             self.assertIsNone(first["validation"]["returncode"])
             self.assertIn("did not complete", first["validation"]["skipped"])
             self.assertIsNone(second["validation"]["returncode"])

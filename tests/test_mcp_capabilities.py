@@ -21,13 +21,15 @@ class McpCapabilitiesTests(unittest.TestCase):
             result = asyncio.run(server.call_tool("erga_capabilities", {}))
 
         self.assertIn("erga_capabilities", tools)
-        self.assertEqual(result[1]["server_version"], __version__)
-        self.assertEqual(result[1]["mcp_contract_version"], "1.0")
-        self.assertEqual(result[1]["minimum_client_contract_version"], "1.0")
-        self.assertEqual(result[1]["supported_transports"], ["stdio", "streamable-http"])
-        self.assertEqual(result[1]["tool_profile"], "read")
-        self.assertNotIn("/", repr(result[1]))
-        self.assertNotIn("config", repr(result[1]).casefold())
+        self.assertEqual(result.structured_content["server_version"], __version__)
+        self.assertEqual(result.structured_content["mcp_contract_version"], "1.0")
+        self.assertEqual(result.structured_content["minimum_client_contract_version"], "1.0")
+        self.assertEqual(
+            result.structured_content["supported_transports"], ["stdio", "streamable-http"]
+        )
+        self.assertEqual(result.structured_content["tool_profile"], "read")
+        self.assertNotIn("/", repr(result.structured_content))
+        self.assertNotIn("config", repr(result.structured_content).casefold())
 
 
 if __name__ == "__main__":

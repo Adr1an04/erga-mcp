@@ -53,7 +53,7 @@ class MailSyncMcpTests(unittest.TestCase):
                 result: Any = asyncio.run(
                     build_server(config_path).call_tool("sync_recruiting_mail", {})
                 )
-            payload = cast(dict[str, Any], result[1])
+            payload = cast(dict[str, Any], result.structured_content)
 
         self.assertEqual(payload["provider"], "zoho")
         self.assertEqual(payload["fetched"], 1)

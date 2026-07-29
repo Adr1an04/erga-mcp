@@ -13,7 +13,7 @@ class PackagingTests(unittest.TestCase):
         dependencies = project["project"]["dependencies"]
         optional = project["project"].get("optional-dependencies", {})
 
-        self.assertIn("mcp>=1.28,<2", dependencies)
+        self.assertIn("mcp>=2,<3", dependencies)
         self.assertIn("uvicorn>=0.30,<1", dependencies)
         self.assertNotIn("mcp", optional)
         self.assertEqual(project["project"]["scripts"]["erga-mcp"], "erga_mcp.mcp_server:main")

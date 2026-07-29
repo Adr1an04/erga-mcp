@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 from collections.abc import Iterable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,9 +16,11 @@ from typing import Annotated, Any, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import uvicorn
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, StrictInt
+from starlette.applications import Starlette
+from starlette.routing import Mount
 
 from .cli import DEFAULT_CONFIG_PATH, _notes_application, _package_for_application
 from .config import ErgaConfig, load_config
@@ -72,22 +75,22 @@ from .versioning import capabilities
 from .web_scraping import extract_page, scrape_page
 
 _READ_ONLY = ToolAnnotations(
-    readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+    read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
 )
 _NETWORK_READ = ToolAnnotations(
-    readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
+    read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True
 )
 _LOCAL_WRITE = ToolAnnotations(
-    readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
+    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
 )
 _NETWORK_READ_AND_WRITE = ToolAnnotations(
-    readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
+    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True
 )
 _JOB_INTAKE = ToolAnnotations(
-    readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
+    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True
 )
 _LOCAL_EXEC = ToolAnnotations(
-    readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
+    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
 )
 _READ_TOOL_NAMES = frozenset(
     {
@@ -928,7 +931,7 @@ def _incomplete_package_by_identity(*, output_root: Path, job_url: str) -> Path 
     return matches[0] if matches else None
 
 
-def build_server(config_path: Path, *, store_factory: StoreFactory | None = None) -> FastMCP:
+def build_server(config_path: Path, *, store_factory: StoreFactory | None = None) -> MCPServer:
     """Build a local MCP interface with read, local-write, and local-exec tools."""
     config = load_config(config_path)
     selected_tool_profile = _selected_tool_profile(config, os.environ)
@@ -936,8 +939,9 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
     store = (store_factory or SQLiteStoreFactory()).create(config.data_dir / "erga.sqlite3")
     store.initialize()
     integration_lock = Lock()
-    server = FastMCP(
+    server = MCPServer(
         "Erga MCP",
+        version="0.1.0",
         instructions=(
             "When a user provides a job-posting URL, including a bare link or a link followed "
             "by an unfurled preview, call intake_job_url first with the complete URL unchanged. "
@@ -1793,10 +1797,31 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
     return server
 
 
-def run_streamable_http(server: FastMCP, settings: HttpTransportSettings) -> None:
+def build_streamable_http_app(
+    server: MCPServer,
+    settings: HttpTransportSettings | None = None,
+) -> Starlette:
+    """Build a loopback-only, stateless Streamable HTTP app for modern and legacy clients."""
+    transport_settings = settings or HttpTransportSettings(host="127.0.0.1", port=8765)
+    transport_app = server.streamable_http_app(
+        host=transport_settings.host,
+        stateless_http=True,
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: Starlette):
+        async with server.session_manager.run():
+            yield
+
+    return Starlette(
+        routes=[Mount("/", app=protect_http_app(transport_app))],
+        lifespan=lifespan,
+    )
+
+
+def run_streamable_http(server: MCPServer, settings: HttpTransportSettings) -> None:
     """Run the MCP server on loopback-only Streamable HTTP with an Origin guard."""
-    app = protect_http_app(server.streamable_http_app())
-    uvicorn.run(app, host=settings.host, port=settings.port)
+    uvicorn.run(build_streamable_http_app(server, settings), host=settings.host, port=settings.port)
 
 
 def main() -> None:
