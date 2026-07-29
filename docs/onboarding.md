@@ -1,29 +1,68 @@
 # Onboard Erga
 
-Erga's onboarding goal is simple: reach one successful `pipeline_status` call before asking a new
-user to configure résumé templates, mail, trackers, or any optional integration.
+Erga's onboarding goal is simple: connect the coding AI subscription a student already has,
+optionally connect Discord, and reach one successful `pipeline_status` call without asking for a
+model API key or another agent runtime.
 
-## One command
+## Guided setup
 
-After cloning the repository and running `uv sync`, choose the coding client that will supply the
-AI reasoning:
+After cloning the repository and running `uv sync`, launch:
+
+```bash
+uv run erga setup
+```
+
+Use the arrow keys and Enter to choose:
+
+- **Full Erga:** coding AI, résumé generation, and native Discord.
+- **Local Erga:** coding AI and résumé generation.
+- **Custom:** select only the components you need.
+
+The wizard supports `codex`, `claude-code`, and `opencode`. It verifies that the selected command is
+installed, checks its recorded login, and performs one tiny live readiness turn before writing
+configuration. This catches expired or revoked sessions that can still appear signed in. The final
+review shows the workspace, private config location, and selected components. Canceling before
+confirmation makes no changes.
+
+It never requests an OpenAI or Anthropic API key. For Codex and Claude Code, the bridge removes
+ambient model API-key variables from the child process so an existing key cannot silently replace
+subscription authentication.
+
+Preview the redacted setup plan without applying it:
+
+```bash
+uv run erga setup --dry-run
+```
+
+## Native Discord
+
+The Full experience connects a Discord bot directly to the selected coding CLI. The bot token goes
+to the operating-system credential store; only the client name, workspace path, and allowlisted
+Discord user IDs are written to disk. Erga does not require Hermes or another intermediary agent.
+
+Discord requires one manual account-level step: create an application and bot in the Discord
+Developer Portal, enable Message Content Intent, and copy the bot token. The wizard explains this
+at the point where the token is requested. See [Native Discord](discord.md) for the exact setup,
+permissions, commands, and trust boundary.
+
+## Noninteractive onboarding
+
+Automation, development environments, and users who do not need the complete wizard can configure
+one coding client directly:
 
 ```bash
 uv run erga onboard codex \
   --project-dir /absolute/path/to/your/resume-workspace
 ```
 
-Valid client names are `codex`, `claude-code`, and `opencode`.
-
-The command performs four bounded local actions:
+Valid client names are `codex`, `claude-code`, and `opencode`. This command:
 
 1. Creates or reuses `~/.config/erga-mcp/config.toml`.
 2. Initializes the private SQLite database under `~/.config/erga-mcp/state/`.
 3. Adds Erga to the selected project's native MCP configuration.
 4. Runs core health checks and prints exact next steps.
 
-It does not request a model API key, read a résumé, connect an inbox, submit an application, or
-send anything remotely.
+It does not configure Discord or prompt for résumé settings.
 
 ## Verify the first success
 
@@ -44,6 +83,8 @@ template before expecting a compiled tailored PDF.
 | --- | --- |
 | Private Erga settings | `~/.config/erga-mcp/config.toml` |
 | Private database | `~/.config/erga-mcp/state/erga.sqlite3` |
+| Native Discord settings | `~/.config/erga-mcp/discord-bridge.json` |
+| Discord bot token | Operating-system credential store |
 | Codex project entry | `<project>/.codex/config.toml` |
 | Claude Code project entry | `<project>/.mcp.json` |
 | OpenCode project entry | `<project>/opencode.json` |
@@ -96,8 +137,18 @@ uv run erga onboard codex \
 
 ### The coding-client command is not found
 
-Onboarding can create project configuration before the client executable is available. Install or
-launch the selected client, ensure its command is on `PATH`, and rerun onboarding.
+Install or launch the selected client, ensure its command is on `PATH`, sign in with the account
+that owns your coding-tool subscription, and rerun setup.
+
+### The coding client is installed but not signed in
+
+Run `codex login`, `claude auth login`, or the appropriate OpenCode provider-authentication
+command. Erga does not accept a model API key as a substitute during guided setup.
+
+### Discord starts and immediately stops
+
+Run `uv run erga discord status`, then inspect the reported log path. The usual causes are an
+invalid bot token or Message Content Intent not being enabled in the Discord Developer Portal.
 
 ### The project directory does not exist
 

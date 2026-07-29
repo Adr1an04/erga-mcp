@@ -10,16 +10,21 @@ uv sync --extra dev
 
 ## 2. Run guided onboarding
 
-Choose the coding client that will supply the reasoning:
+```bash
+uv run erga setup
+```
+
+The arrow-key wizard selects Codex, Claude Code, or OpenCode; verifies its existing subscription
+login; creates private local state; writes the native project MCP entry; and optionally configures
+the résumé workflow and native Discord bridge. It is safe to rerun and requires no model API key
+or Hermes installation.
+
+For a noninteractive coding-client-only setup:
 
 ```bash
 uv run erga onboard codex \
   --project-dir /absolute/path/to/your/resume-workspace
 ```
-
-Replace `codex` with `claude-code` or `opencode` when appropriate. This creates private local state,
-writes the native project MCP entry, runs health checks, and prints the exact verification prompt.
-It is safe to rerun and requires no model API key.
 
 Use `uv run erga init --config ~/.config/erga-mcp/config.toml` only for a CLI-only or fully manual
 installation. The generated configuration and SQLite data directory live outside the repository.

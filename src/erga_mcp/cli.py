@@ -24,6 +24,12 @@ from .cover_letter import create_cover_letter_proposal, load_style_context
 from .cover_letter_settings import as_json as cover_letter_settings_as_json
 from .cover_letter_settings import update_settings as update_cover_letter_settings
 from .cron_setup import install_hermes_monitor_scripts
+from .discord_bridge import (
+    discord_status,
+    run_discord_bridge,
+    start_discord_bridge,
+    stop_discord_bridge,
+)
 from .doctor import check_installation
 from .exporting import export_bundle
 from .git_evidence import (
@@ -58,6 +64,13 @@ from .resume import (
 )
 from .resume_settings import as_json as resume_settings_as_json
 from .resume_settings import update_settings
+from .setup_wizard import (
+    WizardCancelled,
+    apply_setup,
+    collect_setup_selections,
+    render_setup_report,
+    write_setup_plan,
+)
 from .store import ErgaStore
 from .zoho_oauth import (
     connect,
@@ -100,6 +113,33 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="return the onboarding report as machine-readable JSON",
     )
+
+    setup = subcommands.add_parser(
+        "setup",
+        help="open the arrow-key wizard for AI, resume, and Discord setup",
+    )
+    _config_argument(setup)
+    setup.add_argument("--project-dir", type=Path, default=Path.cwd())
+    setup.add_argument("--server-command", type=Path)
+    setup.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="collect and review choices without changing local state",
+    )
+
+    discord_bridge = subcommands.add_parser(
+        "discord",
+        help="run and manage the native Discord-to-coding-agent bridge",
+    )
+    discord_commands = discord_bridge.add_subparsers(dest="discord_command", required=True)
+    for name, help_text in (
+        ("run", "run the configured Discord bridge in the foreground"),
+        ("start", "start the configured Discord bridge in the background"),
+        ("status", "show whether the Discord bridge process is running"),
+        ("stop", "stop the background Discord bridge process"),
+    ):
+        discord_command = discord_commands.add_parser(name, help=help_text)
+        _config_argument(discord_command)
 
     status = subcommands.add_parser("status", help="show local pipeline counts")
     _config_argument(status)
@@ -479,6 +519,35 @@ def main(arguments: Sequence[str] | None = None) -> int:
             _print_json(report.as_json())
         else:
             print(render_onboarding_report(report))
+        return 0
+    if args.command == "setup":
+        try:
+            selections = collect_setup_selections(
+                default_project_dir=args.project_dir,
+                default_config_path=args.config,
+                dry_run=args.dry_run,
+            )
+        except WizardCancelled as error:
+            print(str(error))
+            return 130
+        if args.dry_run:
+            print(write_setup_plan(selections))
+            return 0
+        setup_report = apply_setup(
+            selections,
+            server_command=args.server_command,
+        )
+        print(render_setup_report(setup_report))
+        return 0
+    if args.command == "discord":
+        if args.discord_command == "run":
+            return run_discord_bridge(args.config)
+        if args.discord_command == "start":
+            _print_json(start_discord_bridge(args.config))
+        elif args.discord_command == "stop":
+            _print_json(stop_discord_bridge(args.config))
+        else:
+            _print_json(discord_status(args.config))
         return 0
     if args.command == "zoho" and args.zoho_command == "set-client-secret":
         secret = getpass.getpass(

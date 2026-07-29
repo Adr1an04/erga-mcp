@@ -4,7 +4,8 @@
 
 - The repository contains source code, examples, and synthetic tests only.
 - Local configuration, SQLite state, imports, exports, generated proposals, and user-provided source files are ignored by Git.
-- OAuth refresh tokens and Git tokens belong in the operating-system credential store, never in configuration files, shell history, logs, or repository files.
+- OAuth refresh tokens, Git tokens, and Discord bot tokens belong in the operating-system
+  credential store, never in configuration files, shell history, logs, or repository files.
 - The fixture-only Zoho workflow has no OAuth or network behavior. The live adapter requests only `ZohoMail.messages.READ`, `ZohoMail.folders.READ`, and `ZohoMail.accounts.READ`, and rejects broader or mutating scopes.
 - Mail previews are used only for local classification. The store retains normalized message metadata and classification, not preview/body content.
 
@@ -20,6 +21,26 @@ The generated Codex, Claude Code, and OpenCode configurations also select the `c
 profile. This profile excludes mail synchronization, Hermes monitor installation, Git scanning,
 and model-token recording. Erga receives no model credential: the connected MCP client owns model
 authentication, entitlements, and token accounting.
+
+## Native Discord trust boundary
+
+The optional native Discord bridge accepts messages only from numeric Discord user IDs explicitly
+allowlisted during setup. Direct messages are accepted; server messages require a bot mention by
+default. The Discord bot token is retrieved from the operating-system credential store and is
+never included in process arguments or non-secret bridge settings.
+
+Each accepted message launches one bounded noninteractive turn in the selected coding CLI inside
+the configured project directory. Codex turns use a workspace-write sandbox. Claude Code turns use
+its `acceptEdits` permission mode because a background Discord process cannot answer interactive
+permission prompts. OpenCode turns use its automatic noninteractive mode. These modes can modify
+workspace files, so an authorized Discord identity is a remote operator of the coding client—not
+merely a reader of Erga records.
+
+The bridge removes `OPENAI_API_KEY` from Codex child environments and `ANTHROPIC_API_KEY` from
+Claude Code child environments. Model credentials, subscription state, provider choice, and rate
+limits otherwise remain owned by the coding CLI. Use a private bot, the smallest possible
+allowlist, and a dedicated résumé workspace. The agent policy forbids application submission,
+invented claims, and employer messaging, but policy text is not an operating-system sandbox.
 
 The server declares tool annotations so MCP clients can distinguish its capability classes:
 

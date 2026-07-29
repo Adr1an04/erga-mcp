@@ -30,9 +30,10 @@ It is built around LaTeX résumé workflows and is designed to work cleanly with
 résumé stays untouched; Erga creates a separate `.tex` file, a readable diff, and a PDF for you to
 review.
 
-You can use Erga directly from the command line or connect it to Codex, Claude Code, OpenCode,
-Hermes, or another MCP client. The connected client supplies the AI reasoning, so Erga does not
-need a model API key. Its application records and generated files stay on your computer.
+You can use Erga directly from the command line or connect it to Codex, Claude Code, or OpenCode.
+The connected coding tool supplies the AI reasoning through the subscription you already use, so
+Erga does not need a model API key. Its application records and generated files stay on your
+computer.
 
 > [!IMPORTANT]
 > Erga organizes the process, but it does not submit applications, send messages, invent résumé
@@ -70,28 +71,34 @@ cd erga-mcp
 uv sync
 ```
 
-### Onboard your coding client
+### Run the guided setup
 
 ```bash
-# Choose codex, claude-code, or opencode.
+uv run erga setup
+```
+
+The arrow-key wizard:
+
+- detects Codex, Claude Code, or OpenCode and verifies its existing subscription login;
+- connects Erga to the selected coding tool without asking for a model API key;
+- optionally configures your master LaTeX résumé and output directory;
+- optionally connects a private Discord bot directly to that same coding tool; and
+- shows every selected action before writing configuration or credentials.
+
+The Discord token is stored in your operating system's credential store, while model
+authentication remains with the coding tool. There is no extra AI provider account and no
+required messaging-agent runtime.
+
+For automation or CI, the noninteractive equivalent remains:
+
+```bash
 uv run erga onboard codex \
   --project-dir /absolute/path/to/your/resume-workspace
 ```
 
-That one command:
-
-- creates or reuses Erga's private configuration and local database;
-- adds a project-scoped MCP entry using the focused `career` tool profile;
-- checks the local installation;
-- explains exactly how to restart, verify, and try the first job URL; and
-- remains safe to rerun without duplicating or silently replacing configuration.
-
-No model API key is requested. Restart the selected client, open the configured project, and ask:
-**“Show my Erga pipeline status.”** Then paste a public job-posting URL.
-
-For a walkthrough of every file created, rerunning, existing configurations, and common errors,
-read the [onboarding guide](docs/onboarding.md). Advanced users can still preview and merge client
-configuration manually with `erga client configure`.
+For a walkthrough of every file created and common errors, read the
+[onboarding guide](docs/onboarding.md). The [Discord guide](docs/discord.md) covers the one-time
+bot setup and private-user allowlist.
 
 ### Optional: add evidence and a draft application
 
@@ -124,8 +131,8 @@ the [complete getting-started guide](docs/getting-started.md).
 
 ## MCP clients
 
-Erga's primary agent boundary is standard local stdio MCP, not a Hermes plugin. Codex, Claude Code,
-and OpenCode receive the same tools, server instructions, evidence checks, and local artifacts.
+Erga's primary agent boundary is standard local stdio MCP. Codex, Claude Code, and OpenCode receive
+the same tools, server instructions, evidence checks, and local artifacts.
 See [`docs/mcp-clients.md`](docs/mcp-clients.md) for generated configuration, manual configuration,
 tool profiles, verification, and the optional loopback HTTP transport.
 
@@ -146,8 +153,8 @@ Core MCP tools include:
 | `install_mail_monitor_scripts` | Prepare deterministic Hermes notification runners |
 | `export_data` | Build a private ZIP of local records and generated packages |
 
-Hermes remains an optional integration for messaging-platform routing, scheduled monitors, and
-attachment delivery. It is no longer the assumed reasoning host or onboarding path.
+The native Discord bridge invokes the selected coding tool directly through its existing local
+login. A legacy Hermes integration remains available only for users who already use it.
 
 The full list of permissions and safety limits is in [`docs/security.md`](docs/security.md).
 
@@ -166,6 +173,7 @@ tests/                synthetic unit and MCP integration tests
 
 - [`docs/getting-started.md`](docs/getting-started.md) — full setup.
 - [`docs/onboarding.md`](docs/onboarding.md) — one-command setup and troubleshooting.
+- [`docs/discord.md`](docs/discord.md) — native Discord bridge setup and security.
 - [`docs/mcp-clients.md`](docs/mcp-clients.md) — Codex, Claude Code, OpenCode, generic stdio, and loopback HTTP setup.
 - [`docs/security.md`](docs/security.md) — permissions and safety details.
 - [`docs/FUTURE.md`](docs/FUTURE.md) — ideas for later.
