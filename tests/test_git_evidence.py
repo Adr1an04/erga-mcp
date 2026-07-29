@@ -9,6 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.cli import main
+from erga_mcp.git_evidence import GitCommit, analyze_commits
 
 
 class GitEvidenceCliTests(unittest.TestCase):
@@ -273,6 +274,20 @@ class GitEvidenceCliTests(unittest.TestCase):
             self.assertEqual(len(drafts), 1)
             self.assertTrue(drafts[0]["generated_from_git_diffs"])
             self.assertEqual(status["evidence"], 0)
+
+    def test_analysis_skips_unavailable_commits_without_aborting_a_repository(self) -> None:
+        with TemporaryDirectory() as directory:
+            repo = Path(directory)
+            self._git(repo, "init")
+            self._git(repo, "config", "user.email", "test@example.test")
+            self._git(repo, "config", "user.name", "Test User")
+            sha = self._commit(repo, "src/app.py", "def run(): pass\n", "updates")
+            valid = GitCommit(sha, (), "updates", ("src/app.py",))
+            missing = GitCommit("0" * 40, (), "updates", ("src/missing.py",))
+
+            observations = analyze_commits(repo, [valid, missing])
+
+            self.assertEqual([item.commit_sha for item in observations], [sha])
 
 
 if __name__ == "__main__":

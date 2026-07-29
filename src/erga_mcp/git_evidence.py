@@ -100,7 +100,15 @@ def analyze_commits(repo: Path, commits: list[GitCommit]) -> list[GitChangeObser
         return []
     workers = min(4, len(commits))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="erga-git") as pool:
-        return list(pool.map(lambda commit: observe_commit(repo, commit), commits))
+        observations = list(pool.map(lambda commit: _observe_if_available(repo, commit), commits))
+    return [observation for observation in observations if observation is not None]
+
+
+def _observe_if_available(repo: Path, commit: GitCommit) -> GitChangeObservation | None:
+    try:
+        return observe_commit(repo, commit)
+    except ValueError:
+        return None
 
 
 def observe_commit(repo: Path, commit: GitCommit) -> GitChangeObservation:
