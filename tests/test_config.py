@@ -8,6 +8,15 @@ from erga_mcp.config import DEFAULT_CONFIG, load_config
 
 
 class ConfigTests(unittest.TestCase):
+    def test_loads_client_neutral_career_tool_profile(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text('[mcp]\ntool_profile = "career"\n', encoding="utf-8")
+
+            config = load_config(config_path)
+
+            self.assertEqual(config.mcp.tool_profile, "career")
+
     def test_load_config_resolves_relative_paths_from_config_directory(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"

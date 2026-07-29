@@ -29,8 +29,9 @@ It is built around LaTeX résumé workflows and is designed to work cleanly with
 résumé stays untouched; Erga creates a separate `.tex` file, a readable diff, and a PDF for you to
 review.
 
-You can use Erga directly from the command line or connect it to an MCP client such as Hermes. Its
-application records and generated files stay on your computer.
+You can use Erga directly from the command line or connect it to Codex, Claude Code, OpenCode,
+Hermes, or another MCP client. The connected client supplies the AI reasoning, so Erga does not
+need a model API key. Its application records and generated files stay on your computer.
 
 > [!IMPORTANT]
 > Erga organizes the process, but it does not submit applications, send messages, invent résumé
@@ -87,6 +88,29 @@ By default Erga creates:
 The configuration contains paths and feature settings, never credentials. Use
 `--config /absolute/path/to/config.toml` to select another location.
 
+### Connect your existing coding-agent plan
+
+Erga can generate and safely merge project-scoped MCP configuration for Codex, Claude Code, and
+OpenCode. Preview is the default; add `--write` after reviewing the target and generated content:
+
+```bash
+# Choose one client.
+uv run erga client configure codex --config ~/.config/erga-mcp/config.toml
+uv run erga client configure claude-code --config ~/.config/erga-mcp/config.toml
+uv run erga client configure opencode --config ~/.config/erga-mcp/config.toml
+
+# Then write the selected project configuration.
+uv run erga client configure codex \
+  --config ~/.config/erga-mcp/config.toml \
+  --project-dir /absolute/path/to/your/resume-workspace \
+  --write
+```
+
+The generated server uses Erga's `career` tool profile: complete job intake and review artifacts
+without mail synchronization, Hermes monitor tools, Git scanning, or model-token accounting.
+Restart the client, verify `pipeline_status`, and paste a job URL. Your client account determines
+which model and subscription allowance are used; Erga remains a deterministic local tool server.
+
 ### Add evidence and a draft application
 
 ```bash
@@ -116,24 +140,12 @@ uv run erga applications list
 For résumé setup, mail connectors, job-link routing, and scheduled private alerts, continue with
 the [complete getting-started guide](docs/getting-started.md).
 
-## MCP and Hermes
+## MCP clients
 
-Install the local MCP server runtime, then register the local stdio server:
-
-```bash
-uv sync
-
-hermes mcp add erga-mcp \
-  --command uv \
-  --connect-timeout 30 \
-  --env ERGA_MCP_CONFIG=/absolute/path/to/config.toml \
-  --args --directory /absolute/path/to/erga-mcp run erga-mcp
-```
-
-`--args` must remain last. If the gateway routes the chat through a named Hermes profile, add the
-same profile flag to MCP and plugin commands (for example, `hermes --profile coder mcp add ...`).
-See [`integrations/hermes/mcp.example.yaml`](integrations/hermes/mcp.example.yaml) for the equivalent
-configuration file.
+Erga's primary agent boundary is standard local stdio MCP, not a Hermes plugin. Codex, Claude Code,
+and OpenCode receive the same tools, server instructions, evidence checks, and local artifacts.
+See [`docs/mcp-clients.md`](docs/mcp-clients.md) for generated configuration, manual configuration,
+tool profiles, verification, and the optional loopback HTTP transport.
 
 Core MCP tools include:
 
@@ -152,7 +164,8 @@ Core MCP tools include:
 | `install_mail_monitor_scripts` | Prepare deterministic Hermes notification runners |
 | `export_data` | Build a private ZIP of local records and generated packages |
 
-With the optional `erga-mcp-router` Hermes plugin enabled, `/erga-tracker` renders that same local Obsidian tracker directly in the current chat, and `/erga-mail-sync` runs a bounded configured-mail sync. Both return compact Markdown that remains readable across Discord, Signal, Telegram, Slack, and other Hermes platforms. The tracker does not write to the vault; the mail command stores metadata-only events and does not expose message bodies, previews, or credentials.
+Hermes remains an optional integration for messaging-platform routing, scheduled monitors, and
+attachment delivery. It is no longer the assumed reasoning host or onboarding path.
 
 The full list of permissions and safety limits is in [`docs/security.md`](docs/security.md).
 
@@ -170,7 +183,7 @@ tests/                synthetic unit and MCP integration tests
 ## Documentation
 
 - [`docs/getting-started.md`](docs/getting-started.md) — full setup.
-- [`docs/mcp-clients.md`](docs/mcp-clients.md) — standard stdio and loopback HTTP setup for non-Hermes MCP clients.
+- [`docs/mcp-clients.md`](docs/mcp-clients.md) — Codex, Claude Code, OpenCode, generic stdio, and loopback HTTP setup.
 - [`docs/security.md`](docs/security.md) — permissions and safety details.
 - [`docs/FUTURE.md`](docs/FUTURE.md) — ideas for later.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to run checks and contribute.

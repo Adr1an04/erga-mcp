@@ -120,7 +120,44 @@ It requests only the read-only `ZohoMail.messages.READ`, `ZohoMail.folders.READ`
      --client-id '<client-id>'
    ```
 
-## 5. Connect Hermes through MCP
+## 5. Connect Codex, Claude Code, or OpenCode
+
+The coding client is the reasoning host. Erga never calls an LLM provider and does not require an
+OpenAI or Anthropic API key. This lets users run the workflow with whatever model access their
+Codex, Claude Code, or OpenCode installation already provides.
+
+Preview a project-scoped configuration:
+
+```bash
+uv run erga client configure codex \
+  --config ~/.config/erga-mcp/config.toml \
+  --project-dir /absolute/path/to/resume-workspace
+```
+
+Replace `codex` with `claude-code` or `opencode` for those clients. The preview is JSON containing
+the exact target path and content. After reviewing it, add `--write`. Existing unrelated settings
+are preserved, and Erga refuses to overwrite an existing server with the same name.
+
+```bash
+uv run erga client configure codex \
+  --config ~/.config/erga-mcp/config.toml \
+  --project-dir /absolute/path/to/resume-workspace \
+  --write
+```
+
+The generated configuration selects the least-privilege `career` profile. It includes job-link
+intake, approved evidence, local resume and cover-letter proposals, validation, application reads,
+and exports. It excludes mail synchronization, Hermes monitor installation, Git evidence scans,
+and model-token recording.
+
+Restart or reload the client, verify that `pipeline_status` and `intake_job_url` are visible, then
+paste a job-posting URL. Erga's MCP initialization instructions tell every compliant client to run
+intake first unless the user explicitly asks for summary-only behavior.
+
+Client-specific file formats, manual snippets, and verification commands are documented in
+[`mcp-clients.md`](mcp-clients.md).
+
+## 6. Optional Hermes integration
 
 ### Plug-and-play registration
 
@@ -254,11 +291,11 @@ without retrying.
 After upgrading the server code or changing its configuration, run `/reload-mcp` in the active
 Hermes session or restart the gateway so the long-running stdio process and tool inventory refresh.
 
-## 6. Add the workflow skill
+## 7. Add the workflow skill
 
 For a personal Hermes installation, tap this repository with `hermes skills tap add Adr1an04/erga-mcp`, then install `skills/productivity/erga-mcp/SKILL.md` through the chosen skill workflow. The skill contains workflow and safety policy only; it contains no integration code or credentials.
 
-## 7. Verify
+## 8. Verify
 
 ```bash
 uv run erga status --config ~/.config/erga-mcp/config.toml

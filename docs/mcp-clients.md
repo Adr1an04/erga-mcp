@@ -1,6 +1,8 @@
-# Connect Erga to MCP clients
+# Connect Erga to Codex, Claude Code, OpenCode, and other MCP clients
 
-Erga's primary integration contract is a local stdio process. This works with any MCP client that can launch a local command and set `ERGA_MCP_CONFIG`.
+Erga's primary integration contract is a local stdio process. The MCP client supplies all AI
+reasoning; Erga itself never calls a model API. This lets the same local workflow use the model
+access already available in Codex, Claude Code, OpenCode, or another MCP host.
 
 > [!IMPORTANT]
 > Review the command and absolute paths before enabling it. The server runs with the same local permissions as the client that launches it. Do not put credentials, OAuth tokens, résumé contents, or vault contents in a client configuration.
@@ -19,7 +21,36 @@ Replace both placeholders with absolute local paths:
 }
 ```
 
-The `mcp` Python runtime dependency is included with the `erga-mcp` package, along with `uvicorn` for the opt-in HTTP transport. For a source checkout, run `uv sync` once before connecting a client.
+The `mcp` Python runtime dependency is included with the `erga-mcp` package, along with `uvicorn`
+for the opt-in HTTP transport. For a source checkout, run `uv sync` once before connecting a
+client.
+
+## Generated project configuration
+
+Use one command to preview the correct native configuration:
+
+```bash
+uv run erga client configure codex --config /absolute/path/to/erga-config.toml
+uv run erga client configure claude-code --config /absolute/path/to/erga-config.toml
+uv run erga client configure opencode --config /absolute/path/to/erga-config.toml
+```
+
+Add `--project-dir /absolute/path/to/project` to select another project. Preview is the default.
+Add `--write` only after reviewing the returned target path and content. The writer preserves
+unrelated settings and refuses to replace an existing `erga-mcp` server entry.
+
+Generated files:
+
+| Client | Project configuration |
+| --- | --- |
+| Codex | `.codex/config.toml` |
+| Claude Code | `.mcp.json` |
+| OpenCode | `opencode.json` |
+
+Every generated entry passes only two non-secret environment values:
+
+- `ERGA_MCP_CONFIG`: the absolute path to the local Erga configuration.
+- `ERGA_MCP_TOOL_PROFILE=career`: the bounded client-neutral job workflow.
 
 ## Least-privilege tool profiles
 
@@ -30,6 +61,7 @@ environment value takes precedence; neither setting is a credential.
 
 | Profile | Exposed tools |
 | --- | --- |
+| `career` | Job intake, application/evidence reads, public-page research, local resume/cover-letter artifacts, validation, and export. Excludes mail, Hermes monitors, Git scanning, and token recording. |
 | `read` | Local read-only records, tracker, and token summary. It deliberately excludes writing-sample/template content. |
 | `research` | `read` plus bounded public HTTP(S) scraping and CSS-section extraction. |
 | `write` | `read` plus local proposal, research-recording, export, token-recording, and validation tools; no network or Hermes-only tools. |
@@ -73,8 +105,12 @@ See the vendor's MCP configuration UI/documentation for the exact user- versus w
 Register the same stdio command with Claude Code's MCP command. The Claude Code MCP documentation supports a command plus arguments and environment variables:
 
 ```bash
-claude mcp add erga-mcp \
+claude mcp add \
   --env ERGA_MCP_CONFIG=/absolute/path/to/erga-mcp-config.toml \
+  --env ERGA_MCP_TOOL_PROFILE=career \
+  --scope project \
+  --transport stdio \
+  erga-mcp \
   -- uv --directory /absolute/path/to/erga-mcp run erga-mcp
 ```
 
@@ -89,7 +125,38 @@ args = ["--directory", "/absolute/path/to/erga-mcp", "run", "erga-mcp"]
 
 [mcp_servers.erga-mcp.env]
 ERGA_MCP_CONFIG = "/absolute/path/to/erga-mcp-config.toml"
+ERGA_MCP_TOOL_PROFILE = "career"
 ```
+
+Codex supports project-scoped `.codex/config.toml` in trusted projects. The generated entry also
+sets write-aware MCP approval behavior and longer startup/execution timeouts for job intake and
+local compilation.
+
+## OpenCode
+
+OpenCode V2 defines local stdio servers under `mcp.servers`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "erga-mcp": {
+        "type": "local",
+        "command": ["/absolute/path/to/erga-mcp"],
+        "cwd": "/absolute/path/to/resume-workspace",
+        "environment": {
+          "ERGA_MCP_CONFIG": "/absolute/path/to/erga-mcp-config.toml",
+          "ERGA_MCP_TOOL_PROFILE": "career"
+        }
+      }
+    }
+  }
+}
+```
+
+OpenCode provider authentication and model selection are independent of Erga. Use the model access
+already configured in OpenCode; never put provider credentials in the Erga MCP entry.
 
 ## VS Code
 
@@ -134,12 +201,18 @@ This mode is deliberately **not a remote deployment feature**. Do not bind it to
 
 ## Compatibility checks
 
-Erga maintains official Python MCP SDK checks for both a spawned stdio server from an installed wheel and a real ephemeral Streamable HTTP server. Every profile must discover `erga_capabilities` and `pipeline_status`, then call both without error. The `default` profile additionally exposes `intake_job_url`; narrowed profiles intentionally do not. Validate any additional client/runtime you adopt against a disposable synthetic configuration before connecting personal recruiting data.
+Erga maintains official Python MCP SDK checks for both a spawned stdio server from an installed
+wheel and a real ephemeral Streamable HTTP server. Every profile must discover
+`erga_capabilities` and `pipeline_status`, then call both without error. The `career` and `default`
+profiles expose `intake_job_url`; narrower research/read/write profiles intentionally do not.
+`erga_capabilities` reports `model_api_required: false`, `reasoning_host: mcp-client`, and the
+known client configuration targets.
 
 ## References
 
 - [MCP Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
-- [Claude Code MCP](https://docs.anthropic.com/en/docs/claude-code/mcp)
-- [Codex MCP](https://developers.openai.com/learn/docs-mcp)
+- [Claude Code MCP](https://code.claude.com/docs/en/mcp)
+- [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp)
+- [OpenCode MCP servers](https://opencode.ai/v2/docs/mcp-servers)
 - [VS Code MCP servers](https://code.visualstudio.com/docs/agent-customization/mcp-servers)
 - [Cursor MCP](https://docs.cursor.com/context/mcp)

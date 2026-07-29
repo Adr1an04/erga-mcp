@@ -26,6 +26,12 @@ class McpCapabilitiesTests(unittest.TestCase):
         self.assertEqual(result[1]["minimum_client_contract_version"], "1.0")
         self.assertEqual(result[1]["supported_transports"], ["stdio", "streamable-http"])
         self.assertEqual(result[1]["tool_profile"], "read")
+        self.assertFalse(result[1]["model_api_required"])
+        self.assertEqual(result[1]["reasoning_host"], "mcp-client")
+        self.assertEqual(
+            result[1]["supported_clients"],
+            ["codex", "claude-code", "opencode", "generic-mcp"],
+        )
         self.assertNotIn("/", repr(result[1]))
         self.assertNotIn("config", repr(result[1]).casefold())
 

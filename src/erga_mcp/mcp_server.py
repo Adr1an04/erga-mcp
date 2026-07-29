@@ -117,6 +117,27 @@ _LOCAL_WRITE_TOOL_NAMES = frozenset(
     }
 )
 _HERMES_TOOL_NAMES = frozenset({"sync_recruiting_mail", "install_mail_monitor_scripts"})
+_CAREER_TOOL_NAMES = frozenset(
+    {
+        "erga_capabilities",
+        "pipeline_status",
+        "list_applications",
+        "application_tracker",
+        "list_evidence",
+        "scrape_public_page",
+        "extract_public_page",
+        "intake_job_url",
+        "prepare_job_workspace",
+        "record_secondary_research",
+        "create_research_brief",
+        "record_deep_research",
+        "create_tailored_resume",
+        "validate_tailored_resume",
+        "cover_letter_style_context",
+        "create_cover_letter",
+        "export_data",
+    }
+)
 _ALL_TOOL_NAMES = frozenset(
     {
         *_READ_TOOL_NAMES,
@@ -129,6 +150,7 @@ _ALL_TOOL_NAMES = frozenset(
     }
 )
 _TOOL_PROFILES = {
+    "career": _CAREER_TOOL_NAMES,
     "default": _ALL_TOOL_NAMES,
     "read": _READ_TOOL_NAMES,
     "research": _READ_TOOL_NAMES | _NETWORK_READ_TOOL_NAMES,
@@ -141,7 +163,9 @@ def _selected_tool_profile(config: ErgaConfig, environment: Mapping[str, str]) -
     """Resolve a non-secret MCP capability profile, with environment taking precedence."""
     profile = environment.get("ERGA_MCP_TOOL_PROFILE", config.mcp.tool_profile).strip().casefold()
     if profile not in _TOOL_PROFILES:
-        raise ValueError("ERGA_MCP_TOOL_PROFILE must be default, read, research, write, or hermes")
+        raise ValueError(
+            "ERGA_MCP_TOOL_PROFILE must be career, default, read, research, write, or hermes"
+        )
     return profile
 
 
@@ -938,8 +962,10 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
     server = FastMCP(
         "Erga MCP",
         instructions=(
-            "When a user provides a job-posting URL, including a bare link or a link followed "
-            "by an unfurled preview, call intake_job_url first with the complete URL unchanged. "
+            "Erga is a client-neutral local workflow; the connected MCP host supplies all AI "
+            "reasoning and no separate model API is required. When a user provides a job-posting "
+            "URL, including a bare link or a link followed by an unfurled preview, call "
+            "intake_job_url first with the complete URL unchanged. "
             "Do not browse or summarize the posting before intake unless the user explicitly "
             "asks for summary-only behavior. pipeline_status/list_* are read-only; "
             "prepare_job_workspace is an advanced second-stage tool for callers that already "
@@ -967,10 +993,18 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             capability_classes.append("hermes-integration")
         if "intake_job_url" in enabled_tool_names:
             capability_classes.append("network-write")
-        return capabilities(
+        result = capabilities(
             tool_profile=selected_tool_profile,
             capability_classes=capability_classes,
         )
+        result.update(
+            {
+                "model_api_required": False,
+                "reasoning_host": "mcp-client",
+                "supported_clients": ["codex", "claude-code", "opencode", "generic-mcp"],
+            }
+        )
+        return result
 
     @profile_tool("pipeline_status", annotations=_READ_ONLY)
     def pipeline_status() -> dict[str, int]:

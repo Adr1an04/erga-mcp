@@ -15,6 +15,35 @@ from erga_mcp.store import ErgaStore
 
 
 class CliTests(unittest.TestCase):
+    def test_client_configure_writes_project_scoped_codex_entry_without_model_key(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "erga.toml"
+            main(["init", "--config", str(config_path)])
+            output = StringIO()
+
+            with redirect_stdout(output):
+                exit_code = main(
+                    [
+                        "client",
+                        "configure",
+                        "codex",
+                        "--config",
+                        str(config_path),
+                        "--project-dir",
+                        str(root),
+                        "--write",
+                    ]
+                )
+
+            payload = json.loads(output.getvalue())
+            generated = (root / ".codex" / "config.toml").read_text(encoding="utf-8")
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(payload["written"])
+            self.assertFalse(payload["model_api_required"])
+            self.assertIn('ERGA_MCP_TOOL_PROFILE = "career"', generated)
+            self.assertNotIn("API_KEY", generated)
+
     def test_init_creates_a_non_secret_config_and_local_database(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config" / "config.toml"

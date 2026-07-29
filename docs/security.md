@@ -16,6 +16,11 @@ Erga also offers an opt-in **loopback-only Streamable HTTP** mode for same-machi
 
 The example configuration passes one non-secret configuration-file path only. Do not pass tokens, a home-directory path, or a broad environment through the MCP configuration. Configure only the project and pipeline paths that the server needs.
 
+The generated Codex, Claude Code, and OpenCode configurations also select the `career` tool
+profile. This profile excludes mail synchronization, Hermes monitor installation, Git scanning,
+and model-token recording. Erga receives no model credential: the connected MCP client owns model
+authentication, entitlements, and token accounting.
+
 The server declares tool annotations so MCP clients can distinguish its capability classes:
 
 | Tools | Capability | Effect |

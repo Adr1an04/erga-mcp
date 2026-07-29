@@ -10,6 +10,14 @@ from dataclasses import asdict
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from .client_config import (
+    DEFAULT_SERVER_NAME,
+    DEFAULT_TOOL_PROFILE,
+    SUPPORTED_CLIENTS,
+    render_client_configuration,
+    resolve_server_command,
+    write_client_configuration,
+)
 from .config import DEFAULT_CONFIG, load_config
 from .contact_projection import project_recruiter_contacts
 from .cover_letter import create_cover_letter_proposal, load_style_context
@@ -82,6 +90,32 @@ def _parser() -> argparse.ArgumentParser:
     _config_argument(status)
     doctor = subcommands.add_parser("doctor", help="check core and optional local capabilities")
     _config_argument(doctor)
+
+    client = subcommands.add_parser(
+        "client",
+        help="configure a subscription-backed MCP client without a model API key",
+    )
+    client_commands = client.add_subparsers(dest="client_command", required=True)
+    client_configure = client_commands.add_parser(
+        "configure",
+        help="preview or write a project-scoped Codex, Claude Code, or OpenCode configuration",
+    )
+    client_configure.add_argument("client_name", choices=SUPPORTED_CLIENTS)
+    _config_argument(client_configure)
+    client_configure.add_argument("--project-dir", type=Path, default=Path.cwd())
+    client_configure.add_argument("--server-command", type=Path)
+    client_configure.add_argument("--server-arg", action="append", default=[])
+    client_configure.add_argument("--server-name", default=DEFAULT_SERVER_NAME)
+    client_configure.add_argument(
+        "--tool-profile",
+        choices=("career", "default", "read", "research", "write", "hermes"),
+        default=DEFAULT_TOOL_PROFILE,
+    )
+    client_configure.add_argument(
+        "--write",
+        action="store_true",
+        help="merge the generated server into the client project config; preview by default",
+    )
 
     evidence = subcommands.add_parser("evidence", help="manage local evidence records")
     evidence_commands = evidence.add_subparsers(dest="evidence_command", required=True)
@@ -443,6 +477,31 @@ def main(arguments: Sequence[str] | None = None) -> int:
 
     if args.command == "doctor":
         _print_json(asdict(check_installation(args.config)))
+        return 0
+    if args.command == "client" and args.client_command == "configure":
+        configuration = render_client_configuration(
+            args.client_name,
+            project_dir=args.project_dir,
+            config_path=args.config,
+            server_command=resolve_server_command(args.server_command),
+            server_args=tuple(args.server_arg),
+            server_name=args.server_name,
+            tool_profile=args.tool_profile,
+        )
+        if args.write:
+            _print_json(write_client_configuration(configuration))
+        else:
+            _print_json(
+                {
+                    "client": configuration.client,
+                    "content": configuration.content,
+                    "model_api_required": False,
+                    "server_name": configuration.server_name,
+                    "target_path": str(configuration.target_path),
+                    "tool_profile": configuration.tool_profile,
+                    "written": False,
+                }
+            )
         return 0
     if args.command == "mail" and args.mail_command == "configure":
         configured = update_mail_settings(

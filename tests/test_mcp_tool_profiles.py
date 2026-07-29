@@ -37,6 +37,19 @@ class McpToolProfileTests(unittest.TestCase):
 
         self.assertEqual(tool_names, _READ_TOOLS)
 
+    def test_career_profile_exposes_complete_job_workflow_without_mail_or_hermes(self) -> None:
+        tool_names = self._tool_names(self._config_with_profile("career"))
+
+        self.assertIn("erga_capabilities", tool_names)
+        self.assertIn("intake_job_url", tool_names)
+        self.assertIn("create_tailored_resume", tool_names)
+        self.assertIn("validate_tailored_resume", tool_names)
+        self.assertIn("create_cover_letter", tool_names)
+        self.assertNotIn("sync_recruiting_mail", tool_names)
+        self.assertNotIn("install_mail_monitor_scripts", tool_names)
+        self.assertNotIn("record_token_usage", tool_names)
+        self.assertNotIn("research_git_worktrees", tool_names)
+
     def test_research_profile_adds_only_network_read_tools(self) -> None:
         tool_names = self._tool_names(self._config_with_profile("research"))
 
