@@ -6,12 +6,29 @@
 git clone https://github.com/Adr1an04/erga-mcp.git
 cd erga-mcp
 uv sync --extra dev
-uv run erga init --config ~/.config/erga-mcp/config.toml
 ```
 
-The generated configuration and SQLite data directory live outside the repository. Do not place a personal vault path, tokens, or imports in Git.
+## 2. Run guided onboarding
 
-## 2. Choose local paths
+Choose the coding client that will supply the reasoning:
+
+```bash
+uv run erga onboard codex \
+  --project-dir /absolute/path/to/your/resume-workspace
+```
+
+Replace `codex` with `claude-code` or `opencode` when appropriate. This creates private local state,
+writes the native project MCP entry, runs health checks, and prints the exact verification prompt.
+It is safe to rerun and requires no model API key.
+
+Use `uv run erga init --config ~/.config/erga-mcp/config.toml` only for a CLI-only or fully manual
+installation. The generated configuration and SQLite data directory live outside the repository.
+Do not place a personal vault path, tokens, or imports in Git.
+
+See the focused [onboarding guide](onboarding.md) for created files, safe reruns, machine-readable
+output, and troubleshooting.
+
+## 3. Choose local paths
 
 Edit the generated configuration only on the local machine. `data_dir` and `vault_path` may be relative to that configuration file. Start with the vault path empty until an Obsidian adapter is installed.
 
@@ -37,7 +54,7 @@ When intake cannot infer a recruiting season from its URL-only input, it files t
 the neutral `unsorted` cycle rather than guessing from the current date. Callers that know the
 cycle can pass it explicitly. A successful LaTeX build is stored under the configured PDF filename.
 
-## 3. Use the local workflow
+## 4. Use the local workflow
 
 All state remains in the configured local SQLite database. Commands produce JSON suitable for review or scripting.
 
@@ -84,7 +101,7 @@ uv run erga zoho ingest-fixture \
   --fixture tests/fixtures/zoho_messages.json
 ```
 
-## 4. Connect Zoho Mail (read-only)
+## 5. Connect Zoho Mail (read-only)
 
 The live connector uses Zoho's **Mobile-based application** OAuth type, Authorization Code + PKCE,
 a fixed local redirect URI, and the operating system's credential store through Python `keyring`.
@@ -120,7 +137,7 @@ It requests only the read-only `ZohoMail.messages.READ`, `ZohoMail.folders.READ`
      --client-id '<client-id>'
    ```
 
-## 5. Connect Codex, Claude Code, or OpenCode
+## 6. Manually connect Codex, Claude Code, or OpenCode
 
 The coding client is the reasoning host. Erga never calls an LLM provider and does not require an
 OpenAI or Anthropic API key. This lets users run the workflow with whatever model access their
@@ -157,7 +174,7 @@ intake first unless the user explicitly asks for summary-only behavior.
 Client-specific file formats, manual snippets, and verification commands are documented in
 [`mcp-clients.md`](mcp-clients.md).
 
-## 6. Optional Hermes integration
+## 7. Optional Hermes integration
 
 ### Plug-and-play registration
 
@@ -291,11 +308,11 @@ without retrying.
 After upgrading the server code or changing its configuration, run `/reload-mcp` in the active
 Hermes session or restart the gateway so the long-running stdio process and tool inventory refresh.
 
-## 7. Add the workflow skill
+## 8. Add the workflow skill
 
 For a personal Hermes installation, tap this repository with `hermes skills tap add Adr1an04/erga-mcp`, then install `skills/productivity/erga-mcp/SKILL.md` through the chosen skill workflow. The skill contains workflow and safety policy only; it contains no integration code or credentials.
 
-## 8. Verify
+## 9. Verify
 
 ```bash
 uv run erga status --config ~/.config/erga-mcp/config.toml

@@ -15,6 +15,36 @@ from erga_mcp.store import ErgaStore
 
 
 class CliTests(unittest.TestCase):
+    def test_onboard_returns_machine_readable_ready_report(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "private" / "config.toml"
+            executable = root / "erga-mcp"
+            executable.write_text("", encoding="utf-8")
+            output = StringIO()
+
+            with redirect_stdout(output):
+                exit_code = main(
+                    [
+                        "onboard",
+                        "codex",
+                        "--config",
+                        str(config_path),
+                        "--project-dir",
+                        str(root),
+                        "--server-command",
+                        str(executable),
+                        "--json",
+                    ]
+                )
+
+            payload = json.loads(output.getvalue())
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(payload["status"], "ready")
+            self.assertTrue(payload["core_ready"])
+            self.assertFalse(payload["model_api_required"])
+            self.assertEqual(payload["tool_profile"], "career")
+
     def test_client_configure_writes_project_scoped_codex_entry_without_model_key(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

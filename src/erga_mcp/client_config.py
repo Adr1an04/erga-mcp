@@ -35,6 +35,9 @@ def resolve_server_command(explicit: Path | None = None) -> Path:
     discovered = shutil.which("erga-mcp")
     if discovered is not None:
         return Path(discovered).absolute()
+    launcher_sibling = Path(sys.argv[0]).resolve().parent / "erga-mcp"
+    if launcher_sibling.is_file():
+        return launcher_sibling
     sibling = Path(sys.executable).resolve().parent / "erga-mcp"
     if sibling.is_file():
         return sibling
@@ -264,6 +267,7 @@ def write_client_configuration(configuration: ClientConfiguration) -> dict[str, 
         )
     target.write_text(merged, encoding="utf-8")
     return {
+        "already_configured": False,
         "client": configuration.client,
         "model_api_required": False,
         "server_name": configuration.server_name,
@@ -271,3 +275,45 @@ def write_client_configuration(configuration: ClientConfiguration) -> dict[str, 
         "tool_profile": configuration.tool_profile,
         "written": True,
     }
+
+
+def _configured_server(configuration: ClientConfiguration, content: str) -> object:
+    if configuration.client == "codex":
+        document = tomllib.loads(content)
+        if not isinstance(document, dict):
+            return None
+        servers = document.get("mcp_servers", {})
+    else:
+        document = json.loads(content)
+        if not isinstance(document, dict):
+            return None
+        if configuration.client == "claude-code":
+            servers = document.get("mcpServers", {})
+        else:
+            mcp = document.get("mcp", {})
+            servers = mcp.get("servers", {}) if isinstance(mcp, dict) else {}
+    if not isinstance(servers, dict):
+        return None
+    return servers.get(configuration.server_name)
+
+
+def ensure_client_configuration(configuration: ClientConfiguration) -> dict[str, object]:
+    """Create an MCP entry or reuse an identical entry during idempotent onboarding."""
+    target = configuration.target_path
+    if target.exists():
+        existing_server = _configured_server(
+            configuration,
+            target.read_text(encoding="utf-8"),
+        )
+        generated_server = _configured_server(configuration, configuration.content)
+        if existing_server == generated_server:
+            return {
+                "already_configured": True,
+                "client": configuration.client,
+                "model_api_required": False,
+                "server_name": configuration.server_name,
+                "target_path": str(target),
+                "tool_profile": configuration.tool_profile,
+                "written": False,
+            }
+    return write_client_configuration(configuration)

@@ -27,6 +27,8 @@ Erga treats the MCP client as the reasoning host:
   Git-scanning, or token-recording capabilities.
 - `erga client configure` generates native project configuration for Codex, Claude Code, and
   OpenCode, previews by default, preserves unrelated settings, and refuses silent replacement.
+- `erga onboard` composes private initialization, idempotent project registration, health checks,
+  and a concrete first-use verification into one human-readable command.
 - Hermes plugins remain optional host-specific enhancements for pre-model routing, messaging
   attachments, and scheduled monitors.
 

@@ -48,6 +48,7 @@ from .job_discovery import discover_job_research
 from .mail_settings import as_json as mail_settings_as_json
 from .mail_settings import update_settings as update_mail_settings
 from .models import Application
+from .onboarding import onboard, render_onboarding_report
 from .reporting import render_history_digest
 from .resume import (
     create_job_package,
@@ -85,6 +86,20 @@ def _parser() -> argparse.ArgumentParser:
         "init", help="create a local non-secret configuration and database"
     )
     _config_argument(init)
+
+    onboarding = subcommands.add_parser(
+        "onboard",
+        help="set up Erga and one coding client in a single safe, repeatable command",
+    )
+    onboarding.add_argument("client_name", choices=SUPPORTED_CLIENTS)
+    _config_argument(onboarding)
+    onboarding.add_argument("--project-dir", type=Path, default=Path.cwd())
+    onboarding.add_argument("--server-command", type=Path)
+    onboarding.add_argument(
+        "--json",
+        action="store_true",
+        help="return the onboarding report as machine-readable JSON",
+    )
 
     status = subcommands.add_parser("status", help="show local pipeline counts")
     _config_argument(status)
@@ -453,6 +468,18 @@ def main(arguments: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(arguments)
     if args.command == "init":
         return _initialize(args.config)
+    if args.command == "onboard":
+        report = onboard(
+            args.client_name,
+            config_path=args.config,
+            project_dir=args.project_dir,
+            server_command=args.server_command,
+        )
+        if args.json:
+            _print_json(report.as_json())
+        else:
+            print(render_onboarding_report(report))
+        return 0
     if args.command == "zoho" and args.zoho_command == "set-client-secret":
         secret = getpass.getpass(
             "Zoho OAuth client secret (stored only in the OS credential store): "

@@ -10,7 +10,8 @@
 
   <p>
     <a href="#quick-start">Quick start</a> ·
-    <a href="#how-erga-works">How it works</a> ·
+    <a href="docs/onboarding.md">Onboarding</a> ·
+    <a href="#what-erga-does">What it does</a> ·
     <a href="docs/getting-started.md">Documentation</a> ·
     <a href="CONTRIBUTING.md">Contributing</a>
   </p>
@@ -69,49 +70,30 @@ cd erga-mcp
 uv sync
 ```
 
-Initialize a private local workspace and verify the installation:
+### Onboard your coding client
 
 ```bash
-uv run erga init
-uv run erga doctor
+# Choose codex, claude-code, or opencode.
+uv run erga onboard codex \
+  --project-dir /absolute/path/to/your/resume-workspace
 ```
 
-By default Erga creates:
+That one command:
 
-```text
-~/.config/erga-mcp/
-├── config.toml
-└── state/
-    └── erga.sqlite3
-```
+- creates or reuses Erga's private configuration and local database;
+- adds a project-scoped MCP entry using the focused `career` tool profile;
+- checks the local installation;
+- explains exactly how to restart, verify, and try the first job URL; and
+- remains safe to rerun without duplicating or silently replacing configuration.
 
-The configuration contains paths and feature settings, never credentials. Use
-`--config /absolute/path/to/config.toml` to select another location.
+No model API key is requested. Restart the selected client, open the configured project, and ask:
+**“Show my Erga pipeline status.”** Then paste a public job-posting URL.
 
-### Connect your existing coding-agent plan
+For a walkthrough of every file created, rerunning, existing configurations, and common errors,
+read the [onboarding guide](docs/onboarding.md). Advanced users can still preview and merge client
+configuration manually with `erga client configure`.
 
-Erga can generate and safely merge project-scoped MCP configuration for Codex, Claude Code, and
-OpenCode. Preview is the default; add `--write` after reviewing the target and generated content:
-
-```bash
-# Choose one client.
-uv run erga client configure codex --config ~/.config/erga-mcp/config.toml
-uv run erga client configure claude-code --config ~/.config/erga-mcp/config.toml
-uv run erga client configure opencode --config ~/.config/erga-mcp/config.toml
-
-# Then write the selected project configuration.
-uv run erga client configure codex \
-  --config ~/.config/erga-mcp/config.toml \
-  --project-dir /absolute/path/to/your/resume-workspace \
-  --write
-```
-
-The generated server uses Erga's `career` tool profile: complete job intake and review artifacts
-without mail synchronization, Hermes monitor tools, Git scanning, or model-token accounting.
-Restart the client, verify `pipeline_status`, and paste a job URL. Your client account determines
-which model and subscription allowance are used; Erga remains a deterministic local tool server.
-
-### Add evidence and a draft application
+### Optional: add evidence and a draft application
 
 ```bash
 uv run erga evidence add \
@@ -183,6 +165,7 @@ tests/                synthetic unit and MCP integration tests
 ## Documentation
 
 - [`docs/getting-started.md`](docs/getting-started.md) — full setup.
+- [`docs/onboarding.md`](docs/onboarding.md) — one-command setup and troubleshooting.
 - [`docs/mcp-clients.md`](docs/mcp-clients.md) — Codex, Claude Code, OpenCode, generic stdio, and loopback HTTP setup.
 - [`docs/security.md`](docs/security.md) — permissions and safety details.
 - [`docs/FUTURE.md`](docs/FUTURE.md) — ideas for later.
