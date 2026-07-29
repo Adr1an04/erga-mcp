@@ -973,7 +973,7 @@ def register(
         if not roots:
             default_root = os.getenv(_DEFAULT_GIT_RESEARCH_ROOT_ENV, "").strip()
             if not default_root:
-                return "Set ERGA_MCP_GIT_RESEARCH_ROOT or use: /erga-git-research <local-root>"
+                default_root = str(Path.home() / "hermesworkspace" / "projects")
             roots = [default_root]
         try:
             research = ctx.dispatch_tool(git_research_tool, {"roots": roots})

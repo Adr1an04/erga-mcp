@@ -509,8 +509,9 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertIn("needs review", response.casefold())
         self.assertNotIn("summary", response.casefold())
 
-    def test_git_research_command_uses_configured_default_root_without_arguments(self) -> None:
-        default_root = "/tmp/projects"
+    def test_git_research_command_defaults_to_the_current_users_projects_root(self) -> None:
+        home = Path("/tmp/people")
+        default_root = str(home / "hermesworkspace" / "projects")
         context = _FakePluginContext(
             result=json.dumps(
                 {
@@ -522,7 +523,10 @@ class HermesJobUrlRouterTests(unittest.TestCase):
                 }
             )
         )
-        with patch.dict(os.environ, {"ERGA_MCP_GIT_RESEARCH_ROOT": default_root}, clear=False):
+        with (
+            patch.dict(os.environ, {"ERGA_MCP_GIT_RESEARCH_ROOT": ""}, clear=False),
+            patch.object(Path, "home", return_value=home),
+        ):
             self.router.register(context)
             response = context.commands["erga-git-research"]("")
 
