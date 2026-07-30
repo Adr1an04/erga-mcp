@@ -82,7 +82,8 @@ The arrow-key wizard:
 - detects a maintained coding-CLI preset and verifies its existing subscription login;
 - connects Erga to the selected coding tool without asking for a model API key;
 - lets you drag in a multi-page PDF, DOCX, or LaTeX master résumé as approved factual knowledge
-  and, only as an explicit override, a separate résumé as a style-only reference;
+  and, only as an explicit override, a separate résumé as a style-only reference; both are copied
+  into hash-verified private Erga storage so later moving the originals does not break the workflow;
 - optionally connects a private Discord bot directly to that same coding tool; and
 - shows every selected action before writing configuration or credentials.
 

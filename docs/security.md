@@ -48,15 +48,23 @@ messaging, but policy text is not an operating-system sandbox.
 
 The master résumé selected during onboarding is an explicit user-approved factual source. Erga
 extracts every page locally and records the extracted text as approved evidence with a content
-hash. The optional second résumé is a style and layout reference only: it cannot become evidence
-for new claims. Erga never modifies either original file.
+hash. It also atomically copies the file into content-addressed private state, verifies the copy
+against that hash, and configures future reads against the managed copy. The optional second résumé
+is snapshotted the same way but remains a style and layout reference only: it cannot become evidence
+for new claims. Original paths are retained only in private provenance manifests. Erga never
+modifies either original file, and moving an original after setup does not break the managed copy.
+
+On operating systems with POSIX permissions, managed résumé directories are restricted to the
+current user and snapshot/manifest files are created with owner-only access. A dragged `.tex` file
+is not automatically treated as a complete editable template project because copying one file
+cannot safely capture arbitrary local TeX dependencies.
 
 The server declares tool annotations so MCP clients can distinguish its capability classes:
 
 | Tools | Capability | Effect |
 | --- | --- | --- |
 | `pipeline_status`, `list_applications`, `list_evidence`, `list_mail_events` | read-only | Reads local SQLite state only. |
-| `resume_source_context` | read-only | Reads the explicitly configured local master and optional style résumé; performs no network access or writes. |
+| `resume_source_context` | read-only | Reads the configured managed master and optional style snapshots; performs no network access or writes. |
 | `intake_job_url` | network-read + local-write + local-exec | Fetches one validated public job URL; creates or upgrades a local package, deterministically reorders existing user-provided résumé content, compiles and page-validates the proposal, and writes cited research, an application record, and a configured Obsidian tracker note. |
 | `record_secondary_research` | local-write | Stores bounded host-provided search results for an existing job package; results are labeled unverified and separated from official-posting facts. |
 | `prepare_job_workspace` | network-read + local-write | Fetches a job URL and creates configured local package/tracker artifacts. |

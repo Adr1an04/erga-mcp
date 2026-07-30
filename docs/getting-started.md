@@ -25,10 +25,13 @@ found on `PATH` or inside the ChatGPT/Codex desktop application on macOS.
 
 When résumé generation is selected, drag the complete master PDF, DOCX, or `.tex` file directly
 into the terminal. It may span many pages: Erga extracts all of its text as user-approved factual
-knowledge. You may then drag in a separate résumé as an optional style template. If you decline,
-Erga uses its recommended one-page preferences. Only provide the optional template when you are
-confident its layout should override those defaults for generated résumés. Quoted and shell-escaped
-dropped paths are normalized, and the application output folder is selected automatically.
+knowledge and creates a hash-verified copy in private Erga state. You may then drag in a separate
+résumé as an optional style reference, which is snapshotted but never treated as factual evidence.
+If you decline, Erga uses its recommended one-page preferences. Only provide the optional
+reference when you are confident its layout should override those defaults for generated résumés.
+Quoted and shell-escaped dropped paths are normalized, and the application output folder is
+selected automatically. Future reads use the managed snapshots, so moving the original files does
+not break the workflow.
 
 For a noninteractive coding-client-only setup:
 
@@ -67,6 +70,9 @@ uv run erga resume settings set \
   --bullet-max-chars 116 \
   --max-pages 1
 ```
+
+Manual `resume settings set` values are explicit live paths and are not copied automatically.
+Guided drag-and-drop setup is the managed-import path for master knowledge and style references.
 
 When intake cannot infer a recruiting season from its URL-only input, it files the package under
 the neutral `unsorted` cycle rather than guessing from the current date. Callers that know the

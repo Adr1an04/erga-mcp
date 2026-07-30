@@ -29,6 +29,7 @@ from .resume_sources import (
     SUPPORTED_RESUME_SUFFIXES,
     import_master_resume,
     load_resume_source,
+    snapshot_resume_source,
 )
 from .store import ErgaStore
 
@@ -312,8 +313,8 @@ def collect_setup_selections(
         questionary.print(
             "\nResume setup\n"
             "Drag your complete master resume into this window, then press Enter. It may span "
-            "many pages. Erga extracts every page as user-approved factual knowledge and never "
-            "modifies the original file.",
+            "many pages. Erga extracts every page as user-approved factual knowledge, creates a "
+            "hash-verified private copy, and never modifies the original file.",
             style="fg:#e0aa55",
         )
         master_resume = _normalize_dropped_path(
@@ -508,18 +509,28 @@ def apply_setup(
         else:
             assert master_source is not None
             config = load_config(selections.config_path)
+            original_master_name = master_source.path.name
+            master_source = snapshot_resume_source(
+                master_source,
+                data_dir=config.data_dir,
+                role="master",
+            )
+            if style_source is not None:
+                style_source = snapshot_resume_source(
+                    style_source,
+                    data_dir=config.data_dir,
+                    role="style",
+                )
             evidence = import_master_resume(
                 ErgaStore(config.data_dir / "erga.sqlite3"),
                 master_source,
+                source_name=original_master_name,
             )
             selections.output_root.mkdir(parents=True, exist_ok=True)
             update_settings(
                 selections.config_path,
                 {
                     "master_path": str(master_source.path),
-                    "template_path": (
-                        str(master_source.path) if master_source.format == "tex" else ""
-                    ),
                     "reference_path": str(style_source.path) if style_source else "",
                     "output_root": str(selections.output_root),
                     "editable_sections": ["Experience", "Projects", "Technical-Skills"],
@@ -529,9 +540,14 @@ def apply_setup(
                 },
             )
             resume_configured = True
-            completed.append("Master resume knowledge")
+            completed.append("Managed master resume knowledge")
             if style_source is not None:
-                completed.append("Resume style preferences")
+                completed.append("Managed resume style preferences")
+            if config.resume.template_path is None:
+                next_steps.append(
+                    "Configure an editable LaTeX template separately before generating compiled "
+                    "resume proposals; dragged source files are durable knowledge/style snapshots."
+                )
             next_steps.append(
                 "Ask your coding AI to read `resume_source_context` before drafting a resume; "
                 f"the master source is approved evidence {evidence.id}."

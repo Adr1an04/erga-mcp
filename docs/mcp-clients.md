@@ -253,7 +253,8 @@ profiles expose `intake_job_url`; narrower research/read/write profiles intentio
 `erga_capabilities` reports `model_api_required: false`, `reasoning_host: mcp-client`, and the
 known client configuration targets. When onboarding has imported a master résumé,
 `resume_source_context` returns all extracted master pages as user-approved factual context and
-labels the optional second résumé as style-only.
+labels the optional second résumé as style-only. Both inputs are read from hash-verified managed
+snapshots, so moving the originally dragged files does not invalidate future calls.
 
 ## References
 

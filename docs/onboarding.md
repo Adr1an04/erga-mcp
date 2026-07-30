@@ -33,7 +33,8 @@ missing or signed out—before asking for résumé files or Discord credentials.
 For résumé generation, no manual path navigation is required:
 
 1. Drag the complete master PDF, DOCX, or `.tex` file into the terminal and press Enter. A
-   multi-page master is expected: Erga extracts every page as user-approved factual knowledge.
+   multi-page master is expected: Erga extracts every page as user-approved factual knowledge and
+   creates a hash-verified private snapshot.
 2. Keep **No**—the recommended default—unless you are confident another résumé's page length,
    section order, and density are better and should define every generated résumé.
 3. Only in that case, answer **Yes** and drag it in as an explicit style override.
@@ -42,6 +43,16 @@ Quoted paths and the backslash-escaped spaces inserted by terminal file drops ar
 automatically. Erga chooses `<workspace>/erga-applications` as the output directory, so onboarding
 does not ask a new user to make that implementation decision. The optional style résumé is a
 formatting reference only and cannot introduce factual claims.
+
+Both submitted files are copied under the private Erga state directory using their SHA-256 content
+hash. Configuration points to those managed copies, so the originals may later be renamed, moved,
+or removed without breaking `resume_source_context`. Erga records the original path only in a
+private provenance manifest and never modifies the original.
+
+A dragged `.tex` master is imported as durable factual knowledge, not silently assumed to be a
+complete editable template project. LaTeX documents may depend on nearby images, macros, fonts, or
+other files, so configure `template_path` separately to a template bundle you intend Erga to use
+for compiled proposals.
 
 An advanced **Other MCP-capable coding CLI** option accepts an executable and a JSON argument
 template. Erga executes that array directly without a shell and substitutes standalone
@@ -113,8 +124,10 @@ template before expecting a compiled tailored PDF.
 | Private database | `~/.config/erga-mcp/state/erga.sqlite3` |
 | Native Discord settings | `~/.config/erga-mcp/discord-bridge.json` |
 | Discord bot token | Operating-system credential store |
-| Master résumé | User-selected local PDF, DOCX, or `.tex`; extracted as approved knowledge |
-| Optional style template | User-selected local PDF, DOCX, or `.tex`; never factual evidence |
+| Managed résumé snapshots | `~/.config/erga-mcp/state/resume-sources/<sha256>/` |
+| Master résumé | Hash-verified private copy; extracted as approved knowledge |
+| Optional style résumé | Hash-verified private copy; never factual evidence |
+| Snapshot provenance | Private `master.json` / `style.json` beside each managed copy |
 | Codex project entry | `<project>/.codex/config.toml` |
 | Claude Code project entry | `<project>/.mcp.json` |
 | OpenCode project entry | `<project>/opencode.json` |

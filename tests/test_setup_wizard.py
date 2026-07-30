@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from erga_mcp.config import load_config
+from erga_mcp.resume_sources import resume_source_context
 from erga_mcp.setup_wizard import (
     SetupSelections,
     _master_resume_file,
@@ -60,9 +61,24 @@ class SetupWizardTests(unittest.TestCase):
             config = load_config(selections.config_path)
             self.assertEqual(report.status, "ready")
             self.assertTrue(report.resume_configured)
-            self.assertEqual(config.resume.master_path, resume)
-            self.assertEqual(config.resume.template_path, resume)
-            self.assertEqual(config.resume.reference_path, reference)
+            self.assertNotEqual(config.resume.master_path, resume)
+            self.assertIsNotNone(config.resume.master_path)
+            self.assertTrue(
+                config.resume.master_path.is_relative_to(config.data_dir / "resume-sources")
+            )
+            self.assertIsNone(config.resume.template_path)
+            self.assertIsNotNone(config.resume.reference_path)
+            self.assertTrue(
+                config.resume.reference_path.is_relative_to(config.data_dir / "resume-sources")
+            )
+            resume.unlink()
+            reference.unlink()
+            context = resume_source_context(
+                master_path=config.resume.master_path,
+                reference_path=config.resume.reference_path,
+            )
+            self.assertIn("\\documentclass", context["master"]["text"])  # type: ignore[index]
+            self.assertIsNotNone(context["style_reference"])
             self.assertTrue((root / ".codex" / "config.toml").is_file())
 
     def test_missing_client_stops_before_workspace_resume_or_discord_questions(self) -> None:
@@ -165,11 +181,17 @@ class SetupWizardTests(unittest.TestCase):
             config = load_config(selections.config_path)
             evidence = ErgaStore(config.data_dir / "erga.sqlite3").list_evidence()
             self.assertTrue(report.resume_configured)
-            self.assertEqual(config.resume.master_path, master)
+            self.assertNotEqual(config.resume.master_path, master)
+            self.assertIsNotNone(config.resume.master_path)
+            self.assertTrue(
+                config.resume.master_path.is_relative_to(config.data_dir / "resume-sources")
+            )
+            self.assertEqual(config.resume.master_path.read_bytes(), b"%PDF synthetic")
             self.assertIsNone(config.resume.template_path)
             self.assertEqual(config.resume.max_pages, 1)
             self.assertEqual(len(evidence), 1)
             self.assertTrue(evidence[0].approved)
+            self.assertTrue(evidence[0].source_ref.endswith(":Complete Master Resume.pdf"))
             self.assertIn("Additional master resume page", evidence[0].text)
 
     def test_master_and_optional_style_formats_accept_typical_resume_files(self) -> None:
