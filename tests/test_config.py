@@ -62,7 +62,9 @@ accounts_url = "https://accounts.zoho.eu"
             config_path.write_text(
                 """
 [resume]
+master_path = "sources/master.pdf"
 template_path = "templates/master.tex"
+reference_path = "references/current.pdf"
 editable_sections = ["experience", "projects"]
 bullet_min_chars = 90
 bullet_target_chars = 105
@@ -75,8 +77,12 @@ latexmk = "latexmk"
 
             config = load_config(config_path)
 
+            self.assertEqual(config.resume.master_path, config_path.parent / "sources/master.pdf")
             self.assertEqual(
                 config.resume.template_path, config_path.parent / "templates/master.tex"
+            )
+            self.assertEqual(
+                config.resume.reference_path, config_path.parent / "references/current.pdf"
             )
             self.assertEqual(config.resume.editable_sections, ("experience", "projects"))
             self.assertEqual(config.resume.bullet_min_chars, 90)

@@ -31,8 +31,12 @@ class ResumeSettingsCliTests(unittest.TestCase):
                     "set",
                     "--config",
                     str(config),
+                    "--master-path",
+                    "sources/master.pdf",
                     "--template-path",
                     "templates/master.tex",
+                    "--reference-path",
+                    "references/current.pdf",
                     "--editable-section",
                     "experience",
                     "--editable-section",
@@ -54,13 +58,17 @@ class ResumeSettingsCliTests(unittest.TestCase):
 
             settings = self._json_command(["resume", "settings", "show", "--config", str(config)])
 
+            self.assertEqual(settings["master_path"], str(root / "sources/master.pdf"))
             self.assertEqual(settings["template_path"], str(root / "templates/master.tex"))
+            self.assertEqual(settings["reference_path"], str(root / "references/current.pdf"))
             self.assertEqual(settings["editable_sections"], ["experience", "projects"])
             self.assertEqual(settings["bullet_target_chars"], 105)
             self.assertEqual(settings["output_root"], str(root / "applications"))
             self.assertEqual(settings["output_pdf_name"], "Candidate_Resume.pdf")
             stored_config = config.read_text(encoding="utf-8")
+            self.assertIn('master_path = "sources/master.pdf"', stored_config)
             self.assertIn('template_path = "templates/master.tex"', stored_config)
+            self.assertIn('reference_path = "references/current.pdf"', stored_config)
             self.assertIn('output_root = "applications"', stored_config)
             self.assertIn('output_pdf_name = "Candidate_Resume.pdf"', stored_config)
 

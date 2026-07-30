@@ -25,6 +25,19 @@ writing configuration. This catches expired or revoked sessions that can still a
 The final review shows the workspace, private config location, and selected components. Canceling
 before confirmation makes no changes.
 
+For résumé generation, no manual path navigation is required:
+
+1. Drag the complete master PDF, DOCX, or `.tex` file into the terminal and press Enter. A
+   multi-page master is expected: Erga extracts every page as user-approved factual knowledge.
+2. Keep **No**—the recommended default—unless you are confident another résumé's page length,
+   section order, and density are better and should define every generated résumé.
+3. Only in that case, answer **Yes** and drag it in as an explicit style override.
+
+Quoted paths and the backslash-escaped spaces inserted by terminal file drops are normalized
+automatically. Erga chooses `<workspace>/erga-applications` as the output directory, so onboarding
+does not ask a new user to make that implementation decision. The optional style résumé is a
+formatting reference only and cannot introduce factual claims.
+
 An advanced **Other MCP-capable coding CLI** option accepts an executable and a JSON argument
 template. Erga executes that array directly without a shell and substitutes standalone
 `{prompt}`, `{project_dir}`, and `{output_path}` entries. It generates portable project
@@ -95,6 +108,8 @@ template before expecting a compiled tailored PDF.
 | Private database | `~/.config/erga-mcp/state/erga.sqlite3` |
 | Native Discord settings | `~/.config/erga-mcp/discord-bridge.json` |
 | Discord bot token | Operating-system credential store |
+| Master résumé | User-selected local PDF, DOCX, or `.tex`; extracted as approved knowledge |
+| Optional style template | User-selected local PDF, DOCX, or `.tex`; never factual evidence |
 | Codex project entry | `<project>/.codex/config.toml` |
 | Claude Code project entry | `<project>/.mcp.json` |
 | OpenCode project entry | `<project>/opencode.json` |

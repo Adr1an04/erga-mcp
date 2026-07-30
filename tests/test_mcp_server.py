@@ -176,6 +176,7 @@ class McpServerTests(unittest.TestCase):
                 {
                     "erga_capabilities",
                     "pipeline_status",
+                    "resume_source_context",
                     "list_applications",
                     "application_tracker",
                     "list_evidence",
@@ -202,6 +203,7 @@ class McpServerTests(unittest.TestCase):
             )
             for name in {
                 "pipeline_status",
+                "resume_source_context",
                 "list_applications",
                 "application_tracker",
                 "list_evidence",
@@ -388,6 +390,26 @@ class McpServerTests(unittest.TestCase):
 
         self.assertEqual(len(factory.paths), 1)
         self.assertEqual(factory.paths[0].name, "erga.sqlite3")
+
+    def test_resume_source_context_exposes_master_as_factual_and_default_style(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master = root / "master.tex"
+            master.write_text("Complete factual master resume", encoding="utf-8")
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace('master_path = ""', 'master_path = "master.tex"'),
+                encoding="utf-8",
+            )
+            server = build_server(config_path)
+
+            result: Any = asyncio.run(server.call_tool("resume_source_context", {}))
+            payload = cast(dict[str, Any], result[1])
+
+            self.assertEqual(payload["master"]["text"], "Complete factual master resume")
+            self.assertTrue(payload["master"]["user_approved_source"])
+            self.assertIsNone(payload["style_reference"])
+            self.assertEqual(payload["preferences"]["source"], "erga-default")
 
     def test_hermes_monitor_tool_prepares_scripts_without_creating_delivery_jobs(self) -> None:
         with TemporaryDirectory() as directory:

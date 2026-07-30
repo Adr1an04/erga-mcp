@@ -81,7 +81,8 @@ The arrow-key wizard:
 
 - detects a maintained coding-CLI preset and verifies its existing subscription login;
 - connects Erga to the selected coding tool without asking for a model API key;
-- optionally configures your master LaTeX résumé and output directory;
+- lets you drag in a multi-page PDF, DOCX, or LaTeX master résumé as approved factual knowledge
+  and, only as an explicit override, a separate résumé as a style-only reference;
 - optionally connects a private Discord bot directly to that same coding tool; and
 - shows every selected action before writing configuration or credentials.
 
@@ -142,6 +143,7 @@ Core MCP tools include:
 | Tool | Behavior |
 | --- | --- |
 | `pipeline_status` | Read local record counts |
+| `resume_source_context` | Read every page of the approved master and style-only preferences |
 | `list_applications` | Read local application records |
 | `application_tracker` | Render the configured local Obsidian tracker as a compact, read-only message card |
 | `list_evidence` | Read local evidence records |

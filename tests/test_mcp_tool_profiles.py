@@ -13,6 +13,7 @@ from erga_mcp.mcp_server import build_server
 _READ_TOOLS = {
     "erga_capabilities",
     "pipeline_status",
+    "resume_source_context",
     "list_applications",
     "application_tracker",
     "list_evidence",

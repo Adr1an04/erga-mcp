@@ -20,6 +20,13 @@ creates private local state; writes the native project MCP entry; and optionally
 résumé workflow and native Discord bridge. It is safe to rerun and requires no model API key or
 Hermes installation for maintained subscription-backed adapters.
 
+When résumé generation is selected, drag the complete master PDF, DOCX, or `.tex` file directly
+into the terminal. It may span many pages: Erga extracts all of its text as user-approved factual
+knowledge. You may then drag in a separate résumé as an optional style template. If you decline,
+Erga uses its recommended one-page preferences. Only provide the optional template when you are
+confident its layout should override those defaults for generated résumés. Quoted and shell-escaped
+dropped paths are normalized, and the application output folder is selected automatically.
+
 For a noninteractive coding-client-only setup:
 
 ```bash
@@ -44,7 +51,9 @@ connecting an agent; neither path is committed to the repository:
 ```bash
 uv run erga resume settings set \
   --config ~/.config/erga-mcp/config.toml \
+  --master-path /absolute/path/to/master-resume.pdf \
   --template-path /absolute/path/to/resume.tex \
+  --reference-path /absolute/path/to/current-resume.pdf \
   --output-root /absolute/path/to/erga-applications \
   --output-pdf-name Candidate_Resume.pdf \
   --editable-section Experience \
@@ -214,6 +223,7 @@ Hermes exposes tools prefixed with `mcp__erga_mcp__`:
 **Read-only context**
 
 - `pipeline_status`
+- `resume_source_context`
 - `list_applications`
 - `list_evidence`
 - `list_mail_events`

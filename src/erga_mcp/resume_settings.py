@@ -11,7 +11,9 @@ from .config import ResumeSettings, load_config
 
 def as_json(settings: ResumeSettings) -> dict[str, object]:
     result = asdict(settings)
+    result["master_path"] = str(settings.master_path) if settings.master_path else None
     result["template_path"] = str(settings.template_path) if settings.template_path else None
+    result["reference_path"] = str(settings.reference_path) if settings.reference_path else None
     result["output_root"] = str(settings.output_root)
     result["editable_sections"] = list(settings.editable_sections)
     return result
@@ -23,7 +25,9 @@ def update_settings(config_path: Path, updates: dict[str, object]) -> ResumeSett
     raw = config_path.read_text(encoding="utf-8")
     current = load_config(config_path).resume
     values: dict[str, object] = {
+        "master_path": str(current.master_path) if current.master_path else "",
         "template_path": str(current.template_path) if current.template_path else "",
+        "reference_path": str(current.reference_path) if current.reference_path else "",
         "editable_sections": list(current.editable_sections),
         "bullet_min_chars": current.bullet_min_chars,
         "bullet_target_chars": current.bullet_target_chars,
@@ -37,7 +41,9 @@ def update_settings(config_path: Path, updates: dict[str, object]) -> ResumeSett
     table = "\n".join(
         [
             "[resume]",
+            f"master_path = {json.dumps(values['master_path'])}",
             f"template_path = {json.dumps(values['template_path'])}",
+            f"reference_path = {json.dumps(values['reference_path'])}",
             f"editable_sections = {json.dumps(values['editable_sections'])}",
             f"bullet_min_chars = {values['bullet_min_chars']}",
             f"bullet_target_chars = {values['bullet_target_chars']}",

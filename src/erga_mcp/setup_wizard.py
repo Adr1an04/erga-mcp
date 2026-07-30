@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
@@ -12,6 +14,7 @@ import questionary
 from questionary import Choice
 
 from .client_adapters import CLIENT_ADAPTERS, PRESET_CLIENTS, ClientName
+from .config import load_config
 from .discord_bridge import (
     DiscordBridgeSettings,
     resolve_client_command,
@@ -22,6 +25,12 @@ from .discord_bridge import (
 )
 from .onboarding import onboard
 from .resume_settings import update_settings
+from .resume_sources import (
+    SUPPORTED_RESUME_SUFFIXES,
+    import_master_resume,
+    load_resume_source,
+)
+from .store import ErgaStore
 
 Feature = Literal["resume", "discord"]
 Experience = Literal["full", "local", "custom"]
@@ -38,7 +47,8 @@ class SetupSelections:
     project_dir: Path
     config_path: Path
     features: tuple[Feature, ...]
-    resume_template: Path | None = None
+    master_resume: Path | None = None
+    style_resume: Path | None = None
     output_root: Path | None = None
     client_command: Path | None = None
     custom_arguments: tuple[str, ...] = ()
@@ -69,10 +79,37 @@ def _existing_directory(value: str) -> bool | str:
     return True if Path(value).expanduser().is_dir() else "Choose an existing directory."
 
 
-def _existing_file_or_blank(value: str) -> bool | str:
-    if not value.strip() or Path(value).expanduser().is_file():
-        return True
-    return "Choose an existing LaTeX resume, or leave this blank."
+def _normalize_dropped_path(value: str) -> Path:
+    """Normalize quoted or shell-escaped paths inserted by terminal file drops."""
+    entered = value.strip()
+    if len(entered) >= 2 and entered[0] == entered[-1] and entered[0] in {'"', "'"}:
+        entered = entered[1:-1]
+    if os.name != "nt":
+        try:
+            parsed = shlex.split(entered)
+        except ValueError:
+            parsed = []
+        if len(parsed) == 1:
+            entered = parsed[0]
+    return Path(entered).expanduser().absolute()
+
+
+def _master_resume_file(value: str) -> bool | str:
+    path = _normalize_dropped_path(value)
+    if not path.is_file():
+        return "Drag an existing master resume file into this window."
+    if path.suffix.casefold() not in SUPPORTED_RESUME_SUFFIXES:
+        return "Use a PDF, DOCX, or LaTeX (.tex) file as the master resume."
+    return True
+
+
+def _style_resume_file(value: str) -> bool | str:
+    path = _normalize_dropped_path(value)
+    if not path.is_file():
+        return "Drag an existing resume file into this window."
+    if path.suffix.casefold() not in SUPPORTED_RESUME_SUFFIXES:
+        return "Use a PDF, DOCX, or LaTeX (.tex) resume as the style template."
+    return True
 
 
 def _parse_discord_identities(value: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
@@ -245,32 +282,57 @@ def collect_setup_selections(
             )
         )
 
-    resume_template: Path | None = None
+    master_resume: Path | None = None
+    style_resume: Path | None = None
     output_root: Path | None = None
     if "resume" in features:
-        entered = str(
+        questionary.print(
+            "\nResume setup\n"
+            "Drag your complete master resume into this window, then press Enter. It may span "
+            "many pages. Erga extracts every page as user-approved factual knowledge and never "
+            "modifies the original file.",
+            style="fg:#e0aa55",
+        )
+        master_resume = _normalize_dropped_path(
+            str(
+                _required(
+                    questionary.text(
+                        "Drop your master resume (PDF, DOCX, or .tex) here:",
+                        validate=_master_resume_file,
+                    ).ask()
+                )
+            )
+        )
+        output_root = (project_dir / "erga-applications").absolute()
+        questionary.print(
+            "Erga's built-in one-page style is the recommended choice. Only provide another "
+            "resume if you are confident its layout is how every generated resume should look.",
+            style="fg:#aaaaaa",
+        )
+        has_separate_reference = bool(
             _required(
-                questionary.path(
-                    "Master LaTeX resume (blank to configure later):",
-                    validate=_existing_file_or_blank,
+                questionary.confirm(
+                    "Override Erga's recommended style with your own template resume?",
+                    default=False,
                 ).ask()
             )
-        ).strip()
-        if entered:
-            resume_template = Path(entered).expanduser().absolute()
-            output_root = (
-                Path(
-                    str(
-                        _required(
-                            questionary.path(
-                                "Application output directory:",
-                                default=str(project_dir / "erga-applications"),
-                            ).ask()
-                        )
+        )
+        if has_separate_reference:
+            questionary.print(
+                "Drag the resume whose page length, section order, and density best represent "
+                "the final result you confidently want. This explicitly overrides Erga's "
+                "recommended defaults, but can never add factual claims.",
+                style="fg:#aaaaaa",
+            )
+            style_resume = _normalize_dropped_path(
+                str(
+                    _required(
+                        questionary.text(
+                            "Drop the optional style resume (PDF, DOCX, or .tex) here:",
+                            validate=_style_resume_file,
+                        ).ask()
                     )
                 )
-                .expanduser()
-                .absolute()
             )
 
     discord_token: str | None = None
@@ -317,7 +379,8 @@ def collect_setup_selections(
         project_dir=project_dir,
         config_path=default_config_path.expanduser().absolute(),
         features=features,
-        resume_template=resume_template,
+        master_resume=master_resume,
+        style_resume=style_resume,
         output_root=output_root,
         client_command=client_command,
         custom_arguments=custom_arguments,
@@ -342,7 +405,13 @@ def render_setup_review(selections: SetupSelections) -> str:
         f"  Components:      {', '.join(selections.features)}",
     ]
     if "resume" in selections.features:
-        lines.append(f"  Resume template: {selections.resume_template or 'configure later'}")
+        lines.extend(
+            [
+                f"  Master knowledge: {selections.master_resume or 'configure later'}",
+                f"  Style template:  {selections.style_resume or 'Erga default (recommended)'}",
+                f"  Resume output:   {selections.output_root or 'configure later'}",
+            ]
+        )
     if "discord" in selections.features:
         lines.extend(
             [
@@ -371,6 +440,20 @@ def apply_setup(
     client_command: Path | None = None,
 ) -> SetupReport:
     """Apply reviewed selections using the existing coding-agent subscription."""
+    master_source = None
+    style_source = None
+    if (
+        "resume" in selections.features
+        and selections.master_resume is not None
+        and selections.output_root is not None
+    ):
+        master_source = load_resume_source(selections.master_resume)
+        style_source = (
+            load_resume_source(selections.style_resume)
+            if selections.style_resume is not None
+            else None
+        )
+
     explicit_client = client_command or selections.client_command
     resolved_client = resolve_client_command(selections.client, explicit_client)
     logged_in, login_detail = verify_subscription_login(
@@ -394,21 +477,39 @@ def apply_setup(
 
     resume_configured = False
     if "resume" in selections.features:
-        if selections.resume_template is None or selections.output_root is None:
-            next_steps.append("Add your master LaTeX resume with `erga resume settings set`.")
+        if selections.master_resume is None or selections.output_root is None:
+            next_steps.append("Add your master resume with `erga resume settings set`.")
         else:
+            assert master_source is not None
+            config = load_config(selections.config_path)
+            evidence = import_master_resume(
+                ErgaStore(config.data_dir / "erga.sqlite3"),
+                master_source,
+            )
             selections.output_root.mkdir(parents=True, exist_ok=True)
             update_settings(
                 selections.config_path,
                 {
-                    "template_path": str(selections.resume_template),
+                    "master_path": str(master_source.path),
+                    "template_path": (
+                        str(master_source.path) if master_source.format == "tex" else ""
+                    ),
+                    "reference_path": str(style_source.path) if style_source else "",
                     "output_root": str(selections.output_root),
                     "editable_sections": ["Experience", "Projects", "Technical-Skills"],
-                    "max_pages": 1,
+                    "max_pages": (
+                        style_source.page_count if style_source and style_source.page_count else 1
+                    ),
                 },
             )
             resume_configured = True
-            completed.append("Resume generation")
+            completed.append("Master resume knowledge")
+            if style_source is not None:
+                completed.append("Resume style preferences")
+            next_steps.append(
+                "Ask your coding AI to read `resume_source_context` before drafting a resume; "
+                f"the master source is approved evidence {evidence.id}."
+            )
 
     discord_configured = False
     discord_running = False
@@ -470,7 +571,8 @@ def write_setup_plan(selections: SetupSelections) -> str:
     for key in (
         "project_dir",
         "config_path",
-        "resume_template",
+        "master_resume",
+        "style_resume",
         "output_root",
         "client_command",
     ):

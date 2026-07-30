@@ -1,19 +1,25 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from erga_mcp.config import load_config
 from erga_mcp.setup_wizard import (
     SetupSelections,
+    _master_resume_file,
+    _normalize_dropped_path,
     _parse_discord_identities,
+    _style_resume_file,
     apply_setup,
     render_setup_review,
     write_setup_plan,
 )
+from erga_mcp.store import ErgaStore
 
 
 class SetupWizardTests(unittest.TestCase):
@@ -27,13 +33,16 @@ class SetupWizardTests(unittest.TestCase):
             root = Path(directory)
             resume = root / "resume.tex"
             resume.write_text("\\documentclass{article}\n", encoding="utf-8")
+            reference = root / "Current Resume.tex"
+            reference.write_text("\\documentclass{article}\n", encoding="utf-8")
             selections = SetupSelections(
                 experience="local",
                 client="codex",
                 project_dir=root,
                 config_path=root / "private" / "config.toml",
                 features=("resume",),
-                resume_template=resume,
+                master_resume=resume,
+                style_resume=reference,
                 output_root=root / "applications",
             )
 
@@ -50,8 +59,79 @@ class SetupWizardTests(unittest.TestCase):
             config = load_config(selections.config_path)
             self.assertEqual(report.status, "ready")
             self.assertTrue(report.resume_configured)
+            self.assertEqual(config.resume.master_path, resume)
             self.assertEqual(config.resume.template_path, resume)
+            self.assertEqual(config.resume.reference_path, reference)
             self.assertTrue((root / ".codex" / "config.toml").is_file())
+
+    def test_dragged_resume_paths_accept_quotes_and_escaped_spaces(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            resume = root / "Master Resume.tex"
+            resume.write_text("\\documentclass{article}\n", encoding="utf-8")
+
+            self.assertEqual(_normalize_dropped_path(f'"{resume}"'), resume.absolute())
+            if os.name != "nt":
+                escaped = str(resume).replace(" ", r"\ ")
+                self.assertEqual(_normalize_dropped_path(escaped), resume.absolute())
+
+    def test_pdf_master_becomes_approved_knowledge_without_becoming_the_latex_template(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master = root / "Complete Master Resume.pdf"
+            master.write_bytes(b"%PDF synthetic")
+            selections = SetupSelections(
+                experience="local",
+                client="codex",
+                project_dir=root,
+                config_path=root / "private" / "config.toml",
+                features=("resume",),
+                master_resume=master,
+                output_root=root / "erga-applications",
+            )
+            reader = SimpleNamespace(
+                is_encrypted=False,
+                pages=[
+                    SimpleNamespace(extract_text=lambda: "Experience and project knowledge"),
+                    SimpleNamespace(extract_text=lambda: "Additional master resume page"),
+                ],
+            )
+
+            with (
+                patch("erga_mcp.resume_sources.PdfReader", return_value=reader),
+                patch(
+                    "erga_mcp.setup_wizard.verify_subscription_login",
+                    return_value=(True, "ready"),
+                ),
+            ):
+                report = apply_setup(
+                    selections,
+                    server_command=self._command(root, "erga-mcp"),
+                    client_command=self._command(root, "codex"),
+                )
+
+            config = load_config(selections.config_path)
+            evidence = ErgaStore(config.data_dir / "erga.sqlite3").list_evidence()
+            self.assertTrue(report.resume_configured)
+            self.assertEqual(config.resume.master_path, master)
+            self.assertIsNone(config.resume.template_path)
+            self.assertEqual(config.resume.max_pages, 1)
+            self.assertEqual(len(evidence), 1)
+            self.assertTrue(evidence[0].approved)
+            self.assertIn("Additional master resume page", evidence[0].text)
+
+    def test_master_and_optional_style_formats_accept_typical_resume_files(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master_pdf = root / "master.pdf"
+            master_pdf.write_bytes(b"%PDF-1.4\n")
+            reference_docx = root / "current.docx"
+            reference_docx.write_bytes(b"PK")
+
+            self.assertTrue(_master_resume_file(str(master_pdf)))
+            self.assertTrue(_style_resume_file(str(reference_docx)))
 
     def test_full_setup_configures_native_discord_without_hermes(self) -> None:
         with TemporaryDirectory() as directory:
@@ -130,7 +210,8 @@ class SetupWizardTests(unittest.TestCase):
         rendered = render_setup_review(selections)
 
         self.assertNotIn("Discord", rendered)
-        self.assertIn("Resume template", rendered)
+        self.assertIn("Master knowledge", rendered)
+        self.assertIn("Erga default", rendered)
 
     def test_generic_client_persists_headless_arguments_for_discord(self) -> None:
         with TemporaryDirectory() as directory:

@@ -33,6 +33,12 @@ def check_installation(config_path: Path) -> DoctorReport:
         checks["tracker"] = "ok"
     else:
         warnings["tracker"] = "disabled"
+    if config.resume.master_path is None:
+        warnings["resume_master"] = "not configured"
+    elif not config.resume.master_path.is_file():
+        warnings["resume_master"] = "missing"
+    else:
+        checks["resume_master"] = "ok"
     if config.mail_provider == "gmail":
         if shutil.which("gws") is None:
             warnings["gmail"] = (
@@ -46,6 +52,11 @@ def check_installation(config_path: Path) -> DoctorReport:
         warnings["resume_template"] = "missing"
     else:
         checks["resume_template"] = "ok"
+    if config.resume.reference_path is not None:
+        if config.resume.reference_path.is_file():
+            checks["resume_reference"] = "ok"
+        else:
+            warnings["resume_reference"] = "missing"
     try:
         resolve_latexmk_executable(Path(config.resume.latexmk))
     except FileNotFoundError:

@@ -252,7 +252,9 @@ wheel and a real ephemeral Streamable HTTP server. Every profile must discover
 `erga_capabilities` and `pipeline_status`, then call both without error. The `career` and `default`
 profiles expose `intake_job_url`; narrower research/read/write profiles intentionally do not.
 `erga_capabilities` reports `model_api_required: false`, `reasoning_host: mcp-client`, and the
-known client configuration targets.
+known client configuration targets. When onboarding has imported a master résumé,
+`resume_source_context` returns all extracted master pages as user-approved factual context and
+labels the optional second résumé as style-only.
 
 ## References
 

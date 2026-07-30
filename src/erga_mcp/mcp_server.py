@@ -57,6 +57,7 @@ from .resume import (
     normalize_cycle,
     validate_latex_proposal,
 )
+from .resume_sources import resume_source_context as build_resume_source_context
 from .resume_tailoring import (
     TAILORING_VERSION,
     create_automatic_resume_proposal,
@@ -93,6 +94,7 @@ _READ_TOOL_NAMES = frozenset(
     {
         "erga_capabilities",
         "pipeline_status",
+        "resume_source_context",
         "list_applications",
         "application_tracker",
         "list_evidence",
@@ -121,6 +123,7 @@ _CAREER_TOOL_NAMES = frozenset(
     {
         "erga_capabilities",
         "pipeline_status",
+        "resume_source_context",
         "list_applications",
         "application_tracker",
         "list_evidence",
@@ -967,7 +970,9 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "URL, including a bare link or a link followed by an unfurled preview, call "
             "intake_job_url first with the complete URL unchanged. "
             "Do not browse or summarize the posting before intake unless the user explicitly "
-            "asks for summary-only behavior. pipeline_status/list_* are read-only; "
+            "asks for summary-only behavior. Call resume_source_context before drafting claims "
+            "from a configured master resume; its optional second resume is style-only. "
+            "pipeline_status/list_* are read-only; "
             "prepare_job_workspace is an advanced second-stage tool for callers that already "
             "have company, role, cycle, and slug metadata; create_tailored_resume writes local "
             "configured artifacts; validate_tailored_resume runs a configured local compiler. "
@@ -1023,6 +1028,16 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "mail_events": len(store.list_mail_events()),
             "audit_events": len(store.audit_events()),
         }
+
+    @profile_tool("resume_source_context", annotations=_READ_ONLY)
+    def resume_source_context() -> dict[str, object]:
+        """Read every page of the configured factual master and optional style-only resume."""
+        if config.resume.master_path is None:
+            raise ValueError("resume master_path is not configured; rerun `erga setup`")
+        return build_resume_source_context(
+            master_path=config.resume.master_path,
+            reference_path=config.resume.reference_path,
+        )
 
     @profile_tool("list_applications", annotations=_READ_ONLY)
     def list_applications() -> list[dict[str, object]]:

@@ -46,11 +46,17 @@ responsibility. Use a private bot, the smallest possible allowlist, and a dedica
 workspace. The agent policy forbids application submission, invented claims, and employer
 messaging, but policy text is not an operating-system sandbox.
 
+The master résumé selected during onboarding is an explicit user-approved factual source. Erga
+extracts every page locally and records the extracted text as approved evidence with a content
+hash. The optional second résumé is a style and layout reference only: it cannot become evidence
+for new claims. Erga never modifies either original file.
+
 The server declares tool annotations so MCP clients can distinguish its capability classes:
 
 | Tools | Capability | Effect |
 | --- | --- | --- |
 | `pipeline_status`, `list_applications`, `list_evidence`, `list_mail_events` | read-only | Reads local SQLite state only. |
+| `resume_source_context` | read-only | Reads the explicitly configured local master and optional style résumé; performs no network access or writes. |
 | `intake_job_url` | network-read + local-write + local-exec | Fetches one validated public job URL; creates or upgrades a local package, deterministically reorders existing user-provided résumé content, compiles and page-validates the proposal, and writes cited research, an application record, and a configured Obsidian tracker note. |
 | `record_secondary_research` | local-write | Stores bounded host-provided search results for an existing job package; results are labeled unverified and separated from official-posting facts. |
 | `prepare_job_workspace` | network-read + local-write | Fetches a job URL and creates configured local package/tracker artifacts. |

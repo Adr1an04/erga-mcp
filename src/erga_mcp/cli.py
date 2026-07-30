@@ -306,7 +306,9 @@ def _parser() -> argparse.ArgumentParser:
     _config_argument(resume_settings_show)
     resume_settings_set = resume_settings_commands.add_parser("set", help="update resume settings")
     _config_argument(resume_settings_set)
+    resume_settings_set.add_argument("--master-path")
     resume_settings_set.add_argument("--template-path")
+    resume_settings_set.add_argument("--reference-path")
     resume_settings_set.add_argument("--editable-section", action="append")
     resume_settings_set.add_argument("--bullet-min-chars", type=int)
     resume_settings_set.add_argument("--bullet-target-chars", type=int)
@@ -836,7 +838,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
             _print_json(resume_settings_as_json(load_config(args.config).resume))
             return 0
         updates = {
+            "master_path": args.master_path,
             "template_path": args.template_path,
+            "reference_path": args.reference_path,
             "editable_sections": args.editable_section,
             "bullet_min_chars": args.bullet_min_chars,
             "bullet_target_chars": args.bullet_target_chars,
