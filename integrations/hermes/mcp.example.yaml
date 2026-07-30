@@ -17,6 +17,8 @@ mcp_servers:
     env:
       # Non-secret local configuration path only. Do not pass OAuth tokens.
       ERGA_MCP_CONFIG: /absolute/path/to/erga-mcp-config.toml
+      # Keep host-visible tools at the least-privilege career boundary.
+      ERGA_MCP_TOOL_PROFILE: career
     # Intake may fetch a job page and run a local LaTeX build.
     # Worst case is a 30 s page fetch plus a 120 s LaTeX validation. Leave
     # enough outer headroom for startup, artifact writes, and result transfer.
@@ -29,10 +31,7 @@ mcp_servers:
         - pipeline_status
         - list_applications
         - list_evidence
-        - list_mail_events
         - intake_job_url
-        - install_mail_monitor_scripts
-        - export_data
         - create_tailored_resume
         - validate_tailored_resume
       prompts: false

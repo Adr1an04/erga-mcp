@@ -127,6 +127,7 @@ hermes mcp add erga-mcp \
   --command uv \
   --connect-timeout 30 \
   --env ERGA_MCP_CONFIG=/absolute/path/to/config.toml \
+  --env ERGA_MCP_TOOL_PROFILE=career \
   --args --directory /absolute/path/to/erga-mcp run erga-mcp
 ```
 
@@ -135,7 +136,7 @@ same profile flag to MCP and plugin commands (for example, `hermes --profile cod
 See [`integrations/hermes/mcp.example.yaml`](integrations/hermes/mcp.example.yaml) for the equivalent
 configuration file.
 
-Core MCP tools include:
+The recommended `career` MCP profile includes:
 
 | Tool | Behavior |
 | --- | --- |
@@ -143,14 +144,14 @@ Core MCP tools include:
 | `list_applications` | Read local application records |
 | `application_tracker` | Render the configured local Obsidian tracker as a compact, read-only message card |
 | `list_evidence` | Read local evidence records |
-| `list_mail_events` | Read normalized local mail events |
-| `sync_recruiting_mail` | Read up to 50 messages from the configured mail provider, persist local metadata-only events, and return a safe summary |
 | `intake_job_url` | Research one job and build local review artifacts end to end |
 | `prepare_job_workspace` | Create a bounded local job package from a supplied URL |
 | `create_tailored_resume` | Create a proposal, diff, and evidence report |
 | `validate_tailored_resume` | Run the configured local LaTeX compiler |
-| `install_mail_monitor_scripts` | Prepare deterministic Hermes notification runners |
-| `export_data` | Build a private ZIP of local records and generated packages |
+
+Private archive export, full writing-style source context, mail integration, Hermes monitors, Git
+scanning, and token recording are excluded from `career`. Select another documented profile only
+when the connected host should receive that additional capability.
 
 With the optional `erga-mcp-router` Hermes plugin enabled, `/erga-tracker` renders that same local Obsidian tracker directly in the current chat, and `/erga-mail-sync` runs a bounded configured-mail sync. Both return compact Markdown that remains readable across Discord, Signal, Telegram, Slack, and other Hermes platforms. The tracker does not write to the vault; the mail command stores metadata-only events and does not expose message bodies, previews, or credentials.
 

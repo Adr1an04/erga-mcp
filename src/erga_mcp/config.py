@@ -60,7 +60,7 @@ retain_attachments = false
 
 [mcp]
 # Tool profiles are capability boundaries, not credentials. The default preserves every legacy tool.
-# Choose read, research, write, or hermes for a narrower MCP client surface.
+# Choose career, career-private, read, research, write, or hermes for a narrower MCP client surface.
 tool_profile = "default"
 """
 
@@ -228,8 +228,19 @@ def load_config(config_path: Path) -> ErgaConfig:
     if not mail_accounts_url.startswith("https://"):
         raise ValueError("mail accounts_url must use HTTPS")
     mcp_tool_profile = str(mcp.get("tool_profile", "default")).strip().casefold()
-    if mcp_tool_profile not in {"default", "read", "research", "write", "hermes"}:
-        raise ValueError("mcp tool_profile must be default, read, research, write, or hermes")
+    if mcp_tool_profile not in {
+        "career",
+        "career-private",
+        "default",
+        "read",
+        "research",
+        "write",
+        "hermes",
+    }:
+        raise ValueError(
+            "mcp tool_profile must be career, career-private, default, read, research, write, "
+            "or hermes"
+        )
 
     return ErgaConfig(
         config_path=config_path,

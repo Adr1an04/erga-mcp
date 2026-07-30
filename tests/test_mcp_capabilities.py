@@ -28,6 +28,8 @@ class McpCapabilitiesTests(unittest.TestCase):
             result.structured_content["supported_transports"], ["stdio", "streamable-http"]
         )
         self.assertEqual(result.structured_content["tool_profile"], "read")
+        self.assertFalse(result.structured_content["model_api_required"])
+        self.assertEqual(result.structured_content["reasoning_host"], "mcp-client")
         self.assertNotIn("/", repr(result.structured_content))
         self.assertNotIn("config", repr(result.structured_content).casefold())
 

@@ -131,6 +131,7 @@ hermes mcp add erga-mcp \
   --command uv \
   --connect-timeout 30 \
   --env ERGA_MCP_CONFIG=/absolute/path/to/config.toml \
+  --env ERGA_MCP_TOOL_PROFILE=career \
   --args --directory /absolute/path/to/erga-mcp run erga-mcp
 ```
 
@@ -155,17 +156,20 @@ Hermes exposes tools prefixed with `mcp__erga_mcp__`:
 - `pipeline_status`
 - `list_applications`
 - `list_evidence`
-- `list_mail_events`
 
 **Explicit local artifact actions**
 
 - `intake_job_url` — the primary first-turn action for a bare job URL, Markdown/chat link, or URL followed by preview text. It accepts the URL alone, atomically publishes the complete local review package, writes detailed source-cited posting research and an idempotent local application record, deterministically reorders existing résumé bullets/projects/all skill categories, compiles the exact configured PDF, creates/synchronizes the appropriate Obsidian cycle tracker, and reuses current repeats of the same listing (including tracking-only URL variants). Legacy packages are upgraded once using a freshly sanitized snapshot; incomplete legacy files are retained under `legacy-backup/` after a clean rebuild. Jobs with no discoverable time bucket go to `Unscheduled Application Tracker.md` and `Unscheduled Application Notes/`.
 - `record_secondary_research` — records bounded host-provided web/community search results after intake, clearly separated from official-posting facts and labeled unverified.
-- `install_mail_monitor_scripts` — a Hermes-only compatibility helper used by `/setup-erga-monitor`; it only prepares scripts and cannot create delivery jobs by itself. Other MCP clients should ignore it.
-- `export_data` — creates a private ZIP containing local records, history, evidence, and generated job packages for native attachment delivery.
 - `prepare_job_workspace` — an advanced second-stage variant for callers that already have company, role, cycle, and slug metadata and explicitly need tracker integration. It is not the entry point for pasted links.
 - `create_tailored_resume` — writes only a reviewable tailored `.tex`, diff, and claim report inside that package, gated by supplied approved evidence IDs and configured editable sections.
 - `validate_tailored_resume` — explicitly compiles the selected proposal locally; it never publishes or submits it.
+
+The recommended `career` profile deliberately excludes mail and monitor tools. It also excludes
+`export_data` and `cover_letter_style_context`, because those can expose the full private career
+archive or full writing-style source material to the connected host. Use `career-private` only as
+an explicit opt-in for a trusted local host; use the separately bounded `hermes` profile for mail
+integration rather than broadening an ordinary career client.
 
 The MCP server has no outbound application or message tool. Zoho credentials remain in the
 operating system credential store and are never sent to Hermes.
