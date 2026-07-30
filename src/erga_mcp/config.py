@@ -15,7 +15,10 @@ vault_path = ""
 
 [resume]
 # Configure these per template. Empty/zero values mean no constraint has been selected yet.
+# The master is approved factual knowledge; the reference contributes layout metadata only.
+master_path = ""
 template_path = ""
+reference_path = ""
 editable_sections = []
 bullet_min_chars = 0
 bullet_target_chars = 0
@@ -67,7 +70,9 @@ tool_profile = "default"
 
 @dataclass(frozen=True)
 class ResumeSettings:
+    master_path: Path | None
     template_path: Path | None
+    reference_path: Path | None
     editable_sections: tuple[str, ...]
     bullet_min_chars: int
     bullet_target_chars: int
@@ -135,8 +140,12 @@ def _section(document: dict[str, Any], name: str) -> dict[str, Any]:
 
 def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings:
     resume = _section(document, "resume")
+    master_value = str(resume.get("master_path", "")).strip()
+    master_path = _path(master_value, base_dir) if master_value else None
     template_value = str(resume.get("template_path", "")).strip()
     template_path = _path(template_value, base_dir) if template_value else None
+    reference_value = str(resume.get("reference_path", "")).strip()
+    reference_path = _path(reference_value, base_dir) if reference_value else None
     editable_sections_value = resume.get("editable_sections", [])
     if not isinstance(editable_sections_value, list) or any(
         not isinstance(item, str) or not item.strip() for item in editable_sections_value
@@ -162,7 +171,9 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
     if Path(output_pdf_name).name != output_pdf_name or not output_pdf_name.endswith(".pdf"):
         raise ValueError("resume output_pdf_name must be a PDF filename without path components")
     return ResumeSettings(
+        master_path=master_path,
         template_path=template_path,
+        reference_path=reference_path,
         editable_sections=tuple(item.strip() for item in editable_sections_value),
         bullet_min_chars=bullet_lengths[0],
         bullet_target_chars=bullet_lengths[1],

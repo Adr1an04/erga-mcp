@@ -8,6 +8,18 @@
 - The fixture-only Zoho workflow has no OAuth or network behavior. The live adapter requests only `ZohoMail.messages.READ`, `ZohoMail.folders.READ`, and `ZohoMail.accounts.READ`, and rejects broader or mutating scopes.
 - Mail previews are used only for local classification. The store retains normalized message metadata and classification, not preview/body content.
 
+## Managed résumé knowledge
+
+`erga resume sources import` extracts one explicitly selected master locally, records its content
+hash, atomically copies it into content-addressed private state, and makes it the sole active
+approved master-résumé evidence source. An optional style source is snapshotted separately but its
+raw text is withheld from MCP responses; only non-factual layout measurements are exposed.
+
+Original files are never modified and may be moved after import. Original paths remain only in
+private provenance manifests. On POSIX systems, managed source directories are owner-only and
+snapshot, manifest, configuration, and SQLite files use owner-only permissions. DOCX extraction
+rejects an oversized decompressed `word/document.xml` member before reading it into memory.
+
 ## Local MCP trust boundary
 
 The default MCP server is a local **stdio** process. It is not a security sandbox: it runs with the permissions of the client that starts it. Review the complete executable command, arguments, environment variables, and absolute paths before enabling it.
@@ -30,6 +42,7 @@ The server declares tool annotations so MCP clients can distinguish its capabili
 | Tools | Capability | Effect |
 | --- | --- | --- |
 | `pipeline_status`, `list_applications`, `list_evidence`, `list_mail_events` | read-only | Reads local SQLite state only. |
+| `resume_source_context` | read-only | Reads approved master knowledge and derived non-factual style metadata from managed local snapshots. |
 | `update_application_status` | local-write | Sets one existing application's canonical status and records a local audit event; it has no remote side effect. |
 | `intake_job_url` | network-read + local-write + local-exec | Fetches one validated public job URL; creates or upgrades a local package, deterministically reorders existing user-provided résumé content, compiles and page-validates the proposal, and writes cited research, an application record, and a configured Obsidian tracker note. |
 | `record_secondary_research` | local-write | Stores bounded host-provided search results for an existing job package; results are labeled unverified and separated from official-posting facts. |

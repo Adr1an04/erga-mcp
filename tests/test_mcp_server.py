@@ -298,6 +298,38 @@ class McpServerTests(unittest.TestCase):
         self.assertFalse(saved["evidence_approved"])
         self.assertFalse(saved["resume_changed"])
 
+    def test_resume_source_context_exposes_master_but_not_style_text(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master = root / "master.tex"
+            style = root / "style.tex"
+            master.write_text("Complete factual master resume", encoding="utf-8")
+            style.write_text("Education\nExperience\nProjects", encoding="utf-8")
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace(
+                    'master_path = ""',
+                    'master_path = "master.tex"',
+                ).replace(
+                    'reference_path = ""',
+                    'reference_path = "style.tex"',
+                ),
+                encoding="utf-8",
+            )
+            server = build_server(config_path)
+
+            result: Any = asyncio.run(server.call_tool("resume_source_context", {}))
+            payload = cast(dict[str, Any], result.structured_content)
+
+            self.assertEqual(payload["master"]["text"], "Complete factual master resume")
+            self.assertTrue(payload["master"]["user_approved_source"])
+            self.assertNotIn("path", payload["master"])
+            self.assertNotIn("text", payload["style_reference"])
+            self.assertEqual(
+                payload["style_reference"]["observed_section_order"],
+                ["Education", "Experience", "Projects"],
+            )
+
     def test_git_research_tool_returns_redacted_provenance_for_explicit_local_roots(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -452,6 +484,7 @@ class McpServerTests(unittest.TestCase):
                     "update_application_status",
                     "application_tracker",
                     "list_evidence",
+                    "resume_source_context",
                     "list_mail_events",
                     "token_usage",
                     "record_token_usage",
@@ -480,6 +513,7 @@ class McpServerTests(unittest.TestCase):
                 "list_applications",
                 "application_tracker",
                 "list_evidence",
+                "resume_source_context",
                 "list_mail_events",
             }:
                 annotations = by_name[name].annotations

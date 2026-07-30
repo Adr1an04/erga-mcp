@@ -16,6 +16,7 @@ _READ_TOOLS = {
     "list_applications",
     "application_tracker",
     "list_evidence",
+    "resume_source_context",
     "list_mail_events",
     "token_usage",
 }
@@ -25,6 +26,7 @@ _CAREER_TOOLS = {
     "list_applications",
     "application_tracker",
     "list_evidence",
+    "resume_source_context",
     "update_application_status",
     "scrape_public_page",
     "extract_public_page",

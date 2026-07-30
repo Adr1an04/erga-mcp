@@ -43,6 +43,10 @@ environment value takes precedence; neither setting is a credential.
 | `hermes` | `read` plus configured mail synchronization and the Hermes monitor-script installer. |
 | `default` | All legacy tools, including job intake and advanced workspace setup. |
 
+When a managed master résumé is configured, `resume_source_context` returns its complete approved
+text and separately labeled non-factual style metadata. It reads Erga's private managed copies, not
+the originally selected files.
+
 For example, a generic research client can use:
 
 ```json

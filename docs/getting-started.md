@@ -15,6 +15,21 @@ The generated configuration and SQLite data directory live outside the repositor
 
 Edit the generated configuration only on the local machine. `data_dir` and `vault_path` may be relative to that configuration file. Start with the vault path empty until an Obsidian adapter is installed.
 
+Import a complete PDF, DOCX, or `.tex` master résumé as approved factual knowledge. Erga creates a
+hash-verified private copy, so moving or deleting the selected original later does not break the
+workflow:
+
+```bash
+uv run erga resume sources import \
+  --config ~/.config/erga-mcp/config.toml \
+  --master /absolute/path/to/complete-master-resume.pdf
+```
+
+An optional `--style /absolute/path/to/preferred-resume.pdf` contributes only derived layout
+metadata. Its raw text is never returned to an MCP host and never becomes factual evidence.
+Importing an updated master deactivates prior master-résumé evidence, leaving exactly one current
+master approved.
+
 Job-link intake needs a local LaTeX résumé template and an output directory. Configure them before
 connecting an agent; neither path is committed to the repository:
 

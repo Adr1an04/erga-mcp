@@ -82,6 +82,42 @@ class ResumeSettingsCliTests(unittest.TestCase):
 
             self.assertEqual(config.read_text(encoding="utf-8"), original)
 
+    def test_imports_durable_master_and_style_sources(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.toml"
+            master = root / "Complete Master Resume.tex"
+            style = root / "Preferred Style.tex"
+            master.write_text("Approved master facts", encoding="utf-8")
+            style.write_text("Education\nExperience\nProjects", encoding="utf-8")
+            main(["init", "--config", str(config)])
+
+            imported = self._json_command(
+                [
+                    "resume",
+                    "sources",
+                    "import",
+                    "--config",
+                    str(config),
+                    "--master",
+                    str(master),
+                    "--style",
+                    str(style),
+                ]
+            )
+            master.unlink()
+            style.unlink()
+            context = self._json_command(["resume", "sources", "context", "--config", str(config)])
+
+            self.assertTrue(Path(str(imported["master_path"])).is_file())
+            self.assertTrue(Path(str(imported["style_path"])).is_file())
+            self.assertEqual(context["master"]["text"], "Approved master facts")  # type: ignore[index]
+            self.assertNotIn("text", context["style_reference"])  # type: ignore[operator]
+            self.assertEqual(
+                context["style_reference"]["observed_section_order"],  # type: ignore[index]
+                ["Education", "Experience", "Projects"],
+            )
+
     def test_creates_a_package_using_the_configured_output_root(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

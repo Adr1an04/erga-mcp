@@ -68,6 +68,7 @@ from .resume import (
     normalize_cycle,
     validate_latex_proposal,
 )
+from .resume_sources import resume_source_context as build_resume_source_context
 from .resume_tailoring import (
     TAILORING_VERSION,
     create_automatic_resume_proposal,
@@ -110,6 +111,7 @@ _READ_TOOL_NAMES = frozenset(
         "list_applications",
         "application_tracker",
         "list_evidence",
+        "resume_source_context",
         "list_mail_events",
         "token_usage",
     }
@@ -150,6 +152,7 @@ _CAREER_TOOL_NAMES = frozenset(
         "application_tracker",
         "list_evidence",
         "update_application_status",
+        "resume_source_context",
         "scrape_public_page",
         "extract_public_page",
         "intake_job_url",
@@ -1118,6 +1121,16 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             cast(dict[str, object], _json_value(asdict(evidence)))
             for evidence in store.list_evidence()
         ]
+
+    @profile_tool("resume_source_context", annotations=_READ_ONLY)
+    def resume_source_context() -> dict[str, object]:
+        """Return approved master knowledge and style-only layout metadata."""
+        if config.resume.master_path is None:
+            raise ValueError("import a master resume before requesting source context")
+        return build_resume_source_context(
+            master_path=config.resume.master_path,
+            reference_path=config.resume.reference_path,
+        )
 
     @profile_tool("list_mail_events", annotations=_READ_ONLY)
     def list_mail_events() -> list[dict[str, object]]:
