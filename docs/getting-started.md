@@ -14,10 +14,11 @@ uv sync --extra dev
 uv run erga setup
 ```
 
-The arrow-key wizard selects Codex, Claude Code, or OpenCode; verifies its existing subscription
-login; creates private local state; writes the native project MCP entry; and optionally configures
-the résumé workflow and native Discord bridge. It is safe to rerun and requires no model API key
-or Hermes installation.
+The arrow-key wizard selects Codex, Claude Code, OpenCode, Gemini CLI, Cursor Agent, GitHub Copilot
+CLI, or an advanced custom MCP client; verifies maintained adapters' existing subscription login;
+creates private local state; writes the native project MCP entry; and optionally configures the
+résumé workflow and native Discord bridge. It is safe to rerun and requires no model API key or
+Hermes installation for maintained subscription-backed adapters.
 
 For a noninteractive coding-client-only setup:
 
@@ -156,9 +157,10 @@ uv run erga client configure codex \
   --project-dir /absolute/path/to/resume-workspace
 ```
 
-Replace `codex` with `claude-code` or `opencode` for those clients. The preview is JSON containing
-the exact target path and content. After reviewing it, add `--write`. Existing unrelated settings
-are preserved, and Erga refuses to overwrite an existing server with the same name.
+Replace `codex` with any supported adapter name shown by `erga client configure --help`. The
+preview is JSON containing the exact target path and content. After reviewing it, add `--write`.
+Existing unrelated settings are preserved, and Erga refuses to overwrite an existing server with
+the same name.
 
 ```bash
 uv run erga client configure codex \

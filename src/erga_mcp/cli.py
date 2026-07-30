@@ -10,10 +10,10 @@ from dataclasses import asdict
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from .client_adapters import SUPPORTED_CLIENTS
 from .client_config import (
     DEFAULT_SERVER_NAME,
     DEFAULT_TOOL_PROFILE,
-    SUPPORTED_CLIENTS,
     render_client_configuration,
     resolve_server_command,
     write_client_configuration,

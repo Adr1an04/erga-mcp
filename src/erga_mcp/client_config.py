@@ -8,10 +8,9 @@ import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
-ClientName = Literal["codex", "claude-code", "opencode"]
-SUPPORTED_CLIENTS: tuple[ClientName, ...] = ("codex", "claude-code", "opencode")
+from .client_adapters import ClientName, McpFormat, client_adapter
+
 DEFAULT_SERVER_NAME = "erga-mcp"
 DEFAULT_TOOL_PROFILE = "career"
 
@@ -19,6 +18,7 @@ DEFAULT_TOOL_PROFILE = "career"
 @dataclass(frozen=True)
 class ClientConfiguration:
     client: ClientName
+    mcp_format: McpFormat
     target_path: Path
     server_name: str
     tool_profile: str
@@ -73,27 +73,30 @@ def _codex_content(
     )
 
 
-def _claude_content(
+def _mcp_servers_content(
     *,
     command: Path,
     server_args: tuple[str, ...],
     config_path: Path,
     server_name: str,
     tool_profile: str,
+    include_stdio_type: bool,
 ) -> str:
+    server: dict[str, object] = {
+        "command": str(command),
+        "args": list(server_args),
+        "env": {
+            "ERGA_MCP_CONFIG": str(config_path),
+            "ERGA_MCP_TOOL_PROFILE": tool_profile,
+        },
+    }
+    if include_stdio_type:
+        server["type"] = "stdio"
     return (
         json.dumps(
             {
                 "mcpServers": {
-                    server_name: {
-                        "type": "stdio",
-                        "command": str(command),
-                        "args": list(server_args),
-                        "env": {
-                            "ERGA_MCP_CONFIG": str(config_path),
-                            "ERGA_MCP_TOOL_PROFILE": tool_profile,
-                        },
-                    }
+                    server_name: server,
                 }
             },
             indent=2,
@@ -162,8 +165,9 @@ def render_client_configuration(
     if tool_profile not in {"career", "default", "read", "research", "write", "hermes"}:
         raise ValueError("unsupported Erga MCP tool profile")
 
-    if client == "codex":
-        target = project_dir / ".codex" / "config.toml"
+    adapter = client_adapter(client)
+    target = project_dir / adapter.mcp_target
+    if adapter.mcp_format == "codex":
         content = _codex_content(
             command=server_command,
             server_args=server_args,
@@ -171,17 +175,16 @@ def render_client_configuration(
             server_name=server_name,
             tool_profile=tool_profile,
         )
-    elif client == "claude-code":
-        target = project_dir / ".mcp.json"
-        content = _claude_content(
+    elif adapter.mcp_format == "mcp-servers":
+        content = _mcp_servers_content(
             command=server_command,
             server_args=server_args,
             config_path=config_path,
             server_name=server_name,
             tool_profile=tool_profile,
+            include_stdio_type=adapter.include_stdio_type,
         )
-    elif client == "opencode":
-        target = project_dir / "opencode.json"
+    elif adapter.mcp_format == "opencode":
         content = _opencode_content(
             command=server_command,
             server_args=server_args,
@@ -194,6 +197,7 @@ def render_client_configuration(
         raise ValueError(f"unsupported MCP client: {client}")
     return ClientConfiguration(
         client=client,
+        mcp_format=adapter.mcp_format,
         target_path=target,
         server_name=server_name,
         tool_profile=tool_profile,
@@ -201,12 +205,18 @@ def render_client_configuration(
     )
 
 
-def _merge_json(existing: str, generated: str, *, client: ClientName, server_name: str) -> str:
+def _merge_json(
+    existing: str,
+    generated: str,
+    *,
+    mcp_format: McpFormat,
+    server_name: str,
+) -> str:
     document = json.loads(existing) if existing.strip() else {}
     addition = json.loads(generated)
     if not isinstance(document, dict):
         raise ValueError("existing client configuration must contain a JSON object")
-    if client == "claude-code":
+    if mcp_format == "mcp-servers":
         servers = document.setdefault("mcpServers", {})
         generated_server = addition["mcpServers"][server_name]
     else:
@@ -238,7 +248,7 @@ def write_client_configuration(configuration: ClientConfiguration) -> dict[str, 
     """Merge one Erga server entry while preserving unrelated client settings."""
     target = configuration.target_path
     target.parent.mkdir(parents=True, exist_ok=True)
-    if configuration.client == "opencode" and not target.exists():
+    if configuration.mcp_format == "opencode" and not target.exists():
         alternatives = (
             target.with_suffix(".jsonc"),
             target.parent / ".opencode" / "opencode.json",
@@ -252,7 +262,7 @@ def write_client_configuration(configuration: ClientConfiguration) -> dict[str, 
                 "second-precedence configuration"
             )
     existing = target.read_text(encoding="utf-8") if target.exists() else ""
-    if configuration.client == "codex":
+    if configuration.mcp_format == "codex":
         merged = _merge_codex(
             existing,
             configuration.content,
@@ -262,7 +272,7 @@ def write_client_configuration(configuration: ClientConfiguration) -> dict[str, 
         merged = _merge_json(
             existing,
             configuration.content,
-            client=configuration.client,
+            mcp_format=configuration.mcp_format,
             server_name=configuration.server_name,
         )
     target.write_text(merged, encoding="utf-8")
@@ -278,7 +288,7 @@ def write_client_configuration(configuration: ClientConfiguration) -> dict[str, 
 
 
 def _configured_server(configuration: ClientConfiguration, content: str) -> object:
-    if configuration.client == "codex":
+    if configuration.mcp_format == "codex":
         document = tomllib.loads(content)
         if not isinstance(document, dict):
             return None
@@ -287,7 +297,7 @@ def _configured_server(configuration: ClientConfiguration, content: str) -> obje
         document = json.loads(content)
         if not isinstance(document, dict):
             return None
-        if configuration.client == "claude-code":
+        if configuration.mcp_format == "mcp-servers":
             servers = document.get("mcpServers", {})
         else:
             mcp = document.get("mcp", {})

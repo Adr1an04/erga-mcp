@@ -1001,7 +1001,15 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             {
                 "model_api_required": False,
                 "reasoning_host": "mcp-client",
-                "supported_clients": ["codex", "claude-code", "opencode", "generic-mcp"],
+                "supported_clients": [
+                    "codex",
+                    "claude-code",
+                    "opencode",
+                    "gemini-cli",
+                    "cursor-agent",
+                    "github-copilot",
+                    "generic-mcp",
+                ],
             }
         )
         return result

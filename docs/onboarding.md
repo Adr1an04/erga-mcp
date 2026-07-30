@@ -18,14 +18,21 @@ Use the arrow keys and Enter to choose:
 - **Local Erga:** coding AI and résumé generation.
 - **Custom:** select only the components you need.
 
-The wizard supports `codex`, `claude-code`, and `opencode`. It verifies that the selected command is
-installed, checks its recorded login, and performs one tiny live readiness turn before writing
-configuration. This catches expired or revoked sessions that can still appear signed in. The final
-review shows the workspace, private config location, and selected components. Canceling before
-confirmation makes no changes.
+The wizard includes maintained adapters for `codex`, `claude-code`, `opencode`, `gemini-cli`,
+`cursor-agent`, and `github-copilot`. It verifies that the selected command is installed, checks
+recorded login state when the client exposes it, and performs one tiny live readiness turn before
+writing configuration. This catches expired or revoked sessions that can still appear signed in.
+The final review shows the workspace, private config location, and selected components. Canceling
+before confirmation makes no changes.
 
-It never requests an OpenAI or Anthropic API key. For Codex and Claude Code, the bridge removes
-ambient model API-key variables from the child process so an existing key cannot silently replace
+An advanced **Other MCP-capable coding CLI** option accepts an executable and a JSON argument
+template. Erga executes that array directly without a shell and substitutes standalone
+`{prompt}`, `{project_dir}`, and `{output_path}` entries. It generates portable project
+`.mcp.json`, but the user must verify that the unknown client discovers that file and uses the
+intended subscription or provider.
+
+It never requests a model API key. For maintained clients with known provider-key variables, the
+bridge removes those variables from the child process so an existing key cannot silently replace
 subscription authentication.
 
 Preview the redacted setup plan without applying it:
@@ -38,12 +45,14 @@ uv run erga setup --dry-run
 
 The Full experience connects a Discord bot directly to the selected coding CLI. The bot token goes
 to the operating-system credential store; only the client name, workspace path, and allowlisted
-Discord user IDs are written to disk. Erga does not require Hermes or another intermediary agent.
+Discord usernames or IDs are written to disk. Erga does not require Hermes or another intermediary
+agent.
 
 Discord requires one manual account-level step: create an application and bot in the Discord
-Developer Portal, enable Message Content Intent, and copy the bot token. The wizard explains this
-at the point where the token is requested. See [Native Discord](discord.md) for the exact setup,
-permissions, commands, and trust boundary.
+Developer Portal, enable Message Content Intent, and copy the bot token. Enter the current unique
+Discord username—for example, `student.dev`—when the wizard asks who may use the bot. Stable
+numeric account IDs are also accepted but are no longer required. See [Native Discord](discord.md)
+for the exact setup, permissions, commands, and trust boundary.
 
 ## Noninteractive onboarding
 
@@ -55,7 +64,8 @@ uv run erga onboard codex \
   --project-dir /absolute/path/to/your/resume-workspace
 ```
 
-Valid client names are `codex`, `claude-code`, and `opencode`. This command:
+Valid client names are `codex`, `claude-code`, `opencode`, `gemini-cli`, `cursor-agent`,
+`github-copilot`, and `generic-mcp`. This command:
 
 1. Creates or reuses `~/.config/erga-mcp/config.toml`.
 2. Initializes the private SQLite database under `~/.config/erga-mcp/state/`.
@@ -88,6 +98,10 @@ template before expecting a compiled tailored PDF.
 | Codex project entry | `<project>/.codex/config.toml` |
 | Claude Code project entry | `<project>/.mcp.json` |
 | OpenCode project entry | `<project>/opencode.json` |
+| Gemini CLI project entry | `<project>/.gemini/settings.json` |
+| Cursor Agent project entry | `<project>/.cursor/mcp.json` |
+| GitHub Copilot CLI project entry | `<project>/.mcp.json` |
+| Generic MCP project entry | `<project>/.mcp.json` |
 
 The MCP entry contains the Erga executable path, the non-secret Erga configuration path, and
 `ERGA_MCP_TOOL_PROFILE=career`. Model authentication stays entirely with the coding client.
@@ -142,8 +156,9 @@ that owns your coding-tool subscription, and rerun setup.
 
 ### The coding client is installed but not signed in
 
-Run `codex login`, `claude auth login`, or the appropriate OpenCode provider-authentication
-command. Erga does not accept a model API key as a substitute during guided setup.
+Run the selected client's login flow, such as `codex login`, `claude auth login`, `gemini`,
+`cursor-agent login`, or `copilot login`. Erga does not accept a model API key as a substitute for
+maintained subscription-backed presets during guided setup.
 
 ### Discord starts and immediately stops
 

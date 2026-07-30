@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,6 +9,7 @@ from unittest.mock import patch
 from erga_mcp.config import load_config
 from erga_mcp.setup_wizard import (
     SetupSelections,
+    _parse_discord_identities,
     apply_setup,
     render_setup_review,
     write_setup_plan,
@@ -89,6 +91,16 @@ class SetupWizardTests(unittest.TestCase):
             self.assertNotIn("discord-secret", settings)
             self.assertNotIn("hermes", settings.casefold())
 
+    def test_modern_discord_usernames_do_not_require_developer_mode(self) -> None:
+        user_ids, usernames = _parse_discord_identities("emperor_sai, @trusted.friend, 123456789")
+
+        self.assertEqual(user_ids, (123456789,))
+        self.assertEqual(usernames, ("emperor_sai", "trusted.friend"))
+
+    def test_invalid_discord_discriminator_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Invalid Discord"):
+            _parse_discord_identities("oldname#1234")
+
     def test_review_and_dry_run_redact_the_discord_token(self) -> None:
         selections = SetupSelections(
             experience="full",
@@ -119,6 +131,42 @@ class SetupWizardTests(unittest.TestCase):
 
         self.assertNotIn("Discord", rendered)
         self.assertIn("Resume template", rendered)
+
+    def test_generic_client_persists_headless_arguments_for_discord(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            command = self._command(root, "another-agent")
+            selections = SetupSelections(
+                experience="full",
+                client="generic-mcp",
+                project_dir=root,
+                config_path=root / "private" / "config.toml",
+                features=("discord",),
+                client_command=command,
+                custom_arguments=("--headless", "{prompt}"),
+                discord_token="discord-secret",
+                discord_user_ids=(123,),
+                start_discord=False,
+            )
+
+            with (
+                patch(
+                    "erga_mcp.setup_wizard.verify_subscription_login",
+                    return_value=(True, "ready"),
+                ),
+                patch("erga_mcp.setup_wizard.store_discord_token"),
+            ):
+                report = apply_setup(
+                    selections,
+                    server_command=self._command(root, "erga-mcp"),
+                )
+
+            settings = json.loads(
+                (selections.config_path.parent / "discord-bridge.json").read_text()
+            )
+            self.assertTrue(report.discord_configured)
+            self.assertEqual(settings["custom_arguments"], ["--headless", "{prompt}"])
+            self.assertTrue((root / ".mcp.json").is_file())
 
     def test_setup_stops_when_the_coding_subscription_is_not_ready(self) -> None:
         with TemporaryDirectory() as directory:

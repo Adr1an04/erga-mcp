@@ -6,10 +6,10 @@ import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .client_adapters import ClientName, client_adapter
 from .client_config import (
     DEFAULT_SERVER_NAME,
     DEFAULT_TOOL_PROFILE,
-    ClientName,
     ensure_client_configuration,
     render_client_configuration,
     resolve_server_command,
@@ -17,24 +17,6 @@ from .client_config import (
 from .config import DEFAULT_CONFIG, load_config
 from .doctor import check_installation
 from .store import ErgaStore
-
-_CLIENT_COMMANDS: dict[ClientName, str] = {
-    "codex": "codex",
-    "claude-code": "claude",
-    "opencode": "opencode",
-}
-
-_CLIENT_LABELS: dict[ClientName, str] = {
-    "codex": "Codex",
-    "claude-code": "Claude Code",
-    "opencode": "OpenCode",
-}
-
-_RESTART_STEPS: dict[ClientName, str] = {
-    "codex": "Restart Codex or reopen this trusted project.",
-    "claude-code": "Restart Claude Code or run /mcp to reconnect project servers.",
-    "opencode": "Restart OpenCode in this project.",
-}
 
 
 @dataclass(frozen=True)
@@ -77,6 +59,7 @@ def onboard(
     config_path: Path,
     project_dir: Path,
     server_command: Path | None = None,
+    client_command: Path | None = None,
 ) -> OnboardingReport:
     """Initialize private state, configure one client, check health, and explain first use."""
     config_path = config_path.expanduser().absolute()
@@ -95,12 +78,22 @@ def onboard(
     )
     configured = ensure_client_configuration(configuration)
     doctor = check_installation(config_path)
-    client_command_found = shutil.which(_CLIENT_COMMANDS[client]) is not None
+    adapter = client_adapter(client)
+    client_command_found = (
+        client_command.is_file()
+        if client_command is not None
+        else adapter.executable is None or shutil.which(adapter.executable) is not None
+    )
     warnings = dict(doctor.warnings)
     if not client_command_found:
         warnings["client_command"] = (
-            f"{_CLIENT_COMMANDS[client]} was not found on PATH; install or launch "
-            f"{client} before verification"
+            f"{adapter.executable} was not found on PATH; install or launch "
+            f"{adapter.label} before verification"
+        )
+    if adapter.executable is None:
+        warnings["generic_client"] = (
+            "Erga generated portable .mcp.json configuration, but only the selected CLI's "
+            "documentation can confirm that it discovers that file."
         )
 
     return OnboardingReport(
@@ -119,7 +112,7 @@ def onboard(
         checks=doctor.checks,
         warnings=warnings,
         next_steps=[
-            _RESTART_STEPS[client],
+            adapter.restart_step,
             'Ask the client: "Show my Erga pipeline status."',
             "Paste a public job-posting URL and ask Erga to intake it.",
             "Configure a resume template when you are ready to generate tailored PDF proposals.",
@@ -139,9 +132,9 @@ def render_onboarding_report(report: OnboardingReport) -> str:
     )
     lines = [
         (
-            f"Erga is ready for {_CLIENT_LABELS[report.client]}."
+            f"Erga is ready for {client_adapter(report.client).label}."
             if report.core_ready
-            else f"Erga needs attention before {_CLIENT_LABELS[report.client]} can use it."
+            else (f"Erga needs attention before {client_adapter(report.client).label} can use it.")
         ),
         "",
         f"  [ok] Private configuration {config_action}: {report.config_path}",

@@ -12,6 +12,7 @@ from erga_mcp.discord_bridge import (
     DiscordBridgeSettings,
     _agent_environment,
     build_agent_command,
+    is_authorized_discord_user,
     load_discord_settings,
     run_agent,
     split_discord_message,
@@ -44,6 +45,56 @@ class DiscordBridgeTests(unittest.TestCase):
             self.assertEqual(loaded, settings)
             self.assertNotIn("token", content.casefold())
 
+    def test_settings_accept_modern_discord_usernames(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.toml"
+            original = DiscordBridgeSettings(
+                client="codex",
+                client_command=str(root / "codex"),
+                project_dir=root,
+                allowed_user_ids=(),
+                allowed_usernames=("emperor_sai",),
+            )
+
+            write_discord_settings(config, original)
+
+            self.assertEqual(load_discord_settings(config), original)
+
+    def test_authorizes_current_username_or_stable_id_but_never_a_bot(self) -> None:
+        settings = DiscordBridgeSettings(
+            client="codex",
+            client_command="/tmp/codex",
+            project_dir=Path("/tmp"),
+            allowed_user_ids=(123,),
+            allowed_usernames=("emperor_sai",),
+        )
+
+        self.assertTrue(
+            is_authorized_discord_user(
+                settings,
+                user_id=999,
+                username="Emperor_Sai",
+                is_bot=False,
+            )
+        )
+        self.assertTrue(
+            is_authorized_discord_user(
+                settings,
+                user_id=123,
+                username="renamed_user",
+                is_bot=False,
+            )
+        )
+        self.assertFalse(
+            is_authorized_discord_user(
+                settings,
+                user_id=123,
+                username="emperor_sai",
+                is_bot=True,
+            )
+        )
+
     def test_builds_subscription_cli_commands_for_every_client(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -52,6 +103,13 @@ class DiscordBridgeTests(unittest.TestCase):
             codex = build_agent_command(self._settings(root, "codex"), "prompt", output)
             claude = build_agent_command(self._settings(root, "claude-code"), "prompt", output)
             opencode = build_agent_command(self._settings(root, "opencode"), "prompt", output)
+            gemini = build_agent_command(self._settings(root, "gemini-cli"), "prompt", output)
+            cursor = build_agent_command(self._settings(root, "cursor-agent"), "prompt", output)
+            copilot = build_agent_command(
+                self._settings(root, "github-copilot"),
+                "prompt",
+                output,
+            )
 
             self.assertEqual(codex[1], "exec")
             self.assertIn("--output-last-message", codex)
@@ -59,6 +117,10 @@ class DiscordBridgeTests(unittest.TestCase):
             self.assertIn("acceptEdits", claude)
             self.assertEqual(opencode[1], "run")
             self.assertIn("--auto", opencode)
+            self.assertIn("--allowed-mcp-server-names", gemini)
+            self.assertIn("--approve-mcps", cursor)
+            self.assertIn("--allow-tool=erga-mcp", copilot)
+            self.assertIn("--no-ask-user", copilot)
 
     def test_subscription_clients_do_not_inherit_model_api_keys(self) -> None:
         with patch.dict(
@@ -67,9 +129,45 @@ class DiscordBridgeTests(unittest.TestCase):
         ):
             codex = _agent_environment("codex")
             claude = _agent_environment("claude-code")
+            gemini = _agent_environment("gemini-cli")
+            cursor = _agent_environment("cursor-agent")
+            copilot = _agent_environment("github-copilot")
 
         self.assertNotIn("OPENAI_API_KEY", codex)
         self.assertNotIn("ANTHROPIC_API_KEY", claude)
+        self.assertNotIn("GEMINI_API_KEY", gemini)
+        self.assertNotIn("CURSOR_API_KEY", cursor)
+        self.assertEqual(copilot["GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP"], "true")
+
+    def test_generic_adapter_passes_a_safe_argument_array_without_a_shell(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "response.txt"
+            settings = DiscordBridgeSettings(
+                client="generic-mcp",
+                client_command=str(root / "agent"),
+                project_dir=root,
+                allowed_user_ids=(123,),
+                custom_arguments=(
+                    "--headless",
+                    "{prompt}",
+                    "--workspace",
+                    "{project_dir}",
+                ),
+            )
+
+            command = build_agent_command(settings, "hello; rm -rf /", output)
+
+            self.assertEqual(
+                command,
+                [
+                    str(root / "agent"),
+                    "--headless",
+                    "hello; rm -rf /",
+                    "--workspace",
+                    str(root),
+                ],
+            )
 
     def test_codex_uses_the_explicit_final_message_file(self) -> None:
         with TemporaryDirectory() as directory:

@@ -30,7 +30,15 @@ class McpCapabilitiesTests(unittest.TestCase):
         self.assertEqual(result[1]["reasoning_host"], "mcp-client")
         self.assertEqual(
             result[1]["supported_clients"],
-            ["codex", "claude-code", "opencode", "generic-mcp"],
+            [
+                "codex",
+                "claude-code",
+                "opencode",
+                "gemini-cli",
+                "cursor-agent",
+                "github-copilot",
+                "generic-mcp",
+            ],
         )
         self.assertNotIn("/", repr(result[1]))
         self.assertNotIn("config", repr(result[1]).casefold())

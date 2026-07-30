@@ -18,7 +18,7 @@ from pathlib import Path
 import discord
 import keyring
 
-from .client_config import ClientName
+from .client_adapters import ClientName, client_adapter
 from .config import load_config
 
 _TOKEN_SERVICE = "erga-mcp.discord"
@@ -34,6 +34,8 @@ class DiscordBridgeSettings:
     client_command: str
     project_dir: Path
     allowed_user_ids: tuple[int, ...]
+    allowed_usernames: tuple[str, ...] = ()
+    custom_arguments: tuple[str, ...] = ()
     respond_in_servers_without_mention: bool = False
     timeout_seconds: int = 600
 
@@ -81,6 +83,10 @@ def load_discord_settings(config_path: Path) -> DiscordBridgeSettings:
         client_command=payload["client_command"],
         project_dir=Path(payload["project_dir"]),
         allowed_user_ids=tuple(int(value) for value in payload["allowed_user_ids"]),
+        allowed_usernames=tuple(
+            str(value).casefold() for value in payload.get("allowed_usernames", [])
+        ),
+        custom_arguments=tuple(str(value) for value in payload.get("custom_arguments", [])),
         respond_in_servers_without_mention=bool(
             payload.get("respond_in_servers_without_mention", False)
         ),
@@ -89,20 +95,18 @@ def load_discord_settings(config_path: Path) -> DiscordBridgeSettings:
 
 
 def resolve_client_command(client: ClientName, explicit: Path | None = None) -> Path:
-    executable_name = {
-        "codex": "codex",
-        "claude-code": "claude",
-        "opencode": "opencode",
-    }[client]
+    adapter = client_adapter(client)
     if explicit is not None:
         candidate = explicit.expanduser().absolute()
         if not candidate.is_file():
             raise FileNotFoundError(f"Coding-agent command does not exist: {candidate}")
         return candidate
-    discovered = shutil.which(executable_name)
+    if adapter.executable is None:
+        raise FileNotFoundError("The generic client requires an explicit coding-agent executable.")
+    discovered = shutil.which(adapter.executable)
     if discovered is None:
         raise FileNotFoundError(
-            f"{executable_name} is not installed or not on PATH; install and sign in first"
+            f"{adapter.executable} is not installed or not on PATH; install and sign in first"
         )
     return Path(discovered).absolute()
 
@@ -110,64 +114,38 @@ def resolve_client_command(client: ClientName, explicit: Path | None = None) -> 
 def verify_subscription_login(
     client: ClientName,
     command: Path,
+    custom_arguments: tuple[str, ...] = (),
 ) -> tuple[bool, str]:
     """Verify both recorded login state and one minimal live coding-agent turn."""
-    checks = {
-        "codex": [str(command), "login", "status"],
-        "claude-code": [str(command), "auth", "status"],
-        "opencode": [str(command), "models"],
-    }
-    completed = subprocess.run(
-        checks[client],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env=_agent_environment(client),
-    )
-    detail = (completed.stdout or completed.stderr or "").strip()
-    if completed.returncode:
-        return False, detail
+    adapter = client_adapter(client)
+    if adapter.status_arguments is not None:
+        completed = subprocess.run(
+            [str(command), *adapter.status_arguments],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=_agent_environment(client),
+        )
+        detail = (completed.stdout or completed.stderr or "").strip()
+        if completed.returncode:
+            return False, detail
 
     with tempfile.TemporaryDirectory() as directory:
         project_dir = Path(directory)
         output_path = project_dir / "readiness.txt"
         prompt = "Reply with exactly ERGA_READY and do not use tools."
-        if client == "codex":
-            probe = [
-                str(command),
-                "exec",
-                "--cd",
-                str(project_dir),
-                "--sandbox",
-                "read-only",
-                "--skip-git-repo-check",
-                "--color",
-                "never",
-                "--output-last-message",
-                str(output_path),
-                prompt,
-            ]
-        elif client == "claude-code":
-            probe = [
-                str(command),
-                "--print",
-                "--output-format",
-                "text",
-                "--permission-mode",
-                "plan",
-                "--max-turns",
-                "1",
-                prompt,
-            ]
-        else:
-            probe = [
-                str(command),
-                "run",
-                "--dir",
-                str(project_dir),
-                "--auto",
-                prompt,
-            ]
+        arguments = custom_arguments if client == "generic-mcp" else adapter.probe_arguments
+        if not arguments:
+            return False, "no headless argument template is configured for this client"
+        probe = [
+            str(command),
+            *_render_arguments(
+                arguments,
+                prompt=prompt,
+                project_dir=project_dir,
+                output_path=output_path,
+            ),
+        ]
         live = subprocess.run(
             probe,
             cwd=project_dir,
@@ -179,11 +157,7 @@ def verify_subscription_login(
         if live.returncode:
             failure = (live.stderr or live.stdout or "live readiness turn failed").strip()
             return False, failure[-2_000:]
-        rendered = (
-            output_path.read_text(encoding="utf-8").strip()
-            if output_path.is_file()
-            else live.stdout.strip()
-        )
+        rendered = _render_agent_output(adapter.output_source, live.stdout, output_path)
         if not rendered:
             return False, "live readiness turn returned no response"
     return True, "coding-agent subscription is ready"
@@ -201,11 +175,40 @@ def _agent_prompt(message: str) -> str:
 
 def _agent_environment(client: ClientName) -> dict[str, str]:
     environment = os.environ.copy()
-    if client == "codex":
-        environment.pop("OPENAI_API_KEY", None)
-    elif client == "claude-code":
-        environment.pop("ANTHROPIC_API_KEY", None)
+    adapter = client_adapter(client)
+    for name in adapter.stripped_environment:
+        environment.pop(name, None)
+    environment.update(adapter.injected_environment)
     return environment
+
+
+def _render_arguments(
+    arguments: tuple[str, ...],
+    *,
+    prompt: str,
+    project_dir: Path,
+    output_path: Path,
+) -> list[str]:
+    replacements = {
+        "{prompt}": prompt,
+        "{project_dir}": str(project_dir),
+        "{output_path}": str(output_path),
+    }
+    return [replacements.get(argument, argument) for argument in arguments]
+
+
+def _render_agent_output(
+    output_source: str,
+    stdout: str,
+    output_path: Path,
+) -> str:
+    if output_source == "file" and output_path.is_file():
+        return output_path.read_text(encoding="utf-8").strip()
+    if output_path.is_file():
+        rendered_file = output_path.read_text(encoding="utf-8").strip()
+        if rendered_file:
+            return rendered_file
+    return stdout.strip()
 
 
 def build_agent_command(
@@ -213,38 +216,20 @@ def build_agent_command(
     prompt: str,
     output_path: Path,
 ) -> list[str]:
-    if settings.client == "codex":
-        return [
-            settings.client_command,
-            "exec",
-            "--cd",
-            str(settings.project_dir),
-            "--sandbox",
-            "workspace-write",
-            "--skip-git-repo-check",
-            "--color",
-            "never",
-            "--output-last-message",
-            str(output_path),
-            prompt,
-        ]
-    if settings.client == "claude-code":
-        return [
-            settings.client_command,
-            "--print",
-            "--output-format",
-            "text",
-            "--permission-mode",
-            "acceptEdits",
-            prompt,
-        ]
+    adapter = client_adapter(settings.client)
+    arguments = (
+        settings.custom_arguments if settings.client == "generic-mcp" else adapter.run_arguments
+    )
+    if not arguments:
+        raise ValueError("No headless arguments are configured for this coding client")
     return [
         settings.client_command,
-        "run",
-        "--dir",
-        str(settings.project_dir),
-        "--auto",
-        prompt,
+        *_render_arguments(
+            arguments,
+            prompt=prompt,
+            project_dir=settings.project_dir,
+            output_path=output_path,
+        ),
     ]
 
 
@@ -264,10 +249,11 @@ def run_agent(settings: DiscordBridgeSettings, message: str) -> str:
         if completed.returncode:
             detail = (completed.stderr or completed.stdout or "coding agent failed").strip()
             raise RuntimeError(detail[-2_000:])
-        if settings.client == "codex" and output_path.is_file():
-            rendered = output_path.read_text(encoding="utf-8").strip()
-        else:
-            rendered = completed.stdout.strip()
+        rendered = _render_agent_output(
+            client_adapter(settings.client).output_source,
+            completed.stdout,
+            output_path,
+        )
         if not rendered:
             raise RuntimeError("coding agent returned no final response")
         return rendered
@@ -278,6 +264,19 @@ def split_discord_message(value: str) -> list[str]:
         value[index : index + _MAX_DISCORD_MESSAGE]
         for index in range(0, len(value), _MAX_DISCORD_MESSAGE)
     ]
+
+
+def is_authorized_discord_user(
+    settings: DiscordBridgeSettings,
+    *,
+    user_id: int,
+    username: str,
+    is_bot: bool,
+) -> bool:
+    """Authorize a Discord account by stable ID or its current unique username."""
+    if is_bot:
+        return False
+    return user_id in settings.allowed_user_ids or username.casefold() in settings.allowed_usernames
 
 
 class ErgaDiscordClient(discord.Client):
@@ -292,7 +291,12 @@ class ErgaDiscordClient(discord.Client):
         print(f"Erga Discord connected as {self.user}", flush=True)
 
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot or message.author.id not in self.settings.allowed_user_ids:
+        if not is_authorized_discord_user(
+            self.settings,
+            user_id=message.author.id,
+            username=message.author.name,
+            is_bot=message.author.bot,
+        ):
             return
         is_direct_message = message.guild is None
         mentioned = self.user is not None and self.user in message.mentions

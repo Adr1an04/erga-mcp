@@ -30,10 +30,10 @@ It is built around LaTeX résumé workflows and is designed to work cleanly with
 résumé stays untouched; Erga creates a separate `.tex` file, a readable diff, and a PDF for you to
 review.
 
-You can use Erga directly from the command line or connect it to Codex, Claude Code, or OpenCode.
-The connected coding tool supplies the AI reasoning through the subscription you already use, so
-Erga does not need a model API key. Its application records and generated files stay on your
-computer.
+You can use Erga directly from the command line or connect it to Codex, Claude Code, OpenCode,
+Gemini CLI, Cursor Agent, GitHub Copilot CLI, or another MCP-capable coding CLI. The connected
+coding tool supplies the AI reasoning through the subscription you already use, so Erga does not
+need a model API key. Its application records and generated files stay on your computer.
 
 > [!IMPORTANT]
 > Erga organizes the process, but it does not submit applications, send messages, invent résumé
@@ -79,15 +79,16 @@ uv run erga setup
 
 The arrow-key wizard:
 
-- detects Codex, Claude Code, or OpenCode and verifies its existing subscription login;
+- detects a maintained coding-CLI preset and verifies its existing subscription login;
 - connects Erga to the selected coding tool without asking for a model API key;
 - optionally configures your master LaTeX résumé and output directory;
 - optionally connects a private Discord bot directly to that same coding tool; and
 - shows every selected action before writing configuration or credentials.
 
 The Discord token is stored in your operating system's credential store, while model
-authentication remains with the coding tool. There is no extra AI provider account and no
-required messaging-agent runtime.
+authentication remains with the coding tool. Modern Discord usernames such as `student.dev` work
+directly; finding a hidden numeric account ID is optional. There is no extra AI provider account
+and no required messaging-agent runtime.
 
 For automation or CI, the noninteractive equivalent remains:
 
@@ -131,8 +132,8 @@ the [complete getting-started guide](docs/getting-started.md).
 
 ## MCP clients
 
-Erga's primary agent boundary is standard local stdio MCP. Codex, Claude Code, and OpenCode receive
-the same tools, server instructions, evidence checks, and local artifacts.
+Erga's primary agent boundary is standard local stdio MCP. Every maintained coding-client adapter
+receives the same tools, server instructions, evidence checks, and local artifacts.
 See [`docs/mcp-clients.md`](docs/mcp-clients.md) for generated configuration, manual configuration,
 tool profiles, verification, and the optional loopback HTTP transport.
 

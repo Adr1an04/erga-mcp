@@ -1,8 +1,9 @@
-# Connect Erga to Codex, Claude Code, OpenCode, and other MCP clients
+# Connect Erga to coding-agent MCP clients
 
 Erga's primary integration contract is a local stdio process. The MCP client supplies all AI
 reasoning; Erga itself never calls a model API. This lets the same local workflow use the model
-access already available in Codex, Claude Code, OpenCode, or another MCP host.
+access already available in Codex, Claude Code, OpenCode, Gemini CLI, Cursor Agent, GitHub Copilot
+CLI, or another MCP host.
 
 > [!IMPORTANT]
 > Review the command and absolute paths before enabling it. The server runs with the same local permissions as the client that launches it. Do not put credentials, OAuth tokens, résumé contents, or vault contents in a client configuration.
@@ -33,6 +34,10 @@ Use one command to preview the correct native configuration:
 uv run erga client configure codex --config /absolute/path/to/erga-config.toml
 uv run erga client configure claude-code --config /absolute/path/to/erga-config.toml
 uv run erga client configure opencode --config /absolute/path/to/erga-config.toml
+uv run erga client configure gemini-cli --config /absolute/path/to/erga-config.toml
+uv run erga client configure cursor-agent --config /absolute/path/to/erga-config.toml
+uv run erga client configure github-copilot --config /absolute/path/to/erga-config.toml
+uv run erga client configure generic-mcp --config /absolute/path/to/erga-config.toml
 ```
 
 Add `--project-dir /absolute/path/to/project` to select another project. Preview is the default.
@@ -46,6 +51,10 @@ Generated files:
 | Codex | `.codex/config.toml` |
 | Claude Code | `.mcp.json` |
 | OpenCode | `opencode.json` |
+| Gemini CLI | `.gemini/settings.json` |
+| Cursor Agent | `.cursor/mcp.json` |
+| GitHub Copilot CLI | `.mcp.json` |
+| Generic MCP client | `.mcp.json` |
 
 Every generated entry passes only two non-secret environment values:
 
@@ -158,6 +167,43 @@ OpenCode V2 defines local stdio servers under `mcp.servers`:
 OpenCode provider authentication and model selection are independent of Erga. Use the model access
 already configured in OpenCode; never put provider credentials in the Erga MCP entry.
 
+## Gemini CLI
+
+Gemini CLI loads project MCP servers from `.gemini/settings.json` under `mcpServers`. The generated
+entry contains the local command, arguments, and the two non-secret Erga environment values.
+Authenticate interactively with the Google account associated with the intended free, Pro, Ultra,
+or organization entitlement before running guided setup.
+
+The native Discord adapter uses headless `--prompt` mode. Its readiness check uses read-only plan
+mode; accepted Discord turns use noninteractive approval mode while restricting MCP discovery to
+`erga-mcp`.
+
+## Cursor Agent
+
+Cursor Agent loads project servers from `.cursor/mcp.json` and supports noninteractive print mode.
+Run `cursor-agent login` first. The readiness probe uses plan mode; Discord turns enable the
+documented headless write mode, workspace trust, and MCP approval because no terminal is available
+for interactive confirmation.
+
+## GitHub Copilot CLI
+
+GitHub Copilot CLI loads workspace `.mcp.json` and supports a programmatic `--prompt` interface.
+Run `copilot login` with the GitHub account that owns the intended Copilot plan. Discord turns
+allow the `erga-mcp` server rather than granting a blanket all-tools permission, disable
+interactive questions, and enable workspace MCP loading in prompt mode as required by Copilot CLI.
+
+## Advanced generic CLI
+
+`generic-mcp` writes the portable `mcpServers` shape to project `.mcp.json`. In the interactive
+wizard, this option also asks for an executable and a JSON argument array containing exactly one
+standalone `{prompt}` item. Optional standalone `{project_dir}` and `{output_path}` items are
+substituted without invoking a shell.
+
+This path deliberately makes weaker promises: Erga cannot know whether an arbitrary CLI discovers
+`.mcp.json`, what its approval flags mean, or whether it uses a subscription versus metered API
+billing. Review the generated file, dry-run plan, and client documentation before starting
+Discord.
+
 ## VS Code
 
 Create or update `.vscode/mcp.json` (or the user `mcp.json`) through **MCP: Add Server**:
@@ -214,5 +260,9 @@ known client configuration targets.
 - [Claude Code MCP](https://code.claude.com/docs/en/mcp)
 - [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp)
 - [OpenCode MCP servers](https://opencode.ai/v2/docs/mcp-servers)
+- [Gemini CLI MCP servers](https://geminicli.com/docs/tools/mcp-server/)
+- [Gemini CLI headless mode](https://geminicli.com/docs/cli/headless/)
+- [Cursor Agent CLI](https://docs.cursor.com/en/cli/using)
+- [GitHub Copilot CLI MCP servers](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers)
 - [VS Code MCP servers](https://code.visualstudio.com/docs/agent-customization/mcp-servers)
 - [Cursor MCP](https://docs.cursor.com/context/mcp)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
@@ -10,7 +11,7 @@ from typing import Literal, cast
 import questionary
 from questionary import Choice
 
-from .client_config import ClientName
+from .client_adapters import CLIENT_ADAPTERS, PRESET_CLIENTS, ClientName
 from .discord_bridge import (
     DiscordBridgeSettings,
     resolve_client_command,
@@ -39,8 +40,11 @@ class SetupSelections:
     features: tuple[Feature, ...]
     resume_template: Path | None = None
     output_root: Path | None = None
+    client_command: Path | None = None
+    custom_arguments: tuple[str, ...] = ()
     discord_token: str | None = None
     discord_user_ids: tuple[int, ...] = ()
+    discord_usernames: tuple[str, ...] = ()
     start_discord: bool = True
 
 
@@ -71,11 +75,46 @@ def _existing_file_or_blank(value: str) -> bool | str:
     return "Choose an existing LaTeX resume, or leave this blank."
 
 
-def _discord_ids(value: str) -> bool | str:
-    values = [item.strip() for item in value.split(",") if item.strip()]
-    if values and all(item.isdigit() for item in values):
-        return True
-    return "Enter at least one numeric Discord user ID."
+def _parse_discord_identities(value: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
+    user_ids: list[int] = []
+    usernames: list[str] = []
+    for entered in (item.strip() for item in value.split(",")):
+        if not entered:
+            continue
+        if entered.isdigit():
+            user_ids.append(int(entered))
+            continue
+        username = entered.removeprefix("@").casefold()
+        if not re.fullmatch(r"[a-z0-9._]{2,32}", username):
+            raise ValueError(f"Invalid Discord username or user ID: {entered}")
+        usernames.append(username)
+    if not user_ids and not usernames:
+        raise ValueError("Enter at least one Discord username or numeric user ID.")
+    return tuple(dict.fromkeys(user_ids)), tuple(dict.fromkeys(usernames))
+
+
+def _discord_identities(value: str) -> bool | str:
+    try:
+        _parse_discord_identities(value)
+    except ValueError as error:
+        return str(error)
+    return True
+
+
+def _headless_arguments(value: str) -> bool | str:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return 'Enter a JSON array such as ["-p", "{prompt}"].'
+    if (
+        not isinstance(parsed, list)
+        or not parsed
+        or not all(isinstance(item, str) for item in parsed)
+    ):
+        return "Headless arguments must be a non-empty JSON array of strings."
+    if parsed.count("{prompt}") != 1:
+        return 'Include "{prompt}" as exactly one standalone array item.'
+    return True
 
 
 def collect_setup_selections(
@@ -115,14 +154,57 @@ def collect_setup_selections(
             questionary.select(
                 "Which coding AI subscription do you use?",
                 choices=[
-                    Choice("Codex / ChatGPT", value="codex"),
-                    Choice("Claude Code / Claude Pro or Max", value="claude-code"),
-                    Choice("OpenCode", value="opencode"),
+                    *[
+                        Choice(CLIENT_ADAPTERS[client_id].label, value=client_id)
+                        for client_id in PRESET_CLIENTS
+                    ],
+                    Choice(
+                        "Other MCP-capable coding CLI — advanced",
+                        value="generic-mcp",
+                    ),
                 ],
                 use_shortcuts=True,
             ).ask()
         ),
     )
+    client_command: Path | None = None
+    custom_arguments: tuple[str, ...] = ()
+    if client == "generic-mcp":
+        questionary.print(
+            "\nAdvanced adapter: Erga will pass arguments directly to this executable without "
+            "a shell and generate portable project .mcp.json configuration. Verify that your "
+            "client supports both.",
+            style="fg:#e0aa55",
+        )
+        client_command = (
+            Path(
+                str(
+                    _required(
+                        questionary.path(
+                            "Coding-agent executable:",
+                            only_files=True,
+                            validate=lambda value: (
+                                True
+                                if Path(value).expanduser().is_file()
+                                else "Choose an existing executable file."
+                            ),
+                        ).ask()
+                    )
+                )
+            )
+            .expanduser()
+            .absolute()
+        )
+        raw_arguments = str(
+            _required(
+                questionary.text(
+                    "Headless argument template (JSON array):",
+                    default='["-p", "--output-format", "text", "{prompt}"]',
+                    validate=_headless_arguments,
+                ).ask()
+            )
+        )
+        custom_arguments = tuple(json.loads(raw_arguments))
     project_dir = (
         Path(
             str(
@@ -193,6 +275,7 @@ def collect_setup_selections(
 
     discord_token: str | None = None
     discord_user_ids: tuple[int, ...] = ()
+    discord_usernames: tuple[str, ...] = ()
     start_discord = False
     if "discord" in features:
         questionary.print(
@@ -209,17 +292,16 @@ def collect_setup_selections(
                 ).ask()
             )
         )
-        raw_ids = str(
+        raw_identities = str(
             _required(
                 questionary.text(
-                    "Your Discord user ID (comma-separate additional trusted users):",
-                    validate=_discord_ids,
+                    "Your Discord username or numeric user ID "
+                    "(comma-separate additional trusted users):",
+                    validate=_discord_identities,
                 ).ask()
             )
         )
-        discord_user_ids = tuple(
-            int(value.strip()) for value in raw_ids.split(",") if value.strip()
-        )
+        discord_user_ids, discord_usernames = _parse_discord_identities(raw_identities)
         start_discord = bool(
             _required(
                 questionary.confirm(
@@ -237,8 +319,11 @@ def collect_setup_selections(
         features=features,
         resume_template=resume_template,
         output_root=output_root,
+        client_command=client_command,
+        custom_arguments=custom_arguments,
         discord_token=discord_token,
         discord_user_ids=discord_user_ids,
+        discord_usernames=discord_usernames,
         start_discord=start_discord,
     )
     questionary.print("\nReview", style="bold")
@@ -261,11 +346,21 @@ def render_setup_review(selections: SetupSelections) -> str:
     if "discord" in selections.features:
         lines.extend(
             [
-                f"  Discord users:   {len(selections.discord_user_ids)} authorized",
+                "  Discord users:   "
+                f"{len(selections.discord_user_ids) + len(selections.discord_usernames)} "
+                "authorized",
                 "  Discord token:   OS credential store (never config)",
             ]
         )
-    lines.append("  Model API key:   not requested")
+    if selections.client == "generic-mcp":
+        lines.extend(
+            [
+                f"  Client command:  {selections.client_command}",
+                "  Client billing:  verify in the selected CLI",
+            ]
+        )
+    else:
+        lines.append("  Model API key:   not requested")
     return "\n".join(lines)
 
 
@@ -276,8 +371,13 @@ def apply_setup(
     client_command: Path | None = None,
 ) -> SetupReport:
     """Apply reviewed selections using the existing coding-agent subscription."""
-    resolved_client = resolve_client_command(selections.client, client_command)
-    logged_in, login_detail = verify_subscription_login(selections.client, resolved_client)
+    explicit_client = client_command or selections.client_command
+    resolved_client = resolve_client_command(selections.client, explicit_client)
+    logged_in, login_detail = verify_subscription_login(
+        selections.client,
+        resolved_client,
+        selections.custom_arguments,
+    )
     if not logged_in:
         raise RuntimeError(
             f"{selections.client} is installed but not ready. Sign in first. {login_detail}"
@@ -287,6 +387,7 @@ def apply_setup(
         config_path=selections.config_path,
         project_dir=selections.project_dir,
         server_command=server_command,
+        client_command=resolved_client,
     )
     completed = [f"{selections.client} subscription login", "Erga MCP connection"]
     next_steps = ['Ask your coding AI: "Show my Erga pipeline status."']
@@ -312,7 +413,9 @@ def apply_setup(
     discord_configured = False
     discord_running = False
     if "discord" in selections.features:
-        if selections.discord_token is None or not selections.discord_user_ids:
+        if selections.discord_token is None or not (
+            selections.discord_user_ids or selections.discord_usernames
+        ):
             raise ValueError("Discord setup requires a bot token and at least one authorized user")
         write_discord_settings(
             selections.config_path,
@@ -321,6 +424,8 @@ def apply_setup(
                 client_command=str(resolved_client),
                 project_dir=selections.project_dir,
                 allowed_user_ids=selections.discord_user_ids,
+                allowed_usernames=selections.discord_usernames,
+                custom_arguments=selections.custom_arguments,
             ),
         )
         store_discord_token(selections.config_path, selections.discord_token)
@@ -362,7 +467,13 @@ def render_setup_report(report: SetupReport) -> str:
 
 def write_setup_plan(selections: SetupSelections) -> str:
     payload = asdict(selections)
-    for key in ("project_dir", "config_path", "resume_template", "output_root"):
+    for key in (
+        "project_dir",
+        "config_path",
+        "resume_template",
+        "output_root",
+        "client_command",
+    ):
         value = payload[key]
         payload[key] = str(value) if value is not None else None
     payload["discord_token"] = "<redacted>" if selections.discord_token else None

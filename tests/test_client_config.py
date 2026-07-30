@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from erga_mcp.client_adapters import SUPPORTED_CLIENTS
 from erga_mcp.client_config import (
     ensure_client_configuration,
     render_client_configuration,
@@ -75,6 +76,32 @@ class ClientConfigurationTests(unittest.TestCase):
             self.assertEqual(server["type"], "local")
             self.assertIsInstance(server["command"], list)
             self.assertEqual(server["environment"]["ERGA_MCP_TOOL_PROFILE"], "career")
+
+    def test_additional_clients_use_their_native_project_paths(self) -> None:
+        expected = {
+            "gemini-cli": ".gemini/settings.json",
+            "cursor-agent": ".cursor/mcp.json",
+            "github-copilot": ".mcp.json",
+            "generic-mcp": ".mcp.json",
+        }
+        for client, target in expected.items():
+            with self.subTest(client=client), TemporaryDirectory() as directory:
+                root = Path(directory)
+                configuration = self._render(client, root)
+                parsed = json.loads(configuration.content)
+                server = parsed["mcpServers"]["erga-mcp"]
+
+                self.assertEqual(configuration.target_path, root / target)
+                self.assertEqual(server["env"]["ERGA_MCP_TOOL_PROFILE"], "career")
+                self.assertNotIn("API_KEY", configuration.content)
+
+    def test_registry_and_configuration_support_stay_aligned(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for client in SUPPORTED_CLIENTS:
+                with self.subTest(client=client):
+                    configuration = self._render(client, root)
+                    self.assertEqual(configuration.client, client)
 
     def test_write_preserves_unrelated_json_configuration(self) -> None:
         with TemporaryDirectory() as directory:

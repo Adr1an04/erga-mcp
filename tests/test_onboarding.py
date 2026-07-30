@@ -7,6 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from erga_mcp.client_adapters import SUPPORTED_CLIENTS, client_adapter
 from erga_mcp.onboarding import onboard, render_onboarding_report
 
 
@@ -17,7 +18,7 @@ class OnboardingTests(unittest.TestCase):
         return executable
 
     def test_onboards_every_supported_client_without_a_model_api_key(self) -> None:
-        for client in ("codex", "claude-code", "opencode"):
+        for client in SUPPORTED_CLIENTS:
             with self.subTest(client=client), TemporaryDirectory() as directory:
                 root = Path(directory)
                 config = root / "private" / "config.toml"
@@ -83,7 +84,14 @@ class OnboardingTests(unittest.TestCase):
                 "career",
             )
 
-        for client, filename in (("claude-code", ".mcp.json"), ("opencode", "opencode.json")):
+        for client in (
+            "claude-code",
+            "opencode",
+            "gemini-cli",
+            "cursor-agent",
+            "github-copilot",
+            "generic-mcp",
+        ):
             with self.subTest(client=client), TemporaryDirectory() as directory:
                 root = Path(directory)
                 report = onboard(
@@ -93,9 +101,10 @@ class OnboardingTests(unittest.TestCase):
                     server_command=self._executable(root),
                 )
 
-                parsed_json = json.loads((root / filename).read_text(encoding="utf-8"))
+                target = root / client_adapter(client).mcp_target
+                parsed_json = json.loads(target.read_text(encoding="utf-8"))
                 self.assertIsInstance(parsed_json, dict)
-                self.assertEqual(report.mcp_config_path, str(root / filename))
+                self.assertEqual(report.mcp_config_path, str(target))
 
     def test_human_report_has_a_concrete_success_check(self) -> None:
         with TemporaryDirectory() as directory:
@@ -109,7 +118,7 @@ class OnboardingTests(unittest.TestCase):
 
             rendered = render_onboarding_report(report)
 
-            self.assertIn("Erga is ready for Codex.", rendered)
+            self.assertIn("Erga is ready for Codex / ChatGPT.", rendered)
             self.assertIn("Show my Erga pipeline status.", rendered)
             self.assertIn("Separate model API key required: no", rendered)
 

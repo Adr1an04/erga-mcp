@@ -24,23 +24,27 @@ authentication, entitlements, and token accounting.
 
 ## Native Discord trust boundary
 
-The optional native Discord bridge accepts messages only from numeric Discord user IDs explicitly
-allowlisted during setup. Direct messages are accepted; server messages require a bot mention by
-default. The Discord bot token is retrieved from the operating-system credential store and is
-never included in process arguments or non-secret bridge settings.
+The optional native Discord bridge accepts messages only from Discord usernames or numeric account
+IDs explicitly allowlisted during setup. Modern usernames are case-normalized and compared with
+Discord's unique account username, not the mutable server nickname or retired `name#1234`
+discriminator. Numeric IDs remain available as the stable option. Direct messages are accepted;
+server messages require a bot mention by default. The Discord bot token is retrieved from the
+operating-system credential store and is never included in process arguments or non-secret bridge
+settings.
 
 Each accepted message launches one bounded noninteractive turn in the selected coding CLI inside
-the configured project directory. Codex turns use a workspace-write sandbox. Claude Code turns use
-its `acceptEdits` permission mode because a background Discord process cannot answer interactive
-permission prompts. OpenCode turns use its automatic noninteractive mode. These modes can modify
-workspace files, so an authorized Discord identity is a remote operator of the coding client—not
-merely a reader of Erga records.
+the configured project directory. Some clients call this workspace-write, accept-edits, automatic,
+YOLO, force, or tool-allowlist mode because a background Discord process cannot answer interactive
+permission prompts. These modes can modify workspace files, so an authorized Discord identity is a
+remote operator of the coding client—not merely a reader of Erga records.
 
-The bridge removes `OPENAI_API_KEY` from Codex child environments and `ANTHROPIC_API_KEY` from
-Claude Code child environments. Model credentials, subscription state, provider choice, and rate
-limits otherwise remain owned by the coding CLI. Use a private bot, the smallest possible
-allowlist, and a dedicated résumé workspace. The agent policy forbids application submission,
-invented claims, and employer messaging, but policy text is not an operating-system sandbox.
+The bridge removes known model API-key variables from Codex, Claude Code, Gemini CLI, and Cursor
+Agent child environments. Model credentials, subscription state, provider choice, and rate limits
+otherwise remain owned by the coding CLI. The advanced generic adapter cannot enforce this
+boundary for an unknown client and clearly labels provider/billing verification as the user's
+responsibility. Use a private bot, the smallest possible allowlist, and a dedicated résumé
+workspace. The agent policy forbids application submission, invented claims, and employer
+messaging, but policy text is not an operating-system sandbox.
 
 The server declares tool annotations so MCP clients can distinguish its capability classes:
 
