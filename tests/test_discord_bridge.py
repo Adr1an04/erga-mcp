@@ -84,7 +84,7 @@ class DiscordBridgeTests(unittest.TestCase):
                 client_command=str(root / "codex"),
                 project_dir=root,
                 allowed_user_ids=(),
-                allowed_usernames=("emperor_sai",),
+                allowed_usernames=("student.dev",),
             )
 
             write_discord_settings(config, original)
@@ -97,14 +97,14 @@ class DiscordBridgeTests(unittest.TestCase):
             client_command="/tmp/codex",
             project_dir=Path("/tmp"),
             allowed_user_ids=(123,),
-            allowed_usernames=("emperor_sai",),
+            allowed_usernames=("student.dev",),
         )
 
         self.assertTrue(
             is_authorized_discord_user(
                 settings,
                 user_id=999,
-                username="Emperor_Sai",
+                username="Student.Dev",
                 is_bot=False,
             )
         )
@@ -120,7 +120,7 @@ class DiscordBridgeTests(unittest.TestCase):
             is_authorized_discord_user(
                 settings,
                 user_id=123,
-                username="emperor_sai",
+                username="student.dev",
                 is_bot=True,
             )
         )

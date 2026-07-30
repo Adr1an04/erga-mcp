@@ -222,10 +222,10 @@ class SetupWizardTests(unittest.TestCase):
             self.assertNotIn("hermes", settings.casefold())
 
     def test_modern_discord_usernames_do_not_require_developer_mode(self) -> None:
-        user_ids, usernames = _parse_discord_identities("emperor_sai, @trusted.friend, 123456789")
+        user_ids, usernames = _parse_discord_identities("student.dev, @trusted.friend, 123456789")
 
         self.assertEqual(user_ids, (123456789,))
-        self.assertEqual(usernames, ("emperor_sai", "trusted.friend"))
+        self.assertEqual(usernames, ("student.dev", "trusted.friend"))
 
     def test_invalid_discord_discriminator_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Invalid Discord"):

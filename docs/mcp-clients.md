@@ -143,21 +143,20 @@ local compilation.
 
 ## OpenCode
 
-OpenCode V2 defines local stdio servers under `mcp.servers`:
+Stable OpenCode defines local stdio servers directly under `mcp`:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "servers": {
-      "erga-mcp": {
-        "type": "local",
-        "command": ["/absolute/path/to/erga-mcp"],
-        "cwd": "/absolute/path/to/resume-workspace",
-        "environment": {
-          "ERGA_MCP_CONFIG": "/absolute/path/to/erga-mcp-config.toml",
-          "ERGA_MCP_TOOL_PROFILE": "career"
-        }
+    "erga-mcp": {
+      "type": "local",
+      "command": ["/absolute/path/to/erga-mcp"],
+      "cwd": "/absolute/path/to/resume-workspace",
+      "enabled": true,
+      "environment": {
+        "ERGA_MCP_CONFIG": "/absolute/path/to/erga-mcp-config.toml",
+        "ERGA_MCP_TOOL_PROFILE": "career"
       }
     }
   }
@@ -261,7 +260,7 @@ labels the optional second résumé as style-only.
 - [MCP Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
 - [Claude Code MCP](https://code.claude.com/docs/en/mcp)
 - [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp)
-- [OpenCode MCP servers](https://opencode.ai/v2/docs/mcp-servers)
+- [OpenCode MCP servers](https://opencode.ai/docs/mcp-servers/)
 - [Gemini CLI MCP servers](https://geminicli.com/docs/tools/mcp-server/)
 - [Gemini CLI headless mode](https://geminicli.com/docs/cli/headless/)
 - [Cursor Agent CLI](https://docs.cursor.com/en/cli/using)

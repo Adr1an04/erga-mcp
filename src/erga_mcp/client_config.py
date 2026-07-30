@@ -120,16 +120,15 @@ def _opencode_content(
             {
                 "$schema": "https://opencode.ai/config.json",
                 "mcp": {
-                    "servers": {
-                        server_name: {
-                            "type": "local",
-                            "command": [str(command), *server_args],
-                            "cwd": str(project_dir),
-                            "environment": {
-                                "ERGA_MCP_CONFIG": str(config_path),
-                                "ERGA_MCP_TOOL_PROFILE": tool_profile,
-                            },
-                        }
+                    server_name: {
+                        "type": "local",
+                        "command": [str(command), *server_args],
+                        "cwd": str(project_dir),
+                        "enabled": True,
+                        "environment": {
+                            "ERGA_MCP_CONFIG": str(config_path),
+                            "ERGA_MCP_TOOL_PROFILE": tool_profile,
+                        },
                     }
                 },
             },
@@ -220,9 +219,8 @@ def _merge_json(
         servers = document.setdefault("mcpServers", {})
         generated_server = addition["mcpServers"][server_name]
     else:
-        mcp = document.setdefault("mcp", {})
-        servers = mcp.setdefault("servers", {})
-        generated_server = addition["mcp"]["servers"][server_name]
+        servers = document.setdefault("mcp", {})
+        generated_server = addition["mcp"][server_name]
         document.setdefault("$schema", "https://opencode.ai/config.json")
     if not isinstance(servers, dict):
         raise ValueError("existing MCP server configuration must contain a JSON object")
@@ -300,8 +298,7 @@ def _configured_server(configuration: ClientConfiguration, content: str) -> obje
         if configuration.mcp_format == "mcp-servers":
             servers = document.get("mcpServers", {})
         else:
-            mcp = document.get("mcp", {})
-            servers = mcp.get("servers", {}) if isinstance(mcp, dict) else {}
+            servers = document.get("mcp", {})
     if not isinstance(servers, dict):
         return None
     return servers.get(configuration.server_name)

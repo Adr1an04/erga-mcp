@@ -66,16 +66,18 @@ class ClientConfigurationTests(unittest.TestCase):
             self.assertEqual(server["type"], "stdio")
             self.assertEqual(server["env"]["ERGA_MCP_TOOL_PROFILE"], "career")
 
-    def test_opencode_configuration_uses_v2_local_server_shape(self) -> None:
+    def test_opencode_configuration_uses_stable_local_server_shape(self) -> None:
         with TemporaryDirectory() as directory:
             configuration = self._render("opencode", Path(directory))
             parsed = json.loads(configuration.content)
-            server = parsed["mcp"]["servers"]["erga-mcp"]
+            server = parsed["mcp"]["erga-mcp"]
 
             self.assertEqual(parsed["$schema"], "https://opencode.ai/config.json")
             self.assertEqual(server["type"], "local")
+            self.assertTrue(server["enabled"])
             self.assertIsInstance(server["command"], list)
             self.assertEqual(server["environment"]["ERGA_MCP_TOOL_PROFILE"], "career")
+            self.assertNotIn("servers", parsed["mcp"])
 
     def test_additional_clients_use_their_native_project_paths(self) -> None:
         expected = {
@@ -108,7 +110,7 @@ class ClientConfigurationTests(unittest.TestCase):
             root = Path(directory)
             target = root / "opencode.json"
             target.write_text(
-                json.dumps({"model": "local/test", "mcp": {"servers": {"other": {}}}}),
+                json.dumps({"model": "local/test", "mcp": {"other": {}}}),
                 encoding="utf-8",
             )
             configuration = self._render("opencode", root)
@@ -118,8 +120,8 @@ class ClientConfigurationTests(unittest.TestCase):
 
             self.assertTrue(result["written"])
             self.assertEqual(parsed["model"], "local/test")
-            self.assertIn("other", parsed["mcp"]["servers"])
-            self.assertIn("erga-mcp", parsed["mcp"]["servers"])
+            self.assertIn("other", parsed["mcp"])
+            self.assertIn("erga-mcp", parsed["mcp"])
 
     def test_write_refuses_to_overwrite_existing_server(self) -> None:
         with TemporaryDirectory() as directory:
