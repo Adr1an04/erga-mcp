@@ -20,6 +20,9 @@ creates private local state; writes the native project MCP entry; and optionally
 résumé workflow and native Discord bridge. It is safe to rerun and requires no model API key or
 Hermes installation for maintained subscription-backed adapters.
 
+Erga checks the selected coding client before collecting résumé or Discord details. Codex can be
+found on `PATH` or inside the ChatGPT/Codex desktop application on macOS.
+
 When résumé generation is selected, drag the complete master PDF, DOCX, or `.tex` file directly
 into the terminal. It may span many pages: Erga extracts all of its text as user-approved factual
 knowledge. You may then drag in a separate résumé as an optional style template. If you decline,

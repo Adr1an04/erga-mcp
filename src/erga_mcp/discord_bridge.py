@@ -94,6 +94,19 @@ def load_discord_settings(config_path: Path) -> DiscordBridgeSettings:
     )
 
 
+def _bundled_client_candidates(client: ClientName) -> tuple[Path, ...]:
+    """Return known coding-client executables bundled inside desktop applications."""
+    if client != "codex" or sys.platform != "darwin":
+        return ()
+    applications = (Path("/Applications"), Path.home() / "Applications")
+    app_names = ("ChatGPT.app", "Codex.app")
+    return tuple(
+        root / app_name / "Contents" / "Resources" / "codex"
+        for root in applications
+        for app_name in app_names
+    )
+
+
 def resolve_client_command(client: ClientName, explicit: Path | None = None) -> Path:
     adapter = client_adapter(client)
     if explicit is not None:
@@ -104,11 +117,15 @@ def resolve_client_command(client: ClientName, explicit: Path | None = None) -> 
     if adapter.executable is None:
         raise FileNotFoundError("The generic client requires an explicit coding-agent executable.")
     discovered = shutil.which(adapter.executable)
-    if discovered is None:
-        raise FileNotFoundError(
-            f"{adapter.executable} is not installed or not on PATH; install and sign in first"
-        )
-    return Path(discovered).absolute()
+    if discovered is not None:
+        return Path(discovered).absolute()
+    for candidate in _bundled_client_candidates(client):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate.absolute()
+    raise FileNotFoundError(
+        f"{adapter.label} command was not found on PATH or in a supported desktop app. "
+        "Install the coding client and sign in, then rerun `erga setup`."
+    )
 
 
 def verify_subscription_login(

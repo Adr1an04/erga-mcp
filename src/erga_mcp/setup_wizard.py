@@ -51,6 +51,7 @@ class SetupSelections:
     style_resume: Path | None = None
     output_root: Path | None = None
     client_command: Path | None = None
+    client_preflight_verified: bool = False
     custom_arguments: tuple[str, ...] = ()
     discord_token: str | None = None
     discord_user_ids: tuple[int, ...] = ()
@@ -242,6 +243,28 @@ def collect_setup_selections(
             )
         )
         custom_arguments = tuple(json.loads(raw_arguments))
+    client_preflight_verified = False
+    if not dry_run:
+        client_command = resolve_client_command(client, client_command)
+        questionary.print(
+            f"Checking {CLIENT_ADAPTERS[client].label} subscription login...",
+            style="fg:#aaaaaa",
+        )
+        logged_in, login_detail = verify_subscription_login(
+            client,
+            client_command,
+            custom_arguments,
+        )
+        if not logged_in:
+            raise RuntimeError(
+                f"{CLIENT_ADAPTERS[client].label} is installed but not ready. "
+                f"Sign in first, then rerun `erga setup`. {login_detail}"
+            )
+        client_preflight_verified = True
+        questionary.print(
+            f"Ready: {CLIENT_ADAPTERS[client].label} subscription login",
+            style="fg:#5fd787",
+        )
     project_dir = (
         Path(
             str(
@@ -383,6 +406,7 @@ def collect_setup_selections(
         style_resume=style_resume,
         output_root=output_root,
         client_command=client_command,
+        client_preflight_verified=client_preflight_verified,
         custom_arguments=custom_arguments,
         discord_token=discord_token,
         discord_user_ids=discord_user_ids,
@@ -421,10 +445,11 @@ def render_setup_review(selections: SetupSelections) -> str:
                 "  Discord token:   OS credential store (never config)",
             ]
         )
+    if selections.client_command is not None:
+        lines.append(f"  Client command:  {selections.client_command}")
     if selections.client == "generic-mcp":
         lines.extend(
             [
-                f"  Client command:  {selections.client_command}",
                 "  Client billing:  verify in the selected CLI",
             ]
         )
@@ -456,15 +481,16 @@ def apply_setup(
 
     explicit_client = client_command or selections.client_command
     resolved_client = resolve_client_command(selections.client, explicit_client)
-    logged_in, login_detail = verify_subscription_login(
-        selections.client,
-        resolved_client,
-        selections.custom_arguments,
-    )
-    if not logged_in:
-        raise RuntimeError(
-            f"{selections.client} is installed but not ready. Sign in first. {login_detail}"
+    if not selections.client_preflight_verified:
+        logged_in, login_detail = verify_subscription_login(
+            selections.client,
+            resolved_client,
+            selections.custom_arguments,
         )
+        if not logged_in:
+            raise RuntimeError(
+                f"{selections.client} is installed but not ready. Sign in first. {login_detail}"
+            )
     onboard(
         selections.client,
         config_path=selections.config_path,

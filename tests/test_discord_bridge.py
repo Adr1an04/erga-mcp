@@ -14,6 +14,7 @@ from erga_mcp.discord_bridge import (
     build_agent_command,
     is_authorized_discord_user,
     load_discord_settings,
+    resolve_client_command,
     run_agent,
     split_discord_message,
     verify_subscription_login,
@@ -44,6 +45,35 @@ class DiscordBridgeTests(unittest.TestCase):
 
             self.assertEqual(loaded, settings)
             self.assertNotIn("token", content.casefold())
+
+    def test_resolves_codex_bundled_inside_a_desktop_app(self) -> None:
+        with TemporaryDirectory() as directory:
+            bundled = Path(directory) / "ChatGPT.app" / "Contents" / "Resources" / "codex"
+            bundled.parent.mkdir(parents=True)
+            bundled.write_text("#!/bin/sh\n", encoding="utf-8")
+            bundled.chmod(0o755)
+
+            with (
+                patch("erga_mcp.discord_bridge.shutil.which", return_value=None),
+                patch(
+                    "erga_mcp.discord_bridge._bundled_client_candidates",
+                    return_value=(bundled,),
+                ),
+            ):
+                resolved = resolve_client_command("codex")
+
+            self.assertEqual(resolved, bundled.absolute())
+
+    def test_missing_client_error_mentions_path_and_desktop_apps(self) -> None:
+        with (
+            patch("erga_mcp.discord_bridge.shutil.which", return_value=None),
+            patch(
+                "erga_mcp.discord_bridge._bundled_client_candidates",
+                return_value=(),
+            ),
+        ):
+            with self.assertRaisesRegex(FileNotFoundError, "PATH or in a supported desktop app"):
+                resolve_client_command("codex")
 
     def test_settings_accept_modern_discord_usernames(self) -> None:
         with TemporaryDirectory() as directory:

@@ -25,6 +25,11 @@ writing configuration. This catches expired or revoked sessions that can still a
 The final review shows the workspace, private config location, and selected components. Canceling
 before confirmation makes no changes.
 
+Immediately after the coding-AI choice, Erga locates the client and runs a minimal subscription
+readiness check. On macOS, Codex is discovered either on `PATH` or inside the installed ChatGPT or
+Codex desktop application. Setup stops with an actionable message at this point if the client is
+missing or signed out—before asking for résumé files or Discord credentials.
+
 For résumé generation, no manual path navigation is required:
 
 1. Drag the complete master PDF, DOCX, or `.tex` file into the terminal and press Enter. A

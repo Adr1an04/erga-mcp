@@ -16,6 +16,7 @@ from erga_mcp.setup_wizard import (
     _parse_discord_identities,
     _style_resume_file,
     apply_setup,
+    collect_setup_selections,
     render_setup_review,
     write_setup_plan,
 )
@@ -63,6 +64,55 @@ class SetupWizardTests(unittest.TestCase):
             self.assertEqual(config.resume.template_path, resume)
             self.assertEqual(config.resume.reference_path, reference)
             self.assertTrue((root / ".codex" / "config.toml").is_file())
+
+    def test_missing_client_stops_before_workspace_resume_or_discord_questions(self) -> None:
+        def answer(value: str) -> SimpleNamespace:
+            return SimpleNamespace(ask=lambda: value)
+
+        with (
+            patch(
+                "erga_mcp.setup_wizard.questionary.select",
+                side_effect=[answer("full"), answer("codex")],
+            ),
+            patch("erga_mcp.setup_wizard.questionary.path") as path_prompt,
+            patch("erga_mcp.setup_wizard.questionary.password") as password_prompt,
+            patch("erga_mcp.setup_wizard.questionary.print"),
+            patch(
+                "erga_mcp.setup_wizard.resolve_client_command",
+                side_effect=FileNotFoundError("Codex was not found"),
+            ),
+        ):
+            with self.assertRaisesRegex(FileNotFoundError, "Codex was not found"):
+                collect_setup_selections(
+                    default_project_dir=Path("/workspace"),
+                    default_config_path=Path("/private/config.toml"),
+                )
+
+        path_prompt.assert_not_called()
+        password_prompt.assert_not_called()
+
+    def test_apply_reuses_the_subscription_preflight_from_the_same_setup_run(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            command = self._command(root, "codex")
+            selections = SetupSelections(
+                experience="custom",
+                client="codex",
+                project_dir=root,
+                config_path=root / "private" / "config.toml",
+                features=(),
+                client_command=command,
+                client_preflight_verified=True,
+            )
+
+            with patch("erga_mcp.setup_wizard.verify_subscription_login") as verify:
+                report = apply_setup(
+                    selections,
+                    server_command=self._command(root, "erga-mcp"),
+                )
+
+            self.assertEqual(report.status, "ready")
+            verify.assert_not_called()
 
     def test_dragged_resume_paths_accept_quotes_and_escaped_spaces(self) -> None:
         with TemporaryDirectory() as directory:

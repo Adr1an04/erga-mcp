@@ -532,13 +532,20 @@ def main(arguments: Sequence[str] | None = None) -> int:
         except WizardCancelled as error:
             print(str(error))
             return 130
+        except (FileNotFoundError, RuntimeError, ValueError) as error:
+            print(f"Setup could not continue: {error}", file=sys.stderr)
+            return 1
         if args.dry_run:
             print(write_setup_plan(selections))
             return 0
-        setup_report = apply_setup(
-            selections,
-            server_command=args.server_command,
-        )
+        try:
+            setup_report = apply_setup(
+                selections,
+                server_command=args.server_command,
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as error:
+            print(f"Setup could not continue: {error}", file=sys.stderr)
+            return 1
         print(render_setup_report(setup_report))
         return 0
     if args.command == "discord":
