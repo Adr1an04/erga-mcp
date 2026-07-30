@@ -84,6 +84,8 @@ The arrow-key wizard:
 - lets you drag in a multi-page PDF, DOCX, or LaTeX master résumé as approved factual knowledge
   and, only as an explicit override, a separate résumé as a style-only reference; both are copied
   into hash-verified private Erga storage so later moving the originals does not break the workflow;
+- keeps only the newest imported master approved and withholds raw style-reference text from the
+  coding AI;
 - optionally connects a private Discord bot directly to that same coding tool; and
 - shows every selected action before writing configuration or credentials.
 

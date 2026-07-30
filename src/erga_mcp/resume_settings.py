@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .config import ResumeSettings, load_config
+from .private_files import restrict_private_file
 
 
 def as_json(settings: ResumeSettings) -> dict[str, object]:
@@ -71,4 +72,5 @@ def update_settings(config_path: Path, updates: dict[str, object]) -> ResumeSett
     finally:
         temporary_path.unlink(missing_ok=True)
     config_path.write_text(replaced, encoding="utf-8")
+    restrict_private_file(config_path)
     return settings

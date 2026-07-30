@@ -49,6 +49,11 @@ hash. Configuration points to those managed copies, so the originals may later b
 or removed without breaking `resume_source_context`. Erga records the original path only in a
 private provenance manifest and never modifies the original.
 
+When a new master is imported, Erga atomically marks prior master-résumé evidence inactive so only
+the current master remains approved for future proposals. The optional style snapshot's raw text is
+not returned to the coding AI; Erga exposes only non-factual layout metadata such as page count,
+section order, line count, and content density measurements.
+
 A dragged `.tex` master is imported as durable factual knowledge, not silently assumed to be a
 complete editable template project. LaTeX documents may depend on nearby images, macros, fonts, or
 other files, so configure `template_path` separately to a template bundle you intend Erga to use
@@ -126,7 +131,7 @@ template before expecting a compiled tailored PDF.
 | Discord bot token | Operating-system credential store |
 | Managed résumé snapshots | `~/.config/erga-mcp/state/resume-sources/<sha256>/` |
 | Master résumé | Hash-verified private copy; extracted as approved knowledge |
-| Optional style résumé | Hash-verified private copy; never factual evidence |
+| Optional style résumé | Hash-verified private copy; raw text never enters model context |
 | Snapshot provenance | Private `master.json` / `style.json` beside each managed copy |
 | Codex project entry | `<project>/.codex/config.toml` |
 | Claude Code project entry | `<project>/.mcp.json` |

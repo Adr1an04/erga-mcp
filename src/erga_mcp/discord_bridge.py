@@ -20,6 +20,7 @@ import keyring
 
 from .client_adapters import ClientName, client_adapter
 from .config import load_config
+from .private_files import restrict_private_directory, restrict_private_file
 
 _TOKEN_SERVICE = "erga-mcp.discord"
 _SETTINGS_NAME = "discord-bridge.json"
@@ -73,6 +74,7 @@ def write_discord_settings(
     payload["project_dir"] = str(settings.project_dir)
     payload["allowed_user_ids"] = list(settings.allowed_user_ids)
     target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    restrict_private_file(target)
     return target
 
 
@@ -177,6 +179,11 @@ def verify_subscription_login(
         rendered = _render_agent_output(adapter.output_source, live.stdout, output_path)
         if not rendered:
             return False, "live readiness turn returned no response"
+        if rendered.strip() != "ERGA_READY":
+            return False, (
+                "live readiness turn did not return the expected ERGA_READY marker; "
+                f"received: {rendered.strip()[-500:]}"
+            )
     return True, "coding-agent subscription is ready"
 
 
@@ -348,6 +355,7 @@ def run_discord_bridge(config_path: Path) -> int:
 def _runtime_paths(config_path: Path) -> tuple[Path, Path]:
     config = load_config(config_path)
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    restrict_private_directory(config.data_dir)
     return config.data_dir / _PID_NAME, config.data_dir / _LOG_NAME
 
 
@@ -370,6 +378,7 @@ def start_discord_bridge(config_path: Path) -> dict[str, object]:
         return current
     pid_path, log_path = _runtime_paths(config_path)
     with log_path.open("a", encoding="utf-8") as log:
+        restrict_private_file(log_path)
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -384,6 +393,7 @@ def start_discord_bridge(config_path: Path) -> dict[str, object]:
             start_new_session=True,
         )
     pid_path.write_text(f"{process.pid}\n", encoding="utf-8")
+    restrict_private_file(pid_path)
     return {"running": True, "pid": process.pid, "log_path": str(log_path)}
 
 

@@ -55,6 +55,7 @@ from .mail_settings import as_json as mail_settings_as_json
 from .mail_settings import update_settings as update_mail_settings
 from .models import Application
 from .onboarding import onboard, render_onboarding_report
+from .private_files import restrict_private_file
 from .reporting import render_history_digest
 from .resume import (
     create_job_package,
@@ -429,6 +430,7 @@ def _initialize(config_path: Path) -> int:
         return 2
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+    restrict_private_file(config_path)
     config = load_config(config_path)
     ErgaStore(config.data_dir / "erga.sqlite3").initialize()
     print(f"Created local configuration: {config.config_path}")

@@ -53,11 +53,16 @@ against that hash, and configures future reads against the managed copy. The opt
 is snapshotted the same way but remains a style and layout reference only: it cannot become evidence
 for new claims. Original paths are retained only in private provenance manifests. Erga never
 modifies either original file, and moving an original after setup does not break the managed copy.
+Only one imported master résumé remains approved at a time; importing an update atomically
+supersedes older master evidence. The style snapshot's raw text is withheld from MCP responses,
+which expose only non-factual layout measurements.
 
 On operating systems with POSIX permissions, managed résumé directories are restricted to the
-current user and snapshot/manifest files are created with owner-only access. A dragged `.tex` file
-is not automatically treated as a complete editable template project because copying one file
-cannot safely capture arbitrary local TeX dependencies.
+current user and snapshot/manifest files are created with owner-only access. Erga also restricts
+its config file and SQLite state to the current user. A dragged `.tex` file is not automatically
+treated as a complete editable template project because copying one file cannot safely capture
+arbitrary local TeX dependencies. DOCX extraction rejects an oversized decompressed
+`word/document.xml` member before reading it into memory.
 
 The server declares tool annotations so MCP clients can distinguish its capability classes:
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import tomllib
 import unittest
 from pathlib import Path
@@ -39,6 +41,14 @@ class OnboardingTests(unittest.TestCase):
                 self.assertEqual(report.tool_profile, "career")
                 self.assertTrue(config.is_file())
                 self.assertTrue(Path(report.mcp_config_path).is_file())
+                if os.name != "nt":
+                    data_dir = Path(report.data_dir)
+                    self.assertEqual(stat.S_IMODE(config.stat().st_mode), 0o600)
+                    self.assertEqual(stat.S_IMODE(data_dir.stat().st_mode), 0o700)
+                    self.assertEqual(
+                        stat.S_IMODE((data_dir / "erga.sqlite3").stat().st_mode),
+                        0o600,
+                    )
 
     def test_onboarding_is_idempotent(self) -> None:
         with TemporaryDirectory() as directory:

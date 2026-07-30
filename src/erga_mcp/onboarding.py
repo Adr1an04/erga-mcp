@@ -16,6 +16,7 @@ from .client_config import (
 )
 from .config import DEFAULT_CONFIG, load_config
 from .doctor import check_installation
+from .private_files import restrict_private_directory, restrict_private_file
 from .store import ErgaStore
 
 
@@ -47,8 +48,10 @@ def _initialize_or_reuse(config_path: Path) -> tuple[bool, Path]:
     if created:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+    restrict_private_file(config_path)
     config = load_config(config_path)
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    restrict_private_directory(config.data_dir)
     ErgaStore(config.data_dir / "erga.sqlite3").initialize()
     return created, config.data_dir
 

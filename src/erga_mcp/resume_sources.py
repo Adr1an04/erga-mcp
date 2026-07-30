@@ -16,12 +16,14 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 from .models import Evidence
+from .private_files import restrict_private_directory, restrict_private_file
 from .store import ErgaStore
 
 SUPPORTED_RESUME_SUFFIXES = frozenset({".docx", ".pdf", ".tex"})
 ResumeSourceRole = Literal["master", "style"]
 _MAX_SOURCE_BYTES = 25 * 1024 * 1024
 _MAX_EXTRACTED_CHARS = 500_000
+_MAX_DOCX_DOCUMENT_BYTES = 8 * 1024 * 1024
 _COPY_CHUNK_BYTES = 1024 * 1024
 _WORD_NAMESPACE = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _DEFAULT_STYLE: dict[str, object] = {
@@ -78,6 +80,9 @@ def _pdf_text(path: Path) -> tuple[str, int]:
 def _docx_text(path: Path) -> str:
     try:
         with zipfile.ZipFile(path) as archive:
+            document_info = archive.getinfo("word/document.xml")
+            if document_info.file_size > _MAX_DOCX_DOCUMENT_BYTES:
+                raise ValueError("resume DOCX document.xml exceeds the 8 MB decompression limit")
             document = archive.read("word/document.xml")
     except (KeyError, zipfile.BadZipFile) as error:
         raise ValueError(f"could not read resume DOCX: {path}") from error
@@ -119,11 +124,6 @@ def load_resume_source(path: Path) -> ResumeSource:
         page_count=page_count,
         text=text,
     )
-
-
-def _restrict_private_file(path: Path) -> None:
-    if os.name != "nt":
-        path.chmod(0o600)
 
 
 def _write_snapshot_metadata(
@@ -174,7 +174,7 @@ def _write_snapshot_metadata(
         os.fsync(temporary.fileno())
         temporary_path = Path(temporary.name)
     try:
-        _restrict_private_file(temporary_path)
+        restrict_private_file(temporary_path)
         temporary_path.replace(metadata_path)
     finally:
         temporary_path.unlink(missing_ok=True)
@@ -191,8 +191,7 @@ def snapshot_resume_source(
         raise ValueError("resume source changed before Erga could create its private copy")
     snapshot_dir = data_dir.expanduser().absolute() / "resume-sources" / source.sha256
     snapshot_dir.mkdir(parents=True, exist_ok=True)
-    if os.name != "nt":
-        snapshot_dir.chmod(0o700)
+    restrict_private_directory(snapshot_dir)
     managed_path = snapshot_dir / f"{role}.{source.path.suffix.casefold().removeprefix('.')}"
     metadata_path = snapshot_dir / f"{role}.json"
 
@@ -221,12 +220,12 @@ def snapshot_resume_source(
         try:
             if _sha256_file(temporary_path) != source.sha256:
                 raise ValueError("resume source changed while Erga was creating its private copy")
-            _restrict_private_file(temporary_path)
+            restrict_private_file(temporary_path)
             temporary_path.replace(managed_path)
         finally:
             temporary_path.unlink(missing_ok=True)
 
-    _restrict_private_file(managed_path)
+    restrict_private_file(managed_path)
     _write_snapshot_metadata(
         metadata_path=metadata_path,
         source=source,
@@ -246,19 +245,40 @@ def import_master_resume(
     *,
     source_name: str | None = None,
 ) -> Evidence:
-    """Register the user-selected master as approved evidence, idempotently."""
+    """Make the selected master the sole active approved master source."""
     source_ref = master_source_ref(source, source_name=source_name)
-    existing = next(
-        (
-            evidence
-            for evidence in store.list_evidence()
-            if evidence.source_ref == source_ref and evidence.text == source.text
-        ),
-        None,
+    return store.set_active_master_resume_evidence(source_ref=source_ref, text=source.text)
+
+
+def _style_profile(source: ResumeSource) -> dict[str, object]:
+    lines = [line.strip() for line in source.text.splitlines() if line.strip()]
+    section_names = (
+        "Education",
+        "Experience",
+        "Projects",
+        "Research",
+        "Publications",
+        "Leadership",
+        "Activities",
+        "Technical Skills",
+        "Skills",
     )
-    if existing is not None:
-        return existing
-    return store.add_evidence(source_ref=source_ref, text=source.text, approved=True)
+    section_order = [
+        section
+        for section in section_names
+        if any(line.casefold() == section.casefold() for line in lines)
+    ]
+    return {
+        "format": source.format,
+        "sha256": source.sha256,
+        "page_count": source.page_count,
+        "style_only": True,
+        "may_introduce_claims": False,
+        "raw_text_exposed": False,
+        "observed_section_order": section_order,
+        "line_count": len(lines),
+        "character_count": len(source.text),
+    }
 
 
 def resume_source_context(
@@ -282,15 +302,6 @@ def resume_source_context(
             preferences["max_pages"] = reference.page_count
     return {
         "master": {**asdict(master), "path": str(master.path), "user_approved_source": True},
-        "style_reference": (
-            {
-                **asdict(reference),
-                "path": str(reference.path),
-                "style_only": True,
-                "may_introduce_claims": False,
-            }
-            if reference is not None
-            else None
-        ),
+        "style_reference": _style_profile(reference) if reference is not None else None,
         "preferences": preferences,
     }

@@ -254,7 +254,8 @@ profiles expose `intake_job_url`; narrower research/read/write profiles intentio
 known client configuration targets. When onboarding has imported a master résumé,
 `resume_source_context` returns all extracted master pages as user-approved factual context and
 labels the optional second résumé as style-only. Both inputs are read from hash-verified managed
-snapshots, so moving the originally dragged files does not invalidate future calls.
+snapshots, so moving the originally dragged files does not invalidate future calls. Style-source
+text is withheld; clients receive only non-factual layout metadata.
 
 ## References
 

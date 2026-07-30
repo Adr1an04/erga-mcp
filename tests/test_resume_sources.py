@@ -4,6 +4,7 @@ import json
 import os
 import stat
 import unittest
+import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -54,6 +55,23 @@ class ResumeSourceTests(unittest.TestCase):
             self.assertTrue(first.approved)
             self.assertEqual(first.id, second.id)
             self.assertEqual(len(store.list_evidence()), 1)
+
+    def test_new_master_supersedes_old_approved_master_evidence(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            first_path = root / "master-v1.tex"
+            second_path = root / "master-v2.tex"
+            first_path.write_text("First approved master", encoding="utf-8")
+            second_path.write_text("Updated approved master", encoding="utf-8")
+            store = ErgaStore(root / "state" / "erga.sqlite3")
+
+            first = import_master_resume(store, load_resume_source(first_path))
+            second = import_master_resume(store, load_resume_source(second_path))
+            evidence = store.list_evidence()
+
+            self.assertNotEqual(first.id, second.id)
+            self.assertEqual([item.id for item in evidence if item.approved], [second.id])
+            self.assertFalse(next(item for item in evidence if item.id == first.id).approved)
 
     def test_managed_snapshot_survives_original_move_and_records_provenance(self) -> None:
         with TemporaryDirectory() as directory:
@@ -121,8 +139,20 @@ class ResumeSourceTests(unittest.TestCase):
 
             self.assertTrue(context["master"]["user_approved_source"])  # type: ignore[index]
             self.assertFalse(context["style_reference"]["may_introduce_claims"])  # type: ignore[index]
+            self.assertFalse(context["style_reference"]["raw_text_exposed"])  # type: ignore[index]
+            self.assertNotIn("text", context["style_reference"])  # type: ignore[operator]
+            self.assertNotIn("One-page visual order", repr(context["style_reference"]))
             self.assertEqual(context["preferences"]["source"], "user-reference")  # type: ignore[index]
             self.assertTrue(context["preferences"]["style_override_confirmed"])  # type: ignore[index]
+
+    def test_docx_rejects_oversized_decompressed_document_xml(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "oversized.docx"
+            with zipfile.ZipFile(source, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("word/document.xml", b"x" * (8 * 1024 * 1024 + 1))
+
+            with self.assertRaisesRegex(ValueError, "decompression limit"):
+                load_resume_source(source)
 
     def test_without_style_resume_erga_uses_default_preferences(self) -> None:
         with TemporaryDirectory() as directory:

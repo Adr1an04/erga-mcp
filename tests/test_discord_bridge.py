@@ -267,6 +267,27 @@ class DiscordBridgeTests(unittest.TestCase):
             self.assertFalse(ready)
             self.assertIn("revoked", detail)
 
+    def test_login_verification_requires_the_exact_readiness_marker(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            command = self._settings(root).client_command
+
+            def fake_run(
+                invoked: list[str],
+                **_kwargs: object,
+            ) -> subprocess.CompletedProcess[str]:
+                if invoked[1:3] == ["login", "status"]:
+                    return subprocess.CompletedProcess(invoked, 0, "Logged in using ChatGPT", "")
+                output = Path(invoked[invoked.index("--output-last-message") + 1])
+                output.write_text("You need to sign in first.", encoding="utf-8")
+                return subprocess.CompletedProcess(invoked, 0, "", "")
+
+            with patch("erga_mcp.discord_bridge.subprocess.run", side_effect=fake_run):
+                ready, detail = verify_subscription_login("codex", Path(command))
+
+            self.assertFalse(ready)
+            self.assertIn("expected ERGA_READY", detail)
+
     def test_long_responses_are_split_for_discord(self) -> None:
         chunks = split_discord_message("a" * 4_000)
 
