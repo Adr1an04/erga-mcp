@@ -11,7 +11,7 @@ subscription. Requiring Hermes, a second AI runtime, or a metered model API key 
 to adopt and duplicates capabilities the user's coding tool already provides. A fixed list of
 three coding clients creates the same adoption problem at a smaller scale.
 
-Discord still needs a long-running Gateway client, while Codex, Claude Code, and OpenCode expose
+Discord still needs a long-running Gateway client, while the maintained coding clients expose
 noninteractive CLI modes that can reuse their existing local authentication.
 
 ## Decision

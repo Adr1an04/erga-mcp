@@ -25,8 +25,10 @@ Erga treats the MCP client as the reasoning host:
 - MCP initialization instructions carry the portable job-link routing policy.
 - A least-privilege `career` profile exposes the complete job workflow without mail, Hermes,
   Git-scanning, or token-recording capabilities.
-- `erga client configure` generates native project configuration for Codex, Claude Code, and
-  OpenCode, previews by default, preserves unrelated settings, and refuses silent replacement.
+- `erga client configure` generates native project configuration for Codex, Claude Code,
+  OpenCode, Gemini CLI, Cursor Agent, and GitHub Copilot CLI, plus a portable `.mcp.json` entry
+  for advanced generic clients. It previews by default, preserves unrelated settings, and refuses
+  silent replacement.
 - `erga onboard` composes private initialization, idempotent project registration, health checks,
   and a concrete first-use verification into one human-readable command.
 - Hermes plugins remain optional host-specific enhancements for pre-model routing, messaging

@@ -177,7 +177,7 @@ tests/                synthetic unit and MCP integration tests
 - [`docs/getting-started.md`](docs/getting-started.md) — full setup.
 - [`docs/onboarding.md`](docs/onboarding.md) — one-command setup and troubleshooting.
 - [`docs/discord.md`](docs/discord.md) — native Discord bridge setup and security.
-- [`docs/mcp-clients.md`](docs/mcp-clients.md) — Codex, Claude Code, OpenCode, generic stdio, and loopback HTTP setup.
+- [`docs/mcp-clients.md`](docs/mcp-clients.md) — maintained coding-client adapters, generic stdio, and loopback HTTP setup.
 - [`docs/security.md`](docs/security.md) — permissions and safety details.
 - [`docs/FUTURE.md`](docs/FUTURE.md) — ideas for later.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to run checks and contribute.
