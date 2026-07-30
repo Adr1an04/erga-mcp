@@ -20,6 +20,19 @@ private provenance manifests. On POSIX systems, managed source directories are o
 snapshot, manifest, configuration, and SQLite files use owner-only permissions. DOCX extraction
 rejects an oversized decompressed `word/document.xml` member before reading it into memory.
 
+## Optional Obsidian projection
+
+Erga's private SQLite state, managed résumé sources, and local application tracking are ready
+without Obsidian. If the user explicitly enables the optional projection, `erga setup` writes only
+inside the vault folder the user selects or asks Erga to create. It creates `Erga/Applications`,
+`Erga/Generated Resumes`, and an initial `Erga/Start Here.md`; it refuses to overwrite an existing
+start note. Résumé source snapshots, their extracted factual text, SQLite state, and provenance
+manifests remain in Erga's private data directory rather than being copied into the vault.
+
+The wizard configures no coding-assistant account, Discord bot, mail account, credential, or remote
+service. Those are separate opt-in connections and their failure cannot invalidate core local
+state.
+
 ## Local MCP trust boundary
 
 The default MCP server is a local **stdio** process. It is not a security sandbox: it runs with the permissions of the client that starts it. Review the complete executable command, arguments, environment variables, and absolute paths before enabling it.

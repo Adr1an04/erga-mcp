@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import tempfile
 from dataclasses import asdict
@@ -55,22 +56,28 @@ def update_settings(config_path: Path, updates: dict[str, object]) -> ResumeSett
             f"latexmk = {json.dumps(values['latexmk'])}",
         ]
     )
-    replaced = re.sub(
-        r"(?ms)^\[resume\]\n.*?(?=^\[|\Z)",
-        lambda _match: f"{table}\n\n",
-        raw,
+    pattern = r"(?ms)^\[resume\]\n.*?(?=^\[|\Z)"
+    replaced = (
+        re.sub(
+            pattern,
+            lambda _match: f"{table}\n\n",
+            raw,
+        )
+        if re.search(pattern, raw) is not None
+        else f"{raw.rstrip()}\n\n{table}\n"
     )
-    if replaced == raw:
-        raise ValueError("config must contain a [resume] table; rerun init or add one manually")
     with tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", dir=config_path.parent, delete=False
     ) as temporary:
         temporary.write(replaced)
+        temporary.flush()
+        os.fsync(temporary.fileno())
         temporary_path = Path(temporary.name)
     try:
         settings = load_config(temporary_path).resume
+        restrict_private_file(temporary_path)
+        temporary_path.replace(config_path)
+        restrict_private_file(config_path)
     finally:
         temporary_path.unlink(missing_ok=True)
-    config_path.write_text(replaced, encoding="utf-8")
-    restrict_private_file(config_path)
     return settings

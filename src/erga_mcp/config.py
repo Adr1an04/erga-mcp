@@ -46,7 +46,7 @@ accounts_url = "https://accounts.zoho.com"
 folder = "Job Applications"
 
 [tracking]
-# Optional Markdown/Obsidian tracker. Keep disabled when no tracker provider is wanted.
+# Optional Obsidian tracker projection. Both `erga setup` and `erga init` may leave it disabled.
 enabled = false
 tracker_dir = ""
 # Explicit recruiting cycles eligible for acknowledgement-based tracker imports.

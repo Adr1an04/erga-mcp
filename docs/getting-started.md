@@ -6,29 +6,42 @@
 git clone https://github.com/Adr1an04/erga-mcp.git
 cd erga-mcp
 uv sync --extra dev
-uv run erga init --config ~/.config/erga-mcp/config.toml
+uv run erga setup --config ~/.config/erga-mcp/config.toml
 ```
 
-The generated configuration and SQLite data directory live outside the repository. Do not place a personal vault path, tokens, or imports in Git.
+The arrow-key setup initializes Erga's private state and local application tracking, imports a
+complete master résumé, and enables the least-privilege `career` MCP profile. The generated
+configuration and SQLite data directory live outside the repository. Do not place personal paths,
+tokens, or imports in Git.
 
-## 2. Choose local paths
+The résumé/evidence workflow and private application database are the ready-to-use career core.
+Obsidian is an optional human-readable workspace and tracker view. Coding assistants, Hermes,
+Discord, and mail providers are also optional connections configured separately; setup does not
+require any specific tool or model API key.
 
-Edit the generated configuration only on the local machine. `data_dir` and `vault_path` may be relative to that configuration file. Start with the vault path empty until an Obsidian adapter is installed.
+## 2. Review local paths
 
-Import a complete PDF, DOCX, or `.tex` master résumé as approved factual knowledge. Erga creates a
-hash-verified private copy, so moving or deleting the selected original later does not break the
-workflow:
+Without Obsidian, the wizard places generated résumé packages beside Erga's private configuration
+unless another output directory is selected. If the user explicitly adds Obsidian, the wizard
+stores the selected vault and tracker paths in private configuration, creates `Erga/Start Here.md`
+without overwriting an existing note, and recommends `Erga/Generated Resumes` for output.
+
+The dragged PDF, DOCX, or `.tex` master becomes approved factual knowledge. Erga creates a
+hash-verified private copy, so moving or deleting the original later does not break the workflow.
+An optional style résumé contributes only layout metadata; it can never add factual claims.
+
+Advanced or scripted installations may still use the lower-level commands:
 
 ```bash
+uv run erga init --config ~/.config/erga-mcp/config.toml
 uv run erga resume sources import \
   --config ~/.config/erga-mcp/config.toml \
   --master /absolute/path/to/complete-master-resume.pdf
 ```
 
-An optional `--style /absolute/path/to/preferred-resume.pdf` contributes only derived layout
-metadata. Its raw text is never returned to an MCP host and never becomes factual evidence.
-Importing an updated master deactivates prior master-résumé evidence, leaving exactly one current
-master approved.
+Pass `--style /absolute/path/to/preferred-resume.pdf` only when intentionally overriding Erga's
+recommended one-page style. Importing an updated master deactivates prior master-résumé evidence,
+leaving exactly one current master approved.
 
 Job-link intake needs a local LaTeX résumé template and an output directory. Configure them before
 connecting an agent; neither path is committed to the repository:

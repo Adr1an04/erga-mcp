@@ -1075,7 +1075,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
 
     @profile_tool("application_tracker", annotations=_READ_ONLY)
     def application_tracker(query: str = "") -> dict[str, object]:
-        """Render or search the configured local Obsidian tracker without modifying it."""
+        """Render or search the optional local Obsidian tracker without modifying it."""
         if not config.tracker.enabled or config.tracker.tracker_dir is None:
             return {
                 "enabled": False,

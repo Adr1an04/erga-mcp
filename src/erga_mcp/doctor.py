@@ -27,12 +27,27 @@ def check_installation(config_path: Path) -> DoctorReport:
         "database": "ok",
     }
     warnings: dict[str, str] = {}
+    core_ready = True
+    if config.vault_path is None:
+        warnings["obsidian"] = "optional vault not configured"
+    elif not config.vault_path.is_dir():
+        warnings["obsidian"] = "configured vault is missing"
+    else:
+        checks["obsidian"] = "ok"
     if config.tracker.enabled:
         assert config.tracker.tracker_dir is not None
         config.tracker.tracker_dir.mkdir(parents=True, exist_ok=True)
         checks["tracker"] = "ok"
     else:
-        warnings["tracker"] = "disabled"
+        warnings["tracker"] = "optional Obsidian tracker not configured"
+    if config.resume.master_path is None:
+        warnings["master_resume"] = "not configured; run `erga setup`"
+        core_ready = False
+    elif not config.resume.master_path.is_file():
+        warnings["master_resume"] = "managed source is missing"
+        core_ready = False
+    else:
+        checks["master_resume"] = "ok"
     if config.mail_provider == "gmail":
         if shutil.which("gws") is None:
             warnings["gmail"] = (
@@ -52,4 +67,4 @@ def check_installation(config_path: Path) -> DoctorReport:
         warnings["latexmk"] = "unavailable"
     else:
         checks["latexmk"] = "ok"
-    return DoctorReport(core_ready=True, checks=checks, warnings=warnings)
+    return DoctorReport(core_ready=core_ready, checks=checks, warnings=warnings)

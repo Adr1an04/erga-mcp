@@ -56,6 +56,13 @@ from .resume_sources import (
     resume_source_context,
     snapshot_resume_source,
 )
+from .setup_wizard import (
+    WizardCancelled,
+    apply_core_setup,
+    collect_core_setup_selections,
+    render_core_setup_report,
+    write_core_setup_plan,
+)
 from .store import ErgaStore
 from .zoho_oauth import (
     connect,
@@ -84,6 +91,18 @@ def _parser() -> argparse.ArgumentParser:
         "init", help="create a local non-secret configuration and database"
     )
     _config_argument(init)
+
+    setup = subcommands.add_parser(
+        "setup",
+        help="configure Erga's private career state, resume knowledge, tracking, and MCP core",
+    )
+    _config_argument(setup)
+    setup.add_argument("--vault", type=Path)
+    setup.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="collect and review choices without changing local state",
+    )
 
     status = subcommands.add_parser("status", help="show local pipeline counts")
     _config_argument(status)
@@ -474,6 +493,25 @@ def main(arguments: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(arguments)
     if args.command == "init":
         return _initialize(args.config)
+    if args.command == "setup":
+        try:
+            selections = collect_core_setup_selections(
+                default_config_path=args.config,
+                default_vault_path=args.vault,
+            )
+        except WizardCancelled as error:
+            print(str(error))
+            return 130
+        if args.dry_run:
+            print(write_core_setup_plan(selections))
+            return 0
+        try:
+            report = apply_core_setup(selections)
+        except (FileNotFoundError, NotADirectoryError, OSError, ValueError) as error:
+            print(f"Setup could not continue: {error}", file=sys.stderr)
+            return 1
+        print(render_core_setup_report(report))
+        return 0
     if args.command == "zoho" and args.zoho_command == "set-client-secret":
         secret = getpass.getpass(
             "Zoho OAuth client secret (stored only in the OS credential store): "
