@@ -345,15 +345,33 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _set_owner_only_permissions(path: Path, mode: int) -> None:
+    """Restrict newly created private state on POSIX platforms."""
+    if os.name == "posix":
+        path.chmod(mode)
+
+
 def _initialize(config_path: Path) -> int:
     config_path = config_path.expanduser()
     if config_path.exists():
         print(f"Config already exists: {config_path}")
         return 2
-    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_parent_created = not config_path.parent.exists()
+    config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if config_parent_created:
+        _set_owner_only_permissions(config_path.parent, 0o700)
     config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+    _set_owner_only_permissions(config_path, 0o600)
     config = load_config(config_path)
-    ErgaStore(config.data_dir / "erga.sqlite3").initialize()
+    data_dir_created = not config.data_dir.exists()
+    config.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if data_dir_created:
+        _set_owner_only_permissions(config.data_dir, 0o700)
+    database_path = config.data_dir / "erga.sqlite3"
+    database_created = not database_path.exists()
+    ErgaStore(database_path).initialize()
+    if database_created:
+        _set_owner_only_permissions(database_path, 0o600)
     print(f"Created local configuration: {config.config_path}")
     print(f"Created local data directory: {config.data_dir}")
     return 0

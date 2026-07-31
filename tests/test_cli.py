@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -26,6 +28,55 @@ class CliTests(unittest.TestCase):
             self.assertTrue(config_path.exists())
             self.assertTrue((config.data_dir / "erga.sqlite3").exists())
             self.assertNotIn("token", config_path.read_text().lower())
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission bits are unavailable")
+    def test_init_restricts_config_and_state_to_the_current_user(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config" / "config.toml"
+
+            exit_code = main(["init", "--config", str(config_path)])
+
+            config = load_config(config_path)
+            database_path = config.data_dir / "erga.sqlite3"
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stat.S_IMODE(config_path.parent.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(config_path.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(config.data_dir.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(database_path.stat().st_mode), 0o600)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission bits are unavailable")
+    def test_init_does_not_change_an_existing_config_parent_permissions(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_parent = Path(directory) / "shared-config"
+            config_parent.mkdir(mode=0o755)
+            config_parent.chmod(0o755)
+            config_path = config_parent / "config.toml"
+
+            exit_code = main(["init", "--config", str(config_path)])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stat.S_IMODE(config_parent.stat().st_mode), 0o755)
+            self.assertEqual(stat.S_IMODE(config_path.stat().st_mode), 0o600)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission bits are unavailable")
+    def test_init_does_not_change_existing_state_permissions(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_parent = Path(directory) / "shared-config"
+            config_parent.mkdir(mode=0o755)
+            config_parent.chmod(0o755)
+            state_dir = config_parent / "state"
+            state_dir.mkdir(mode=0o755)
+            state_dir.chmod(0o755)
+            database_path = state_dir / "erga.sqlite3"
+            database_path.touch(mode=0o644)
+            database_path.chmod(0o644)
+            config_path = config_parent / "config.toml"
+
+            exit_code = main(["init", "--config", str(config_path)])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stat.S_IMODE(state_dir.stat().st_mode), 0o755)
+            self.assertEqual(stat.S_IMODE(database_path.stat().st_mode), 0o644)
 
     def test_status_includes_mail_event_count(self) -> None:
         with TemporaryDirectory() as directory:
