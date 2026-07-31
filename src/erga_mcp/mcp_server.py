@@ -63,11 +63,13 @@ from .job_research import (
     write_stage_research,
 )
 from .job_workspace import create_job_workspace
+from .models import Evidence
 from .resume import (
     create_section_resume_proposal,
     normalize_cycle,
     validate_latex_proposal,
 )
+from .resume_sources import resume_source_context as build_resume_source_context
 from .resume_tailoring import (
     TAILORING_VERSION,
     create_automatic_resume_proposal,
@@ -163,7 +165,7 @@ _CAREER_TOOL_NAMES = frozenset(
     }
 )
 _CAREER_PRIVATE_TOOL_NAMES = _CAREER_TOOL_NAMES | frozenset(
-    {"cover_letter_style_context", "export_data"}
+    {"resume_source_context", "cover_letter_style_context", "export_data"}
 )
 _ALL_TOOL_NAMES = frozenset(
     {
@@ -172,6 +174,7 @@ _ALL_TOOL_NAMES = frozenset(
         *_NETWORK_WRITE_TOOL_NAMES,
         *_LOCAL_WRITE_TOOL_NAMES,
         *_HERMES_TOOL_NAMES,
+        "resume_source_context",
         "intake_job_url",
         "prepare_job_workspace",
     }
@@ -347,6 +350,17 @@ def _json_value(value: object) -> object:
     if isinstance(value, list):
         return [_json_value(item) for item in value]
     return value
+
+
+def _profile_visible_evidence(profile: str, evidence_records: list[Evidence]) -> list[Evidence]:
+    """Withhold managed master-resume records unless a profile explicitly permits them."""
+    if profile in {"career-private", "default"}:
+        return evidence_records
+    return [
+        evidence
+        for evidence in evidence_records
+        if not str(getattr(evidence, "source_ref", "")).startswith("master-resume:")
+    ]
 
 
 def _git_research_report(store: ErgaStore, roots: list[str]) -> dict[str, object]:
@@ -1072,7 +1086,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
 
     @profile_tool("application_tracker", annotations=_READ_ONLY)
     def application_tracker(query: str = "") -> dict[str, object]:
-        """Render or search the configured local Obsidian tracker without modifying it."""
+        """Render or search the optional local Obsidian tracker without modifying it."""
         if not config.tracker.enabled or config.tracker.tracker_dir is None:
             return {
                 "enabled": False,
@@ -1113,11 +1127,21 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
 
     @profile_tool("list_evidence", annotations=_READ_ONLY)
     def list_evidence() -> list[dict[str, object]]:
-        """List locally stored evidence records used for truthful resume proposals."""
+        """List evidence records while withholding master-resume text from non-private profiles."""
+        evidence_records = _profile_visible_evidence(selected_tool_profile, store.list_evidence())
         return [
-            cast(dict[str, object], _json_value(asdict(evidence)))
-            for evidence in store.list_evidence()
+            cast(dict[str, object], _json_value(asdict(evidence))) for evidence in evidence_records
         ]
+
+    @profile_tool("resume_source_context", annotations=_READ_ONLY)
+    def resume_source_context() -> dict[str, object]:
+        """Return approved master knowledge and style-only layout metadata."""
+        if config.resume.master_path is None:
+            raise ValueError("import a master resume before requesting source context")
+        return build_resume_source_context(
+            master_path=config.resume.master_path,
+            reference_path=config.resume.reference_path,
+        )
 
     @profile_tool("list_mail_events", annotations=_READ_ONLY)
     def list_mail_events() -> list[dict[str, object]]:
@@ -1844,7 +1868,10 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "proposal_pdf": validation.pdf,
             "tailoring_changed_sections": list(automatic.changed_sections),
             "tailoring_meaningful_change": automatic.meaningful_change,
-            "evidence": [cast(dict[str, object], _json_value(asdict(item))) for item in evidence],
+            "evidence": [
+                cast(dict[str, object], _json_value(asdict(item)))
+                for item in _profile_visible_evidence(selected_tool_profile, evidence)
+            ],
         }
 
     @profile_tool("create_tailored_resume", annotations=_LOCAL_WRITE)

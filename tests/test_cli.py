@@ -28,6 +28,13 @@ class CliTests(unittest.TestCase):
             self.assertTrue(config_path.exists())
             self.assertTrue((config.data_dir / "erga.sqlite3").exists())
             self.assertNotIn("token", config_path.read_text().lower())
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(config_path.stat().st_mode), 0o600)
+                self.assertEqual(stat.S_IMODE(config.data_dir.stat().st_mode), 0o700)
+                self.assertEqual(
+                    stat.S_IMODE((config.data_dir / "erga.sqlite3").stat().st_mode),
+                    0o600,
+                )
 
     @unittest.skipUnless(os.name == "posix", "POSIX permission bits are unavailable")
     def test_init_restricts_config_and_state_to_the_current_user(self) -> None:

@@ -29,8 +29,9 @@ It is built around LaTeX résumé workflows and is designed to work cleanly with
 résumé stays untouched; Erga creates a separate `.tex` file, a readable diff, and a PDF for you to
 review.
 
-You can use Erga directly from the command line or connect it to an MCP client such as Hermes. Its
-application records and generated files stay on your computer.
+You can use Erga directly from the command line or optionally connect any MCP-capable assistant.
+Those connections extend the same local system; none becomes Erga's system of record. Application
+records and generated files stay on your computer.
 
 > [!IMPORTANT]
 > Erga organizes the process, but it does not submit applications, send messages, invent résumé
@@ -57,10 +58,14 @@ your template or facts you added yourself.
 - [`uv`](https://docs.astral.sh/uv/)
 - Git
 
-Optional workflows use `latexmk`, an existing LaTeX résumé, a supported operating-system
-credential store, or an authenticated [`gws`](https://github.com/googleworkspace/cli) command.
+Optional workflows use [Obsidian](https://obsidian.md/), `latexmk`, an existing LaTeX résumé, a
+supported operating-system credential store, or an authenticated
+[`gws`](https://github.com/googleworkspace/cli) command.
 
 ### Install
+
+Erga is not published to a package registry yet, so `uvx erga` will not work. Clone the repository
+and run it locally:
 
 ```bash
 git clone https://github.com/Adr1an04/erga-mcp.git
@@ -68,24 +73,33 @@ cd erga-mcp
 uv sync
 ```
 
-Initialize a private local workspace and verify the installation:
+Run the interactive setup and verify the installation:
 
 ```bash
-uv run erga init
+uv run erga setup
 uv run erga doctor
 ```
 
-By default Erga creates:
+The arrow-key wizard imports a complete PDF, DOCX, or `.tex` master résumé into private
+hash-verified storage, initializes local application tracking, and enables Erga's client-neutral
+`career` MCP profile. Obsidian is an optional human-readable workspace and tracker view. Setup does
+not require or configure Obsidian, a coding-AI subscription, Discord bot, Hermes installation, or
+separate model API key.
+
+By default Erga's private machine state is independent of any optional vault:
 
 ```text
 ~/.config/erga-mcp/
 ├── config.toml
-└── state/
-    └── erga.sqlite3
+├── state/
+│   └── erga.sqlite3
+└── generated-resumes/
 ```
 
 The configuration contains paths and feature settings, never credentials. Use
 `--config /absolute/path/to/config.toml` to select another location.
+`erga init` remains available as a low-level non-interactive initializer for advanced and scripted
+installations.
 
 ### Add evidence and a draft application
 
@@ -143,7 +157,7 @@ The recommended `career` MCP profile includes:
 | `pipeline_status` | Read local record counts |
 | `list_applications` | Read local application records |
 | `update_application_status` | Set an application to draft, applied, OA, assessment, interview, offer, rejected, or withdrawn in the private local database |
-| `application_tracker` | Render the configured local Obsidian tracker as a compact, read-only message card |
+| `application_tracker` | Render the optional configured Obsidian tracker as a compact, read-only message card |
 | `list_evidence` | Read local evidence records |
 | `intake_job_url` | Research one job and build local review artifacts end to end |
 | `prepare_job_workspace` | Create a bounded local job package from a supplied URL |

@@ -13,11 +13,12 @@ Build the project as a **standalone local-first CLI and domain library with a lo
 
 ### System of record
 
-Use a local SQLite database for normalized pipeline state and a user-selected Obsidian vault for durable, human-readable career material.
+Use private local SQLite state and managed source snapshots as the system of record. Offer a
+user-selected Obsidian vault as an optional durable, human-readable projection.
 
-- Obsidian remains the editable narrative source for experience, projects, accomplishments, and application notes.
+- Managed résumé snapshots and approved evidence hold factual career knowledge.
 - SQLite holds machine-safe state: source IDs, sync cursors, job/application records, evidence references, classification decisions, approval state, and an append-only audit log.
-- The pipeline may write only to explicitly configured Obsidian files/folders. Initial support should generate proposed updates or update narrowly defined application records, not rewrite arbitrary notes.
+- When enabled, the pipeline may write only to explicitly configured Obsidian files/folders. It should generate narrow projections and proposed updates, not rewrite arbitrary notes.
 
 ### Evidence ledger for résumé integrity
 
@@ -58,7 +59,8 @@ This separates deterministic, testable data handling from model reasoning; gives
 
 ## Consequences
 
-- The first usable release is intentionally narrow: email-to-application tracking, Obsidian-backed evidence capture, and reviewable résumé patch proposals.
+- The first usable release is intentionally narrow: local application tracking, managed evidence
+  capture, and reviewable résumé patch proposals, with Obsidian and mail as optional integrations.
 - Full real-time inbox/webhook support, automatic data enrichment, and autonomous application workflows are deferred.
 - Overleaf editing depends on the user's available Git integration. A local LaTeX repository must remain a supported fallback.
 

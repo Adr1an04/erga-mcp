@@ -1,19 +1,61 @@
 # Getting started
 
-## 1. Install locally
+## 1. Install and start Erga
+
+Erga is not published to a package registry yet, so `uvx erga` will not work. Use one of these
+supported paths instead.
+
+### Clone and run from the repository
 
 ```bash
 git clone https://github.com/Adr1an04/erga-mcp.git
 cd erga-mcp
 uv sync --extra dev
-uv run erga init --config ~/.config/erga-mcp/config.toml
+uv run erga setup --config ~/.config/erga-mcp/config.toml
 ```
 
-The generated configuration and SQLite data directory live outside the repository. Do not place a personal vault path, tokens, or imports in Git.
+### Install the current GitHub version as a command
 
-## 2. Choose local paths
+```bash
+uv tool install git+https://github.com/Adr1an04/erga-mcp.git
+erga setup --config ~/.config/erga-mcp/config.toml
+```
 
-Edit the generated configuration only on the local machine. `data_dir` and `vault_path` may be relative to that configuration file. Start with the vault path empty until an Obsidian adapter is installed.
+The arrow-key setup initializes Erga's private state and local application tracking, imports a
+complete master résumé, and enables the least-privilege `career` MCP profile. The generated
+configuration and SQLite data directory live outside the repository. Do not place personal paths,
+tokens, or imports in Git.
+
+The résumé/evidence workflow and private application database are the ready-to-use career core.
+Obsidian is an optional human-readable workspace and tracker view. Coding assistants, Hermes,
+Discord, and mail providers are also optional connections configured separately; setup does not
+require any specific tool or model API key.
+
+## 2. Review local paths
+
+Without Obsidian, the wizard places generated résumé packages beside Erga's private configuration
+unless another output directory is selected. If the user explicitly adds Obsidian, the wizard
+stores the selected vault and tracker paths in private configuration, creates `Erga/Start Here.md`
+without overwriting an existing note, and recommends `Erga/Generated Resumes` for output.
+
+The dragged PDF, DOCX, or `.tex` master becomes approved factual knowledge. Erga creates a
+hash-verified private copy, so moving or deleting the original later does not break the workflow.
+An optional style résumé or template contributes only layout metadata; it can never add factual
+claims. It helps Erga match page count, section order, and content density. To compile a tailored
+PDF, configure an editable LaTeX `.tex` template after setup.
+
+Advanced or scripted installations may still use the lower-level commands:
+
+```bash
+uv run erga init --config ~/.config/erga-mcp/config.toml
+uv run erga resume sources import \
+  --config ~/.config/erga-mcp/config.toml \
+  --master /absolute/path/to/complete-master-resume.pdf
+```
+
+Pass `--style /absolute/path/to/preferred-resume.pdf` only when intentionally overriding Erga's
+recommended one-page style. Importing an updated master deactivates prior master-résumé evidence,
+leaving exactly one current master approved.
 
 Job-link intake needs a local LaTeX résumé template and an output directory. Configure them before
 connecting an agent; neither path is committed to the repository:
@@ -166,11 +208,13 @@ Hermes exposes tools prefixed with `mcp__erga_mcp__`:
 - `create_tailored_resume` — writes only a reviewable tailored `.tex`, diff, and claim report inside that package, gated by supplied approved evidence IDs and configured editable sections.
 - `validate_tailored_resume` — explicitly compiles the selected proposal locally; it never publishes or submits it.
 
-The recommended `career` profile deliberately excludes mail and monitor tools. It also excludes
-`export_data` and `cover_letter_style_context`, because those can expose the full private career
-archive or full writing-style source material to the connected host. Use `career-private` only as
-an explicit opt-in for a trusted local host; use the separately bounded `hermes` profile for mail
-integration rather than broadening an ordinary career client.
+The recommended `career` profile deliberately excludes mail and monitor tools. It also withholds
+`resume_source_context` and master-resume evidence from `list_evidence`, as well as `export_data`
+and `cover_letter_style_context`, so an ordinary connected career host cannot receive complete
+master-resume text, the private career archive, or full writing-style source material. Use
+`career-private` only as an explicit opt-in for a trusted local host: it deliberately restores
+master-resume context and those private materials. Use the separately bounded `hermes` profile for
+mail integration rather than broadening an ordinary career client.
 
 The MCP server has no outbound application or message tool. Zoho credentials remain in the
 operating system credential store and are never sent to Hermes.

@@ -9,16 +9,18 @@ from erga_mcp.doctor import check_installation
 
 
 class DoctorTests(unittest.TestCase):
-    def test_core_installation_passes_without_optional_integrations(self) -> None:
+    def test_low_level_init_reports_missing_core_obsidian_and_resume_setup(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
             config_path.write_text('[paths]\ndata_dir = "state"\nvault_path = ""\n')
 
             report = check_installation(config_path)
 
-            self.assertTrue(report.core_ready)
+            self.assertFalse(report.core_ready)
             self.assertIn("config", report.checks)
             self.assertIn("tracker", report.warnings)
+            self.assertIn("obsidian", report.warnings)
+            self.assertIn("master_resume", report.warnings)
 
     def test_platform_aware_latex_resolver_marks_compiler_ready(self) -> None:
         with TemporaryDirectory() as directory:

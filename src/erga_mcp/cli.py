@@ -40,6 +40,7 @@ from .job_discovery import discover_job_research
 from .mail_settings import as_json as mail_settings_as_json
 from .mail_settings import update_settings as update_mail_settings
 from .models import Application
+from .private_files import restrict_private_file
 from .reporting import render_history_digest
 from .resume import (
     create_job_package,
@@ -49,6 +50,19 @@ from .resume import (
 )
 from .resume_settings import as_json as resume_settings_as_json
 from .resume_settings import update_settings
+from .resume_sources import (
+    import_master_resume,
+    load_resume_source,
+    resume_source_context,
+    snapshot_resume_source,
+)
+from .setup_wizard import (
+    WizardCancelled,
+    apply_core_setup,
+    collect_core_setup_selections,
+    render_core_setup_report,
+    write_core_setup_plan,
+)
 from .store import ErgaStore
 from .zoho_oauth import (
     connect,
@@ -77,6 +91,18 @@ def _parser() -> argparse.ArgumentParser:
         "init", help="create a local non-secret configuration and database"
     )
     _config_argument(init)
+
+    setup = subcommands.add_parser(
+        "setup",
+        help="configure Erga's private career state, resume knowledge, tracking, and MCP core",
+    )
+    _config_argument(setup)
+    setup.add_argument("--vault", type=Path)
+    setup.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="collect and review choices without changing local state",
+    )
 
     status = subcommands.add_parser("status", help="show local pipeline counts")
     _config_argument(status)
@@ -240,6 +266,22 @@ def _parser() -> argparse.ArgumentParser:
     resume_settings_set.add_argument("--output-root")
     resume_settings_set.add_argument("--output-pdf-name")
     resume_settings_set.add_argument("--latexmk")
+    resume_sources = resume_commands.add_parser(
+        "sources", help="manage durable master knowledge and style references"
+    )
+    resume_sources_commands = resume_sources.add_subparsers(
+        dest="resume_sources_command", required=True
+    )
+    resume_sources_import = resume_sources_commands.add_parser(
+        "import", help="copy and register user-selected resume sources"
+    )
+    _config_argument(resume_sources_import)
+    resume_sources_import.add_argument("--master", type=Path, required=True)
+    resume_sources_import.add_argument("--style", type=Path)
+    resume_sources_context = resume_sources_commands.add_parser(
+        "context", help="show approved master context and non-factual style metadata"
+    )
+    _config_argument(resume_sources_context)
     resume_package = resume_commands.add_parser(
         "create-package", help="create an isolated job output package"
     )
@@ -361,7 +403,7 @@ def _initialize(config_path: Path) -> int:
     if config_parent_created:
         _set_owner_only_permissions(config_path.parent, 0o700)
     config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
-    _set_owner_only_permissions(config_path, 0o600)
+    restrict_private_file(config_path)
     config = load_config(config_path)
     data_dir_created = not config.data_dir.exists()
     config.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -451,6 +493,25 @@ def main(arguments: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(arguments)
     if args.command == "init":
         return _initialize(args.config)
+    if args.command == "setup":
+        try:
+            selections = collect_core_setup_selections(
+                default_config_path=args.config,
+                default_vault_path=args.vault,
+            )
+        except WizardCancelled as error:
+            print(str(error))
+            return 130
+        if args.dry_run:
+            print(write_core_setup_plan(selections))
+            return 0
+        try:
+            report = apply_core_setup(selections)
+        except (FileNotFoundError, NotADirectoryError, OSError, ValueError) as error:
+            print(f"Setup could not continue: {error}", file=sys.stderr)
+            return 1
+        print(render_core_setup_report(report))
+        return 0
     if args.command == "zoho" and args.zoho_command == "set-client-secret":
         secret = getpass.getpass(
             "Zoho OAuth client secret (stored only in the OS credential store): "
@@ -758,6 +819,53 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "latexmk": args.latexmk,
         }
         _print_json(resume_settings_as_json(update_settings(args.config, updates)))
+        return 0
+    if args.command == "resume" and args.resume_command == "sources":
+        config = load_config(args.config)
+        if args.resume_sources_command == "context":
+            if config.resume.master_path is None:
+                raise ValueError("import a master resume before requesting source context")
+            _print_json(
+                resume_source_context(
+                    master_path=config.resume.master_path,
+                    reference_path=config.resume.reference_path,
+                )
+            )
+            return 0
+        original_master_name = args.master.expanduser().name
+        master = snapshot_resume_source(
+            load_resume_source(args.master),
+            data_dir=config.data_dir,
+            role="master",
+        )
+        style_source = (
+            snapshot_resume_source(
+                load_resume_source(args.style),
+                data_dir=config.data_dir,
+                role="style",
+            )
+            if args.style is not None
+            else None
+        )
+        evidence = import_master_resume(
+            store,
+            master,
+            source_name=original_master_name,
+        )
+        settings = update_settings(
+            args.config,
+            {
+                "master_path": str(master.path),
+                "reference_path": str(style_source.path) if style_source is not None else "",
+            },
+        )
+        _print_json(
+            {
+                "evidence_id": evidence.id,
+                "master_path": str(settings.master_path),
+                "style_path": str(settings.reference_path) if settings.reference_path else None,
+            }
+        )
         return 0
     if args.command == "resume" and args.resume_command == "create-package":
         package = create_job_package(

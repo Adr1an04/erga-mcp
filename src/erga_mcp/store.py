@@ -20,6 +20,7 @@ from .models import (
     RecruiterContact,
     TokenUsage,
 )
+from .private_files import restrict_private_directory, restrict_private_file
 
 APPLICATION_STATUSES = frozenset(
     {
@@ -178,8 +179,14 @@ class ErgaStore:
         self.database_path = database_path
 
     def _connection(self) -> sqlite3.Connection:
+        parent_created = not self.database_path.parent.exists()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        if parent_created:
+            restrict_private_directory(self.database_path.parent)
+        database_created = not self.database_path.exists()
         connection = sqlite3.connect(self.database_path)
+        if database_created:
+            restrict_private_file(self.database_path)
         connection.execute("PRAGMA foreign_keys = ON")
         connection.row_factory = sqlite3.Row
         return connection
@@ -228,6 +235,72 @@ class ErgaStore:
                 ),
             )
             self._record_audit(connection, "evidence.added", evidence.id, {"approved": approved})
+            connection.commit()
+        return evidence
+
+    def set_active_master_resume_evidence(self, *, source_ref: str, text: str) -> Evidence:
+        """Atomically make one master résumé the only approved master source."""
+        self.initialize()
+        with closing(self._connection()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT * FROM evidence WHERE source_ref = ? AND text = ? ORDER BY created_at "
+                "LIMIT 1",
+                (source_ref, text),
+            ).fetchone()
+            superseded = connection.execute(
+                "SELECT id FROM evidence WHERE approved = 1 AND source_ref LIKE 'master-resume:%' "
+                "AND NOT (source_ref = ? AND text = ?)",
+                (source_ref, text),
+            ).fetchall()
+            connection.execute(
+                "UPDATE evidence SET approved = 0 WHERE approved = 1 "
+                "AND source_ref LIKE 'master-resume:%' AND NOT (source_ref = ? AND text = ?)",
+                (source_ref, text),
+            )
+            if existing is None:
+                evidence = Evidence(
+                    id=f"ev_{uuid4().hex}",
+                    source_ref=source_ref,
+                    text=text,
+                    approved=True,
+                    created_at=_now(),
+                )
+                connection.execute(
+                    "INSERT INTO evidence VALUES (?, ?, ?, ?, ?)",
+                    (
+                        evidence.id,
+                        evidence.source_ref,
+                        evidence.text,
+                        evidence.approved,
+                        _as_text(evidence.created_at),
+                    ),
+                )
+                self._record_audit(
+                    connection,
+                    "evidence.added",
+                    evidence.id,
+                    {"approved": True, "kind": "master-resume"},
+                )
+            else:
+                connection.execute(
+                    "UPDATE evidence SET approved = 1 WHERE id = ?",
+                    (existing["id"],),
+                )
+                evidence = Evidence(
+                    id=existing["id"],
+                    source_ref=existing["source_ref"],
+                    text=existing["text"],
+                    approved=True,
+                    created_at=_as_datetime(existing["created_at"]),
+                )
+            for row in superseded:
+                self._record_audit(
+                    connection,
+                    "evidence.superseded",
+                    row["id"],
+                    {"replacement_id": evidence.id, "kind": "master-resume"},
+                )
             connection.commit()
         return evidence
 

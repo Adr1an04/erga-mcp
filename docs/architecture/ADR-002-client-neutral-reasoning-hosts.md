@@ -6,9 +6,9 @@ Proposed.
 
 ## Context
 
-Erga's product core is the local evidence ledger, Obsidian-backed career workspace, application
-state, résumé workflow, and MCP server. Those capabilities should remain useful without requiring
-one particular AI product or orchestration runtime.
+Erga's product core is the local evidence ledger, application state, résumé workflow, and MCP
+server, with an optional Obsidian projection. Those capabilities should remain useful without
+requiring one particular AI product or orchestration runtime.
 
 The original automatic job-link path was optimized for Hermes, and the complete job workflow was
 available only through the broad legacy `default` tool profile. That made a host integration look
@@ -39,5 +39,5 @@ Treat the connected MCP client as an optional reasoning host around a complete l
 - Every host receives the same evidence and local-artifact semantics.
 - Deterministic pre-model routing cannot be guaranteed on hosts without a hook equivalent to the
   Hermes router; MCP instructions and tool descriptions provide the portable fallback.
-- Optional host adapters may be added without changing Erga's evidence, Obsidian, résumé, or
-  application model.
+- Optional host adapters or Obsidian projections may be added without changing Erga's evidence,
+  résumé, or application model.

@@ -36,12 +36,16 @@ environment value takes precedence; neither setting is a credential.
 | Profile | Exposed tools |
 | --- | --- |
 | `career` | Bounded job intake and document workflow. It excludes bulk private-data export, full writing-style source context, mail, Hermes monitors, Git scanning, and token recording. |
-| `career-private` | `career` plus `export_data` and `cover_letter_style_context`. Select it only for a trusted local host that should receive those private materials. |
+| `career-private` | `career` plus `resume_source_context`, `export_data`, and `cover_letter_style_context`. It can return complete master-resume text and other private career materials. Select it only for a trusted local host that should receive those materials. |
 | `read` | Local read-only records, tracker, and token summary. It deliberately excludes writing-sample/template content. |
 | `research` | `read` plus bounded public HTTP(S) scraping and CSS-section extraction. |
 | `write` | `read` plus local proposal, research-recording, export, token-recording, and validation tools; no network or Hermes-only tools. |
 | `hermes` | `read` plus configured mail synchronization and the Hermes monitor-script installer. |
 | `default` | All legacy tools, including job intake and advanced workspace setup. |
+
+When a managed master résumé is configured, `resume_source_context` returns its complete approved
+text and separately labeled non-factual style metadata. It reads Erga's private managed copies, not
+the originally selected files.
 
 For example, a generic research client can use:
 
