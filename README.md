@@ -64,6 +64,9 @@ supported operating-system credential store, or an authenticated
 
 ### Install
 
+Erga is not published to a package registry yet, so `uvx erga` will not work. Clone the repository
+and run it locally:
+
 ```bash
 git clone https://github.com/Adr1an04/erga-mcp.git
 cd erga-mcp

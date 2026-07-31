@@ -41,8 +41,11 @@ class SetupWizardTests(unittest.TestCase):
             self.assertFalse(config.tracker.enabled)
             self.assertEqual(config.resume.output_root, root / "private" / "generated-resumes")
             self.assertTrue(config.resume.output_root.is_dir())
+            if os.name != "nt":
+                self.assertEqual(selections.config_path.parent.stat().st_mode & 0o777, 0o700)
             self.assertFalse(report.obsidian_configured)
             self.assertFalse(report.welcome_note_created)
+            self.assertEqual(report.next_steps[0], "Run `erga status` to confirm your local setup.")
             self.assertIn("Private local application tracking", report.completed)
 
     def test_core_setup_optionally_configures_obsidian_projection(self) -> None:
@@ -203,9 +206,10 @@ folder = "Recruiting"
         )
         plan = json.loads(write_core_setup_plan(selections))
 
-        self.assertIn("Coding AI:         not required or configured", review)
-        self.assertIn("Discord:           not required or configured", review)
-        self.assertIn("Obsidian:          not configured (optional)", review)
+        self.assertIn("What Erga will set up", review)
+        self.assertIn("Your master resume: copied privately", review)
+        self.assertIn("Obsidian: not set up", review)
+        self.assertIn("You can cancel now with no changes", review)
         self.assertIn("No Obsidian installation", report)
         self.assertNotIn("token", json.dumps(plan).casefold())
         self.assertIsNone(plan["vault_mode"])

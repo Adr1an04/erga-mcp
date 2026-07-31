@@ -63,6 +63,7 @@ from .job_research import (
     write_stage_research,
 )
 from .job_workspace import create_job_workspace
+from .models import Evidence
 from .resume import (
     create_section_resume_proposal,
     normalize_cycle,
@@ -111,7 +112,6 @@ _READ_TOOL_NAMES = frozenset(
         "list_applications",
         "application_tracker",
         "list_evidence",
-        "resume_source_context",
         "list_mail_events",
         "token_usage",
     }
@@ -152,7 +152,6 @@ _CAREER_TOOL_NAMES = frozenset(
         "application_tracker",
         "list_evidence",
         "update_application_status",
-        "resume_source_context",
         "scrape_public_page",
         "extract_public_page",
         "intake_job_url",
@@ -166,7 +165,7 @@ _CAREER_TOOL_NAMES = frozenset(
     }
 )
 _CAREER_PRIVATE_TOOL_NAMES = _CAREER_TOOL_NAMES | frozenset(
-    {"cover_letter_style_context", "export_data"}
+    {"resume_source_context", "cover_letter_style_context", "export_data"}
 )
 _ALL_TOOL_NAMES = frozenset(
     {
@@ -175,6 +174,7 @@ _ALL_TOOL_NAMES = frozenset(
         *_NETWORK_WRITE_TOOL_NAMES,
         *_LOCAL_WRITE_TOOL_NAMES,
         *_HERMES_TOOL_NAMES,
+        "resume_source_context",
         "intake_job_url",
         "prepare_job_workspace",
     }
@@ -350,6 +350,17 @@ def _json_value(value: object) -> object:
     if isinstance(value, list):
         return [_json_value(item) for item in value]
     return value
+
+
+def _profile_visible_evidence(profile: str, evidence_records: list[Evidence]) -> list[Evidence]:
+    """Withhold managed master-resume records unless a profile explicitly permits them."""
+    if profile in {"career-private", "default"}:
+        return evidence_records
+    return [
+        evidence
+        for evidence in evidence_records
+        if not str(getattr(evidence, "source_ref", "")).startswith("master-resume:")
+    ]
 
 
 def _git_research_report(store: ErgaStore, roots: list[str]) -> dict[str, object]:
@@ -1116,10 +1127,10 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
 
     @profile_tool("list_evidence", annotations=_READ_ONLY)
     def list_evidence() -> list[dict[str, object]]:
-        """List locally stored evidence records used for truthful resume proposals."""
+        """List evidence records while withholding master-resume text from non-private profiles."""
+        evidence_records = _profile_visible_evidence(selected_tool_profile, store.list_evidence())
         return [
-            cast(dict[str, object], _json_value(asdict(evidence)))
-            for evidence in store.list_evidence()
+            cast(dict[str, object], _json_value(asdict(evidence))) for evidence in evidence_records
         ]
 
     @profile_tool("resume_source_context", annotations=_READ_ONLY)
@@ -1857,7 +1868,10 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "proposal_pdf": validation.pdf,
             "tailoring_changed_sections": list(automatic.changed_sections),
             "tailoring_meaningful_change": automatic.meaningful_change,
-            "evidence": [cast(dict[str, object], _json_value(asdict(item))) for item in evidence],
+            "evidence": [
+                cast(dict[str, object], _json_value(asdict(item)))
+                for item in _profile_visible_evidence(selected_tool_profile, evidence)
+            ],
         }
 
     @profile_tool("create_tailored_resume", annotations=_LOCAL_WRITE)

@@ -16,7 +16,7 @@ import questionary
 from questionary import Choice
 
 from .config import DEFAULT_CONFIG, load_config
-from .private_files import restrict_private_file
+from .private_files import restrict_private_directory, restrict_private_file
 from .resume_settings import update_settings
 from .resume_sources import (
     SUPPORTED_RESUME_SUFFIXES,
@@ -153,8 +153,11 @@ def collect_core_setup_selections(
     )
     questionary.print(
         "\nResume knowledge\n"
-        "Drag your complete master resume below. It may span many pages. Erga reads every page, "
-        "creates a private hash-verified copy, and never modifies the original.",
+        "Your master resume is Erga's source of facts. PDF, DOCX, and .tex files all work here. "
+        "Erga reads every page, creates a private hash-verified copy, and never modifies the "
+        "original.\n"
+        "To generate compiled LaTeX resumes later, you can add an editable .tex template after "
+        "setup.",
         style="fg:#e0aa55",
     )
     master_resume = normalize_dropped_path(
@@ -168,15 +171,16 @@ def collect_core_setup_selections(
         )
     )
     questionary.print(
-        "Erga's built-in one-page style is recommended. Only override it if you are confident "
-        "another resume is how generated resumes should look.",
+        "\nResume layout (optional)\n"
+        "Erga can use a separate resume or template only as a layout reference. It will not use "
+        "that file for factual claims. You can change this later.",
         style="fg:#aaaaaa",
     )
     style_resume: Path | None = None
     if bool(
         _required(
             questionary.confirm(
-                "Override Erga's recommended style with your own resume?",
+                "Use a separate resume or template as the layout reference?",
                 default=False,
             ).ask()
         )
@@ -185,7 +189,7 @@ def collect_core_setup_selections(
             str(
                 _required(
                     questionary.text(
-                        "Drop the optional style resume here:",
+                        "Drop a resume or template whose layout you like here:",
                         validate=_resume_file,
                     ).ask()
                 )
@@ -195,7 +199,7 @@ def collect_core_setup_selections(
     obsidian_enabled = bool(
         _required(
             questionary.confirm(
-                "Add an optional Obsidian workspace and application-tracker view?",
+                "Do you already use Obsidian and want an optional workspace folder?",
                 default=False,
             ).ask()
         )
@@ -209,8 +213,8 @@ def collect_core_setup_selections(
                 questionary.select(
                     "How should Erga configure Obsidian?",
                     choices=[
-                        Choice("Use an existing Obsidian vault", value="existing"),
-                        Choice("Create a new Obsidian vault", value="new"),
+                        Choice("I already have an Obsidian folder (vault)", value="existing"),
+                        Choice("Create a new folder for Obsidian", value="new"),
                     ],
                     default="existing",
                     use_shortcuts=True,
@@ -287,23 +291,28 @@ def collect_core_setup_selections(
 
 
 def render_core_setup_review(selections: CoreSetupSelections) -> str:
-    """Render the exact local scope of the core setup."""
-    obsidian = "not configured (optional)"
+    """Render a plain-language review before setup writes private local state."""
+    obsidian = "not set up"
     if selections.obsidian_enabled:
-        action = "create" if selections.vault_mode == "new" else "use existing"
-        obsidian = f"{selections.vault_path} ({action})"
+        action = "create" if selections.vault_mode == "new" else "use"
+        obsidian = f"{action} the Obsidian folder at {selections.vault_path}"
+    style = (
+        f"use {selections.style_resume.name} as a style reference"
+        if selections.style_resume is not None
+        else "use Erga's clean one-page layout (recommended)"
+    )
     return "\n".join(
         [
-            f"  Private config:    {selections.config_path}",
-            f"  Master knowledge:  {selections.master_resume}",
-            f"  Style preference:  {selections.style_resume or 'Erga default (recommended)'}",
-            f"  Resume output:     {selections.output_root}",
-            "  App tracking:      private local database",
-            f"  Obsidian:          {obsidian}",
-            "  MCP profile:       career (client-neutral)",
-            "  Coding AI:         not required or configured",
-            "  Discord:           not required or configured",
-            "  Model API key:     not requested",
+            "What Erga will set up",
+            "",
+            f"  Your master resume: copied privately from {selections.master_resume}",
+            f"  Resume style: {style}",
+            f"  Generated resumes: {selections.output_root}",
+            "  Application tracking: a private local database",
+            f"  Obsidian: {obsidian}",
+            "",
+            "Not being connected: coding AI, Discord, mail, or any model API key.",
+            "You can change these settings later. You can cancel now with no changes.",
         ]
     )
 
@@ -328,6 +337,7 @@ def _replace_table(raw: str, name: str, lines: list[str]) -> str:
 
 def _atomic_write_private(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    restrict_private_directory(path.parent)
     with tempfile.NamedTemporaryFile(
         mode="w",
         encoding="utf-8",
@@ -477,6 +487,7 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
     if vault_path is not None:
         completed.append("Optional Obsidian workspace and tracker view")
     next_steps = [
+        "Run `erga status` to confirm your local setup.",
         "Optionally connect any MCP-capable coding assistant you already use.",
         "Optionally add Obsidian, communication, or mail integrations later.",
         f"Approved master evidence is ready as {evidence.id}.",

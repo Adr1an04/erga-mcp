@@ -3,12 +3,16 @@ from __future__ import annotations
 import asyncio
 import os
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any, cast
 from unittest.mock import patch
 
 from erga_mcp.config import DEFAULT_CONFIG
-from erga_mcp.mcp_server import build_server
+from erga_mcp.mcp_server import _profile_visible_evidence, build_server
+from erga_mcp.models import Evidence
+from erga_mcp.store import ErgaStore
 
 _READ_TOOLS = {
     "erga_capabilities",
@@ -16,7 +20,6 @@ _READ_TOOLS = {
     "list_applications",
     "application_tracker",
     "list_evidence",
-    "resume_source_context",
     "list_mail_events",
     "token_usage",
 }
@@ -26,7 +29,6 @@ _CAREER_TOOLS = {
     "list_applications",
     "application_tracker",
     "list_evidence",
-    "resume_source_context",
     "update_application_status",
     "scrape_public_page",
     "extract_public_page",
@@ -67,8 +69,67 @@ class McpToolProfileTests(unittest.TestCase):
 
         self.assertEqual(
             tool_names,
-            _CAREER_TOOLS | {"cover_letter_style_context", "export_data"},
+            _CAREER_TOOLS | {"resume_source_context", "cover_letter_style_context", "export_data"},
         )
+
+    def test_career_profile_hides_master_resume_evidence_text(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(self._config_with_profile("career"), encoding="utf-8")
+            store = ErgaStore(root / "state" / "erga.sqlite3")
+            store.set_active_master_resume_evidence(
+                source_ref="master-resume:fixture:master.tex",
+                text="PRIVATE MASTER RESUME TEXT",
+            )
+            store.add_evidence(
+                source_ref="portfolio:project",
+                text="Publicly approved project evidence",
+                approved=True,
+            )
+
+            career_result: Any = asyncio.run(
+                build_server(config_path).call_tool("list_evidence", {})
+            )
+            career_payload = cast(dict[str, object], career_result.structured_content)
+            career_evidence = cast(list[dict[str, object]], career_payload["result"])
+
+            config_path.write_text(self._config_with_profile("career-private"), encoding="utf-8")
+            private_result: Any = asyncio.run(
+                build_server(config_path).call_tool("list_evidence", {})
+            )
+            private_payload = cast(dict[str, object], private_result.structured_content)
+            private_evidence = cast(list[dict[str, object]], private_payload["result"])
+
+        self.assertEqual(
+            [entry["text"] for entry in career_evidence], ["Publicly approved project evidence"]
+        )
+        self.assertIn("PRIVATE MASTER RESUME TEXT", [entry["text"] for entry in private_evidence])
+
+    def test_profile_visibility_policy_hides_master_evidence_in_every_non_private_profile(
+        self,
+    ) -> None:
+        master = Evidence(
+            id="master",
+            source_ref="master-resume:fixture:master.tex",
+            text="PRIVATE MASTER RESUME TEXT",
+            approved=True,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        ordinary = Evidence(
+            id="ordinary",
+            source_ref="portfolio:project",
+            text="Publicly approved project evidence",
+            approved=True,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+        for profile in {"career", "read", "research", "write", "hermes"}:
+            self.assertEqual(_profile_visible_evidence(profile, [master, ordinary]), [ordinary])
+        for profile in {"career-private", "default"}:
+            self.assertEqual(
+                _profile_visible_evidence(profile, [master, ordinary]), [master, ordinary]
+            )
 
     def test_research_profile_adds_only_network_read_tools(self) -> None:
         tool_names = self._tool_names(self._config_with_profile("research"))
