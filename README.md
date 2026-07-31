@@ -142,6 +142,7 @@ The recommended `career` MCP profile includes:
 | --- | --- |
 | `pipeline_status` | Read local record counts |
 | `list_applications` | Read local application records |
+| `update_application_status` | Set an application to draft, applied, OA, assessment, interview, offer, rejected, or withdrawn in the private local database |
 | `application_tracker` | Render the configured local Obsidian tracker as a compact, read-only message card |
 | `list_evidence` | Read local evidence records |
 | `intake_job_url` | Research one job and build local review artifacts end to end |

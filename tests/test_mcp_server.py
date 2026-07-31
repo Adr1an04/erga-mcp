@@ -449,6 +449,7 @@ class McpServerTests(unittest.TestCase):
                     "erga_capabilities",
                     "pipeline_status",
                     "list_applications",
+                    "update_application_status",
                     "application_tracker",
                     "list_evidence",
                     "list_mail_events",
@@ -487,6 +488,12 @@ class McpServerTests(unittest.TestCase):
                 self.assertTrue(annotations.read_only_hint)
                 self.assertFalse(annotations.open_world_hint)
             workspace_annotations = by_name["prepare_job_workspace"].annotations
+            status_annotations = by_name["update_application_status"].annotations
+            self.assertIsNotNone(status_annotations)
+            assert status_annotations is not None
+            self.assertFalse(status_annotations.read_only_hint)
+            self.assertTrue(status_annotations.idempotent_hint)
+            self.assertFalse(status_annotations.open_world_hint)
             mail_sync_annotations = by_name["sync_recruiting_mail"].annotations
             resume_annotations = by_name["create_tailored_resume"].annotations
             validation_annotations = by_name["validate_tailored_resume"].annotations
@@ -665,6 +672,50 @@ class McpServerTests(unittest.TestCase):
 
         self.assertEqual(len(factory.paths), 1)
         self.assertEqual(factory.paths[0].name, "erga.sqlite3")
+
+    def test_updates_application_status_in_local_state_only(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            store = ErgaStore(root / "state" / "erga.sqlite3")
+            application = store.create_application(
+                company="Example",
+                role="Software Engineering Intern",
+                source_url="https://jobs.example.com/intern",
+                evidence_ids=[],
+            )
+            server = build_server(config_path)
+
+            result: Any = asyncio.run(
+                server.call_tool(
+                    "update_application_status",
+                    {"application_id": application.id, "status": "Interview"},
+                )
+            )
+
+            updated = cast(dict[str, object], result.structured_content)
+            self.assertEqual(updated["status"], "interview")
+            self.assertEqual(store.list_applications()[0].status, "interview")
+            status_audits = [
+                event
+                for event in store.audit_events()
+                if event.action == "application.status_updated"
+            ]
+            self.assertEqual(len(status_audits), 1)
+
+            asyncio.run(
+                server.call_tool(
+                    "update_application_status",
+                    {"application_id": application.id, "status": "interview"},
+                )
+            )
+            status_audits = [
+                event
+                for event in store.audit_events()
+                if event.action == "application.status_updated"
+            ]
+            self.assertEqual(len(status_audits), 1)
 
     def test_hermes_monitor_tool_prepares_scripts_without_creating_delivery_jobs(self) -> None:
         with TemporaryDirectory() as directory:

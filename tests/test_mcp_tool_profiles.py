@@ -25,6 +25,7 @@ _CAREER_TOOLS = {
     "list_applications",
     "application_tracker",
     "list_evidence",
+    "update_application_status",
     "scrape_public_page",
     "extract_public_page",
     "intake_job_url",
@@ -80,6 +81,7 @@ class McpToolProfileTests(unittest.TestCase):
             _READ_TOOLS
             | {
                 "record_token_usage",
+                "update_application_status",
                 "export_data",
                 "record_secondary_research",
                 "create_research_brief",
