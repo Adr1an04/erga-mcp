@@ -44,6 +44,9 @@ _TERM_CYCLE = re.compile(
 )
 _SECTION_HEADING = re.compile(r"^\\section\{(?P<name>[^}]+)\}\s*$", re.MULTILINE)
 _MACOS_TEXBIN = Path("/Library/TeX/texbin")
+_LATEX_COMMAND_WITH_ARGUMENT = re.compile(r"\\[A-Za-z]+\*?(?:\[[^]]*\])?\{([^{}]*)\}")
+_LATEX_COMMAND = re.compile(r"\\[A-Za-z]+\*?(?:\[[^]]*\])?")
+_SPACE = re.compile(r"\s+")
 
 
 def _section_key(value: str) -> str:
@@ -124,6 +127,83 @@ def append_section_contents(source: str, section_name: str, addition: str) -> st
     return prefix + addition.strip() + "\n" + source[insertion:]
 
 
+def latex_to_text(value: str) -> str:
+    """Render the text-bearing subset of LaTeX used by resume bullets."""
+    rendered = value
+    previous = None
+    while rendered != previous:
+        previous = rendered
+        rendered = _LATEX_COMMAND_WITH_ARGUMENT.sub(r"\1", rendered)
+    rendered = re.sub(r"\\([%&#_$])", r"\1", rendered)
+    rendered = _LATEX_COMMAND.sub(" ", rendered)
+    rendered = rendered.replace("{", " ").replace("}", " ")
+    rendered = rendered.replace("~", " ")
+    return _SPACE.sub(" ", rendered).strip()
+
+
+def _command_arguments(source: str, command: str) -> tuple[str, ...]:
+    """Extract balanced required arguments for a LaTeX command."""
+    needle = f"\\{command}"
+    arguments: list[str] = []
+    position = 0
+    while True:
+        command_start = source.find(needle, position)
+        if command_start < 0:
+            return tuple(arguments)
+        argument_start = command_start + len(needle)
+        while argument_start < len(source) and source[argument_start].isspace():
+            argument_start += 1
+        if argument_start >= len(source) or source[argument_start] != "{":
+            position = command_start + len(needle)
+            continue
+        depth = 0
+        argument_end = argument_start
+        while argument_end < len(source):
+            character = source[argument_end]
+            escaped = argument_end > 0 and source[argument_end - 1] == "\\"
+            if character == "{" and not escaped:
+                depth += 1
+            elif character == "}" and not escaped:
+                depth -= 1
+                if depth == 0:
+                    arguments.append(source[argument_start + 1 : argument_end])
+                    position = argument_end + 1
+                    break
+            argument_end += 1
+        else:
+            raise ValueError(f"unterminated \\{command} argument")
+
+
+def resume_bullet_length_report(
+    latex_content: str,
+    *,
+    minimum: int,
+    target: int,
+    maximum: int,
+) -> dict[str, object]:
+    """Validate newly authored resumeItem bullets against configured character limits."""
+    configured = any((minimum, target, maximum))
+    if configured and not 0 < minimum <= target <= maximum:
+        raise ValueError("resume bullet character lengths must be zero or ordered positive values")
+    bullets = tuple(
+        latex_to_text(value) for value in _command_arguments(latex_content, "resumeItem")
+    )
+    violations = [
+        {"length": len(text), "text": text}
+        for text in bullets
+        if configured and not minimum <= len(text) <= maximum
+    ]
+    return {
+        "configured": configured,
+        "maximum": maximum,
+        "minimum": minimum,
+        "passed": not violations,
+        "target": target,
+        "validated_bullets": len(bullets),
+        "violations": violations,
+    }
+
+
 def _safe_path_component(value: str) -> str:
     if not _SAFE_PATH_COMPONENT.fullmatch(value):
         raise ValueError("cycle and application slug must be safe path component values")
@@ -180,6 +260,9 @@ def create_section_resume_proposal(
     section_name: str,
     latex_content: str,
     evidence: list[Evidence],
+    bullet_min_chars: int = 0,
+    bullet_target_chars: int = 0,
+    bullet_max_chars: int = 0,
 ) -> ResumeProposal:
     """Create a section-only proposal. The source template is never modified."""
     if resume_path.suffix.lower() != ".tex":
@@ -188,6 +271,19 @@ def create_section_resume_proposal(
         raise ValueError("a resume proposal requires approved evidence")
     if any(marker in latex_content for marker in _DISALLOWED_LATEX):
         raise ValueError("latex_content contains a disallowed file or shell command")
+    bullet_report = resume_bullet_length_report(
+        latex_content,
+        minimum=bullet_min_chars,
+        target=bullet_target_chars,
+        maximum=bullet_max_chars,
+    )
+    violations = bullet_report["violations"]
+    if isinstance(violations, list) and violations:
+        rendered = ", ".join(str(item["length"]) for item in violations)
+        raise ValueError(
+            "new resume bullet lengths must be between "
+            f"{bullet_min_chars} and {bullet_max_chars} characters; received {rendered}"
+        )
     original = resume_path.read_text(encoding="utf-8")
     proposed = append_section_contents(original, section_name, latex_content)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -214,6 +310,7 @@ def create_section_resume_proposal(
                     for item in evidence
                 ],
                 "edited_section": section_name,
+                "constraints": {"bullet_characters": bullet_report},
                 "external_sync": "not performed",
                 "source_modified": False,
             },

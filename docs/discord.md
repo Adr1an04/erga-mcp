@@ -1,0 +1,87 @@
+# Optional Discord bridge
+
+The Discord bridge is a power-up around Erga's complete local system. It is not part of the core
+installation contract: résumé knowledge, private application state, CLI commands, and the MCP
+server remain usable when Discord is absent, stopped, misconfigured, or deleted. Any optional
+Obsidian projection is independent of Discord as well.
+
+## Install and configure
+
+Install the bridge's isolated dependency:
+
+```bash
+uv sync --extra discord
+```
+
+Create a bot in the [Discord Developer Portal](https://discord.com/developers/applications), enable
+Message Content Intent, and invite it with only:
+
+- View Channels
+- Send Messages
+- Read Message History
+
+Then run:
+
+```bash
+uv run erga discord configure \
+  --config ~/.config/erga-mcp/config.toml \
+  --project-dir /absolute/path/to/project
+```
+
+The wizard asks which local coding CLI should execute unattended Discord turns. Presets cover
+Codex, Claude Code, OpenCode, OpenCode V2, Gemini CLI, Cursor Agent, and GitHub Copilot CLI. The
+advanced custom option accepts an executable and a JSON argument array, runs it without a shell,
+and requires a `{prompt}` placeholder. `{project_dir}` and `{output_path}` are also available.
+
+This backend selection belongs only to Discord. You can use no other coding assistant, connect
+several through `erga connect`, or replace the Discord backend later.
+
+## Login and credentials
+
+The optional readiness check runs one minimal headless turn using the coding tool's existing local
+login. Erga removes common model API-key variables for preset subscription-backed clients so the
+check and later bridge turns cannot silently fall back to an ambient API key.
+
+The Discord bot token is hidden during entry and stored in the operating-system credential store.
+It never appears in Erga's TOML configuration, `discord-bridge.json`, process arguments, or project
+MCP files.
+
+Discord now uses unique usernames without four-digit discriminators. Enter a username such as
+`emperor_sai`, a stable numeric user ID, or comma-separated values for several trusted people.
+`name#1234` is rejected because it is no longer the current identity format. Numeric IDs remain the
+more stable authorization choice if a user might rename their account.
+
+## Run and manage
+
+Test in the foreground first:
+
+```bash
+uv run erga discord run --config ~/.config/erga-mcp/config.toml
+```
+
+Then use the optional background lifecycle:
+
+```bash
+uv run erga discord start --config ~/.config/erga-mcp/config.toml
+uv run erga discord status --config ~/.config/erga-mcp/config.toml
+uv run erga discord stop --config ~/.config/erga-mcp/config.toml
+```
+
+Direct messages from trusted users are accepted. Server messages require an explicit bot mention
+unless the owner knowingly disables that safeguard during configuration. Bot-authored messages
+are always ignored, only one backend turn runs at a time, incoming content is bounded, and long
+responses are split below Discord's message limit.
+
+Private runtime settings live beside Erga's private config. Logs and the nonce-bearing background
+process record live in Erga's owner-only data directory.
+
+## Failure boundaries
+
+A missing Discord package, bot token, coding CLI, login, or process affects only the bridge. Every
+related error states that the local core remains ready. Re-running `erga discord configure` safely
+replaces the optional settings and credential; it does not re-import résumé knowledge or rewrite
+an optional Obsidian workspace.
+
+The bridge may prepare local research, records, and résumé proposals through Erga. It never grants
+authority to submit an application, send employer messages, approve invented evidence, or mutate
+remote mail.

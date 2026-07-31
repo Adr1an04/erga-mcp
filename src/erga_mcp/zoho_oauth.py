@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 import keyring
-from keyring.errors import KeyringError
+from keyring.errors import KeyringError, PasswordDeleteError
 
 READ_ONLY_SCOPES = (
     "ZohoMail.messages.READ",
@@ -205,6 +205,22 @@ def store_client_secret(client_id: str, client_secret: str) -> None:
     if not client_secret:
         raise ValueError("client secret must not be empty")
     _set_credential(_CLIENT_SECRET_SERVICE, client_id, client_secret)
+
+
+def delete_credentials(client_id: str) -> tuple[str, ...]:
+    """Delete Erga-owned Zoho credentials for one configured OAuth client."""
+    deleted: list[str] = []
+    for service in (_CLIENT_SECRET_SERVICE, _TOKEN_SERVICE):
+        try:
+            keyring.delete_password(service, client_id)
+        except PasswordDeleteError:
+            continue
+        except KeyringError as error:
+            raise RuntimeError(
+                "could not remove Zoho credentials from the credential store"
+            ) from error
+        deleted.append(service)
+    return tuple(deleted)
 
 
 def connect(

@@ -91,6 +91,66 @@ class ResumeCliTests(unittest.TestCase):
             self.assertEqual(result["returncode"], 0)
             self.assertEqual(result["stdout"], "compiled")
 
+    def test_tailor_rejects_new_bullets_outside_configured_character_limits(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.toml"
+            template = root / "resume.tex"
+            template.write_text("\\section{Experience}\nexisting\n", encoding="utf-8")
+            main(["init", "--config", str(config)])
+            self._json_command(
+                [
+                    "resume",
+                    "settings",
+                    "set",
+                    "--config",
+                    str(config),
+                    "--template-path",
+                    str(template),
+                    "--editable-section",
+                    "Experience",
+                    "--bullet-min-chars",
+                    "90",
+                    "--bullet-target-chars",
+                    "105",
+                    "--bullet-max-chars",
+                    "120",
+                ]
+            )
+            evidence = self._json_command(
+                [
+                    "evidence",
+                    "add",
+                    "--config",
+                    str(config),
+                    "--source-ref",
+                    "approved",
+                    "--text",
+                    "Verified outcome.",
+                    "--approved",
+                ]
+            )
+
+            with self.assertRaisesRegex(ValueError, "between 90 and 120"):
+                main(
+                    [
+                        "resume",
+                        "tailor",
+                        "--config",
+                        str(config),
+                        "--section",
+                        "Experience",
+                        "--latex-content",
+                        "\\resumeItem{Too short}",
+                        "--output-dir",
+                        str(root / "proposal"),
+                        "--evidence-id",
+                        str(evidence["id"]),
+                    ]
+                )
+
+            self.assertFalse((root / "proposal").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

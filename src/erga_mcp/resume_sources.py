@@ -307,13 +307,18 @@ def resume_source_context(
     preferences["source"] = "user-reference" if reference is not None else "erga-default"
     preferences["style_override_confirmed"] = reference is not None
     if reference is not None:
-        preferences["adjust_from_reference"] = [
+        preferences["reference_metadata"] = [
             "page count",
             "section order",
             "content density",
         ]
+        preferences["rendered_layout_control"] = "editable-latex-template"
+        preferences["not_automatically_transformed"] = ["section order", "content density"]
         if reference.page_count:
             preferences["max_pages"] = reference.page_count
+            preferences["automatically_applied"] = ["maximum page count"]
+        else:
+            preferences["automatically_applied"] = []
     return {
         "master": {
             "format": master.format,

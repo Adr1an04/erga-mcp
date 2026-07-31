@@ -1890,6 +1890,9 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             section_name=section,
             latex_content=latex_content,
             evidence=store.approved_evidence(evidence_ids),
+            bullet_min_chars=config.resume.bullet_min_chars,
+            bullet_target_chars=config.resume.bullet_target_chars,
+            bullet_max_chars=config.resume.bullet_max_chars,
         )
         return {
             "proposal_tex": str(proposal.proposed_tex_path),

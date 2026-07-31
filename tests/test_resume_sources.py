@@ -146,6 +146,20 @@ class ResumeSourceTests(unittest.TestCase):
             self.assertNotIn("One-page visual order", repr(context["style_reference"]))
             self.assertEqual(context["preferences"]["source"], "user-reference")  # type: ignore[index]
             self.assertTrue(context["preferences"]["style_override_confirmed"])  # type: ignore[index]
+            self.assertEqual(
+                context["preferences"]["reference_metadata"],  # type: ignore[index]
+                ["page count", "section order", "content density"],
+            )
+            self.assertEqual(
+                context["preferences"]["rendered_layout_control"],  # type: ignore[index]
+                "editable-latex-template",
+            )
+            self.assertEqual(
+                context["preferences"]["not_automatically_transformed"],  # type: ignore[index]
+                ["section order", "content density"],
+            )
+            self.assertEqual(context["preferences"]["automatically_applied"], [])  # type: ignore[index]
+            self.assertNotIn("adjust_from_reference", context["preferences"])  # type: ignore[operator]
 
     def test_docx_rejects_oversized_decompressed_document_xml(self) -> None:
         with TemporaryDirectory() as directory:
@@ -167,6 +181,34 @@ class ResumeSourceTests(unittest.TestCase):
             self.assertEqual(context["preferences"]["source"], "erga-default")  # type: ignore[index]
             self.assertEqual(context["preferences"]["max_pages"], 1)  # type: ignore[index]
             self.assertFalse(context["preferences"]["style_override_confirmed"])  # type: ignore[index]
+
+    def test_pdf_style_reference_applies_only_its_page_count_automatically(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master = root / "master.tex"
+            style = root / "style.pdf"
+            master.write_text("Approved master", encoding="utf-8")
+            style.write_bytes(b"%PDF synthetic")
+            reader = SimpleNamespace(
+                is_encrypted=False,
+                pages=[
+                    SimpleNamespace(extract_text=lambda: "Education"),
+                    SimpleNamespace(extract_text=lambda: "Experience"),
+                ],
+            )
+
+            with patch("erga_mcp.resume_sources.PdfReader", return_value=reader):
+                context = resume_source_context(master_path=master, reference_path=style)
+
+            self.assertEqual(context["preferences"]["max_pages"], 2)  # type: ignore[index]
+            self.assertEqual(
+                context["preferences"]["automatically_applied"],  # type: ignore[index]
+                ["maximum page count"],
+            )
+            self.assertEqual(
+                context["preferences"]["not_automatically_transformed"],  # type: ignore[index]
+                ["section order", "content density"],
+            )
 
 
 if __name__ == "__main__":
