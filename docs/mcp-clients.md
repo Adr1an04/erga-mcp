@@ -2,6 +2,10 @@
 
 Erga's primary integration contract is a local stdio process. This works with any MCP client that can launch a local command and set `ERGA_MCP_CONFIG`.
 
+Erga itself owns the local evidence, application, and résumé system. An MCP client is an
+optional reasoning interface around that system; Erga does not require a particular client or a
+separate model API credential.
+
 > [!IMPORTANT]
 > Review the command and absolute paths before enabling it. The server runs with the same local permissions as the client that launches it. Do not put credentials, OAuth tokens, résumé contents, or vault contents in a client configuration.
 
@@ -14,7 +18,8 @@ Replace both placeholders with absolute local paths:
   "command": "uv",
   "args": ["--directory", "/absolute/path/to/erga-mcp", "run", "erga-mcp"],
   "env": {
-    "ERGA_MCP_CONFIG": "/absolute/path/to/erga-mcp-config.toml"
+    "ERGA_MCP_CONFIG": "/absolute/path/to/erga-mcp-config.toml",
+    "ERGA_MCP_TOOL_PROFILE": "career"
   }
 }
 ```
@@ -30,6 +35,8 @@ environment value takes precedence; neither setting is a credential.
 
 | Profile | Exposed tools |
 | --- | --- |
+| `career` | Bounded job intake and document workflow. It excludes bulk private-data export, full writing-style source context, mail, Hermes monitors, Git scanning, and token recording. |
+| `career-private` | `career` plus `export_data` and `cover_letter_style_context`. Select it only for a trusted local host that should receive those private materials. |
 | `read` | Local read-only records, tracker, and token summary. It deliberately excludes writing-sample/template content. |
 | `research` | `read` plus bounded public HTTP(S) scraping and CSS-section extraction. |
 | `write` | `read` plus local proposal, research-recording, export, token-recording, and validation tools; no network or Hermes-only tools. |
@@ -59,7 +66,8 @@ Both use an `mcpServers` JSON object. Add this entry to the client-managed MCP c
       "command": "uv",
       "args": ["--directory", "/absolute/path/to/erga-mcp", "run", "erga-mcp"],
       "env": {
-        "ERGA_MCP_CONFIG": "/absolute/path/to/erga-mcp-config.toml"
+        "ERGA_MCP_CONFIG": "/absolute/path/to/erga-mcp-config.toml",
+        "ERGA_MCP_TOOL_PROFILE": "career"
       }
     }
   }
@@ -75,6 +83,7 @@ Register the same stdio command with Claude Code's MCP command. The Claude Code 
 ```bash
 claude mcp add erga-mcp \
   --env ERGA_MCP_CONFIG=/absolute/path/to/erga-mcp-config.toml \
+  --env ERGA_MCP_TOOL_PROFILE=career \
   -- uv --directory /absolute/path/to/erga-mcp run erga-mcp
 ```
 
@@ -89,6 +98,7 @@ args = ["--directory", "/absolute/path/to/erga-mcp", "run", "erga-mcp"]
 
 [mcp_servers.erga-mcp.env]
 ERGA_MCP_CONFIG = "/absolute/path/to/erga-mcp-config.toml"
+ERGA_MCP_TOOL_PROFILE = "career"
 ```
 
 ## VS Code
@@ -103,7 +113,8 @@ Create or update `.vscode/mcp.json` (or the user `mcp.json`) through **MCP: Add 
       "command": "/absolute/path/to/uv",
       "args": ["--directory", "/absolute/path/to/erga-mcp", "run", "erga-mcp"],
       "env": {
-        "ERGA_MCP_CONFIG": "/absolute/path/to/erga-mcp-config.toml"
+        "ERGA_MCP_CONFIG": "/absolute/path/to/erga-mcp-config.toml",
+        "ERGA_MCP_TOOL_PROFILE": "career"
       }
     }
   }
@@ -125,6 +136,7 @@ ERGA_MCP_TRANSPORT=streamable-http \
 ERGA_MCP_HTTP_HOST=127.0.0.1 \
 ERGA_MCP_HTTP_PORT=8765 \
 ERGA_MCP_CONFIG=/absolute/path/to/erga-mcp-config.toml \
+ERGA_MCP_TOOL_PROFILE=career \
 uv --directory /absolute/path/to/erga-mcp run erga-mcp
 ```
 
@@ -134,7 +146,7 @@ This mode is deliberately **not a remote deployment feature**. Do not bind it to
 
 ## Compatibility checks
 
-Erga maintains official Python MCP SDK checks for both a spawned stdio server from an installed wheel and a real ephemeral Streamable HTTP server. Every profile must discover `erga_capabilities` and `pipeline_status`, then call both without error. The `default` profile additionally exposes `intake_job_url`; narrowed profiles intentionally do not. Validate any additional client/runtime you adopt against a disposable synthetic configuration before connecting personal recruiting data.
+Erga maintains official Python MCP SDK checks for both a spawned stdio server from an installed wheel and a real ephemeral Streamable HTTP server. Every profile must discover `erga_capabilities` and `pipeline_status`, then call both without error. The `default`, `career`, and `career-private` profiles expose `intake_job_url`; the read, research, write, and Hermes profiles intentionally do not. Validate any additional client/runtime you adopt against a disposable synthetic configuration before connecting personal recruiting data.
 
 ## References
 

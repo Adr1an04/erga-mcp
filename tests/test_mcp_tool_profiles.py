@@ -19,6 +19,23 @@ _READ_TOOLS = {
     "list_mail_events",
     "token_usage",
 }
+_CAREER_TOOLS = {
+    "erga_capabilities",
+    "pipeline_status",
+    "list_applications",
+    "application_tracker",
+    "list_evidence",
+    "scrape_public_page",
+    "extract_public_page",
+    "intake_job_url",
+    "prepare_job_workspace",
+    "record_secondary_research",
+    "create_research_brief",
+    "record_deep_research",
+    "create_tailored_resume",
+    "validate_tailored_resume",
+    "create_cover_letter",
+}
 
 
 class McpToolProfileTests(unittest.TestCase):
@@ -36,6 +53,19 @@ class McpToolProfileTests(unittest.TestCase):
         tool_names = self._tool_names(self._config_with_profile("read"))
 
         self.assertEqual(tool_names, _READ_TOOLS)
+
+    def test_career_profile_exposes_exact_safe_career_boundary(self) -> None:
+        tool_names = self._tool_names(self._config_with_profile("career"))
+
+        self.assertEqual(tool_names, _CAREER_TOOLS)
+
+    def test_career_private_profile_requires_explicit_selection_for_private_context(self) -> None:
+        tool_names = self._tool_names(self._config_with_profile("career-private"))
+
+        self.assertEqual(
+            tool_names,
+            _CAREER_TOOLS | {"cover_letter_style_context", "export_data"},
+        )
 
     def test_research_profile_adds_only_network_read_tools(self) -> None:
         tool_names = self._tool_names(self._config_with_profile("research"))
