@@ -91,6 +91,9 @@ _NETWORK_READ = ToolAnnotations(
 _LOCAL_WRITE = ToolAnnotations(
     read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
 )
+_LOCAL_IDEMPOTENT_WRITE = ToolAnnotations(
+    read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+)
 _NETWORK_READ_AND_WRITE = ToolAnnotations(
     read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True
 )
@@ -116,6 +119,7 @@ _NETWORK_WRITE_TOOL_NAMES = frozenset({"discover_job_research"})
 _LOCAL_WRITE_TOOL_NAMES = frozenset(
     {
         "record_token_usage",
+        "update_application_status",
         "export_data",
         "record_secondary_research",
         "create_research_brief",
@@ -145,6 +149,7 @@ _CAREER_TOOL_NAMES = frozenset(
         "list_applications",
         "application_tracker",
         "list_evidence",
+        "update_application_status",
         "scrape_public_page",
         "extract_public_page",
         "intake_job_url",
@@ -1046,6 +1051,24 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             cast(dict[str, object], _json_value(asdict(application)))
             for application in store.list_applications()
         ]
+
+    @profile_tool(
+        "update_application_status",
+        title="Update one local application status",
+        description=(
+            "Set the status of one existing application in Erga's private local database. "
+            "Allowed statuses are draft, applied, oa, assessment, interview, offer, rejected, "
+            "and withdrawn. This records a local audit event when the value changes; it never "
+            "contacts an employer, submits an application, or mutates a remote service."
+        ),
+        annotations=_LOCAL_IDEMPOTENT_WRITE,
+    )
+    def update_application_status(application_id: str, status: str) -> dict[str, object]:
+        """Set an existing application's canonical local workflow status."""
+        return cast(
+            dict[str, object],
+            _json_value(asdict(store.update_application_status(application_id, status=status))),
+        )
 
     @profile_tool("application_tracker", annotations=_READ_ONLY)
     def application_tracker(query: str = "") -> dict[str, object]:
