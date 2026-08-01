@@ -22,50 +22,12 @@ def as_json(settings: ResumeSettings) -> dict[str, object]:
 
 
 def update_settings(config_path: Path, updates: dict[str, object]) -> ResumeSettings:
-    """Replace the generated config's resume table without touching unrelated tables."""
+    """Update owned resume keys while preserving comments and forward-compatible settings."""
     config_path = config_path.expanduser()
     raw = config_path.read_text(encoding="utf-8")
-    current = load_config(config_path).resume
-    values: dict[str, object] = {
-        "master_path": str(current.master_path) if current.master_path else "",
-        "template_path": str(current.template_path) if current.template_path else "",
-        "reference_path": str(current.reference_path) if current.reference_path else "",
-        "editable_sections": list(current.editable_sections),
-        "bullet_min_chars": current.bullet_min_chars,
-        "bullet_target_chars": current.bullet_target_chars,
-        "bullet_max_chars": current.bullet_max_chars,
-        "max_pages": current.max_pages,
-        "output_root": str(current.output_root),
-        "output_pdf_name": current.output_pdf_name,
-        "latexmk": current.latexmk,
-    }
-    values.update({key: value for key, value in updates.items() if value is not None})
-    table = "\n".join(
-        [
-            "[resume]",
-            f"master_path = {json.dumps(values['master_path'])}",
-            f"template_path = {json.dumps(values['template_path'])}",
-            f"reference_path = {json.dumps(values['reference_path'])}",
-            f"editable_sections = {json.dumps(values['editable_sections'])}",
-            f"bullet_min_chars = {values['bullet_min_chars']}",
-            f"bullet_target_chars = {values['bullet_target_chars']}",
-            f"bullet_max_chars = {values['bullet_max_chars']}",
-            f"max_pages = {values['max_pages']}",
-            f"output_root = {json.dumps(values['output_root'])}",
-            f"output_pdf_name = {json.dumps(values['output_pdf_name'])}",
-            f"latexmk = {json.dumps(values['latexmk'])}",
-        ]
-    )
-    pattern = r"(?ms)^\[resume\]\n.*?(?=^\[|\Z)"
-    replaced = (
-        re.sub(
-            pattern,
-            lambda _match: f"{table}\n\n",
-            raw,
-        )
-        if re.search(pattern, raw) is not None
-        else f"{raw.rstrip()}\n\n{table}\n"
-    )
+    load_config(config_path)
+    selected = {key: value for key, value in updates.items() if value is not None}
+    replaced = _update_resume_table(raw, selected)
     with tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", dir=config_path.parent, delete=False
     ) as temporary:
@@ -81,3 +43,66 @@ def update_settings(config_path: Path, updates: dict[str, object]) -> ResumeSett
     finally:
         temporary_path.unlink(missing_ok=True)
     return settings
+
+
+def _toml_value(value: object) -> str:
+    if isinstance(value, tuple):
+        value = list(value)
+    return json.dumps(value)
+
+
+def _comment_suffix(value: str) -> str:
+    """Return an inline TOML comment while ignoring hashes inside quoted strings."""
+    quote: str | None = None
+    escaped = False
+    for index, character in enumerate(value):
+        if quote == '"':
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+        elif quote == "'":
+            if character == quote:
+                quote = None
+        elif character in {'"', "'"}:
+            quote = character
+        elif character == "#":
+            whitespace = len(value[:index]) - len(value[:index].rstrip())
+            return value[index - whitespace :]
+    return ""
+
+
+def _update_resume_table(raw: str, updates: dict[str, object]) -> str:
+    if not updates:
+        return raw
+    lines = raw.splitlines(keepends=True)
+    start = next(
+        (index for index, line in enumerate(lines) if line.strip() == "[resume]"),
+        None,
+    )
+    if start is None:
+        separator = "" if not raw or raw.endswith("\n\n") else "\n"
+        assignments = "\n".join(f"{key} = {_toml_value(value)}" for key, value in updates.items())
+        return f"{raw}{separator}[resume]\n{assignments}\n"
+    end = next(
+        (index for index in range(start + 1, len(lines)) if lines[index].lstrip().startswith("[")),
+        len(lines),
+    )
+    pending = dict(updates)
+    assignment = re.compile(r"^(\s*)([A-Za-z0-9_-]+)(\s*=\s*)(.*?)(\r?\n)?$")
+    for index in range(start + 1, end):
+        match = assignment.match(lines[index])
+        if match is None or match.group(2) not in pending:
+            continue
+        key = match.group(2)
+        suffix = _comment_suffix(match.group(4))
+        newline = match.group(5) or ""
+        lines[index] = (
+            f"{match.group(1)}{key}{match.group(3)}{_toml_value(pending.pop(key))}{suffix}{newline}"
+        )
+    if pending:
+        insertion = [f"{key} = {_toml_value(value)}\n" for key, value in pending.items()]
+        lines[end:end] = insertion
+    return "".join(lines)

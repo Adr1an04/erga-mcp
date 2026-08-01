@@ -188,6 +188,74 @@ class UninstallTests(unittest.TestCase):
             self.assertIn(str(paths["master"]), plan.preserved_sources)
             self.assertTrue(personal.is_file())
 
+    def test_apply_rederives_targets_after_configuration_changes(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = self._configured_install(root)
+            plan = build_uninstall_plan(
+                paths["config"],
+                home=root / "home",
+                cwd=root,
+                hermes_home=root / "hermes",
+            )
+            replacement = root / "erga-output-new"
+            replacement.mkdir()
+            raw = (
+                paths["config"]
+                .read_text(encoding="utf-8")
+                .replace(json.dumps(str(paths["output"])), json.dumps(str(replacement)))
+            )
+            paths["config"].write_text(raw, encoding="utf-8")
+
+            with (
+                patch("erga_mcp.uninstall.delete_discord_token", return_value=False),
+                patch("erga_mcp.uninstall.stop_discord_bridge", return_value={"running": False}),
+                patch("erga_mcp.uninstall._verified_legacy_bridge_pid", return_value=None),
+            ):
+                result = apply_uninstall(plan)
+
+            self.assertTrue(paths["output"].is_dir())
+            self.assertTrue(replacement.is_dir())
+            self.assertTrue(any("no longer authorized" in item for item in result["warnings"]))
+
+    def test_apply_rejects_parent_symlink_swap_after_review(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = self._configured_install(root)
+            owned_parent = root / "owned"
+            nested_output = owned_parent / "erga-output"
+            owned_parent.mkdir()
+            paths["output"].rename(nested_output)
+            raw = (
+                paths["config"]
+                .read_text(encoding="utf-8")
+                .replace(json.dumps(str(paths["output"])), json.dumps(str(nested_output)))
+            )
+            paths["config"].write_text(raw, encoding="utf-8")
+            plan = build_uninstall_plan(
+                paths["config"],
+                home=root / "home",
+                cwd=root,
+                hermes_home=root / "hermes",
+            )
+
+            outside = root / "outside"
+            outside_output = outside / "erga-output"
+            outside_output.mkdir(parents=True)
+            (outside_output / "personal.txt").write_text("keep", encoding="utf-8")
+            owned_parent.rename(root / "owned-original")
+            owned_parent.symlink_to(outside, target_is_directory=True)
+
+            with (
+                patch("erga_mcp.uninstall.delete_discord_token", return_value=False),
+                patch("erga_mcp.uninstall.stop_discord_bridge", return_value={"running": False}),
+                patch("erga_mcp.uninstall._verified_legacy_bridge_pid", return_value=None),
+            ):
+                result = apply_uninstall(plan)
+
+            self.assertTrue((outside_output / "personal.txt").is_file())
+            self.assertTrue(any("parent resolution changed" in item for item in result["warnings"]))
+
     @unittest.skipUnless(sys.platform == "darwin", "macOS Library paths are platform-specific")
     def test_canonical_uninstall_includes_exact_macos_legacy_locations(self) -> None:
         with TemporaryDirectory() as directory:

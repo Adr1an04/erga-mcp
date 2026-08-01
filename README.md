@@ -128,6 +128,10 @@ select a model, or request an API key. Use `--dry-run` to inspect the exact conf
 Discord is another optional interface. Install its isolated runtime extra, then choose exactly
 which existing headless coding CLI should power Discord replies:
 
+This bridge is specifically for users of tools such as Codex, Claude Code, or OpenCode who want
+Discord access without already running a messaging gateway. If Hermes, OpenClaw, or another
+gateway already manages Discord, connect Erga through MCP there instead of operating a second bot.
+
 ```bash
 uv sync --extra discord
 uv run erga discord configure

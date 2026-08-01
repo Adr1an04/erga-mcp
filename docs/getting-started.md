@@ -140,6 +140,11 @@ bot token and one explicit local headless coding CLI because messages arrive whi
 terminal session is open. That bridge-specific choice does not become Erga's core and does not
 prevent connecting other assistants.
 
+This bridge is intended for someone who uses a headless coding tool such as Codex, Claude Code, or
+OpenCode but does not already operate a Discord gateway. If Hermes, OpenClaw, or another gateway
+already owns the Discord connection, connect Erga's MCP server to that system instead of starting a
+second bot.
+
 Install the isolated runtime extra and open the bridge wizard:
 
 ```bash
@@ -150,9 +155,9 @@ uv run erga discord configure \
 ```
 
 The wizard resolves the selected backend before asking for Discord credentials. Its optional
-readiness probe uses the backend's existing local login and strips common provider API-key
-environment variables. The bot token is entered through a hidden prompt and stored only in the
-operating-system credential store.
+readiness probe uses the backend's existing local login and passes only a strict allowlist of basic
+runtime environment variables. The bot token is entered through a hidden prompt and stored only in
+the operating-system credential store.
 
 Authorize a current unique Discord username such as `emperor_sai`, a stable numeric user ID, or
 several comma-separated identities. Old `name#1234` discriminator names are deliberately rejected
@@ -419,6 +424,10 @@ Then run `uv run erga uninstall`. Erga prints the same bounded inventory and req
 `DELETE ERGA` confirmation phrase. Use `--yes` only for deliberate non-interactive cleanup. Pass
 `--project-dir /path/to/workspace` again for an older project connection created before Erga began
 recording connection locations.
+
+Immediately before mutation, Erga rebuilds that inventory from the current configuration. It
+removes only the intersection of the reviewed and current plans, rechecks resolved parent paths
+before each deletion, and reports anything that changed as skipped rather than expanding scope.
 
 Uninstall stops only a verified Erga Discord process; deletes private configuration, SQLite state,
 managed résumé copies, generated packages in Erga-owned output directories, optional Obsidian

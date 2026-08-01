@@ -46,11 +46,15 @@ _KNOWN_DATA_FILES = (
 class RemovalTarget:
     path: str
     kind: str
+    canonical_path: str
 
 
 @dataclass(frozen=True)
 class UninstallPlan:
     config_path: str
+    home: str
+    cwd: str
+    hermes_home: str
     targets: tuple[RemovalTarget, ...]
     host_connections: tuple[HostConnectionRecord, ...]
     credential_accounts: tuple[str, ...]
@@ -60,6 +64,9 @@ class UninstallPlan:
     def as_json(self) -> dict[str, object]:
         return {
             "config_path": self.config_path,
+            "home": self.home,
+            "cwd": self.cwd,
+            "hermes_home": self.hermes_home,
             "targets": [asdict(target) for target in self.targets],
             "host_connections": [asdict(record) for record in self.host_connections],
             "credential_accounts": list(self.credential_accounts),
@@ -70,6 +77,11 @@ class UninstallPlan:
 
 def _absolute(path: Path) -> Path:
     return path.expanduser().absolute()
+
+
+def _canonical_deletion_path(path: Path) -> Path:
+    """Resolve parent links without following the final entry that Erga may unlink."""
+    return path.parent.resolve(strict=False) / path.name
 
 
 def _legacy_targets(home: Path) -> tuple[Path, ...]:
@@ -229,6 +241,10 @@ def build_uninstall_plan(
     """Inventory only exact Erga-owned locations; never crawl a user's home directory."""
     normalized_config = _absolute(config_path)
     home = _absolute(home or Path.home())
+    cwd = _absolute(cwd or Path.cwd())
+    selected_hermes_home = _absolute(
+        hermes_home or Path(os.environ.get("HERMES_HOME", home / ".hermes"))
+    )
     warnings: list[str] = []
     targets: list[RemovalTarget] = []
     config: ErgaConfig | None = None
@@ -256,7 +272,13 @@ def build_uninstall_plan(
         if normalized.is_dir() and _contains_preserved_source(normalized, preserved):
             warnings.append(f"Skipped directory containing an original user source: {normalized}")
             return
-        targets.append(RemovalTarget(str(normalized), kind))
+        targets.append(
+            RemovalTarget(
+                str(normalized),
+                kind,
+                str(_canonical_deletion_path(normalized)),
+            )
+        )
 
     canonical_root = home / _CANONICAL_CONFIG_DIRECTORY
     if normalized_config == canonical_root / "config.toml":
@@ -279,14 +301,13 @@ def build_uninstall_plan(
     for path in _legacy_targets(home):
         add_target(path, "legacy Erga artifact")
 
-    selected_hermes_home = hermes_home or Path(os.environ.get("HERMES_HOME", home / ".hermes"))
-    hermes_scripts = _absolute(selected_hermes_home) / "scripts"
+    hermes_scripts = selected_hermes_home / "scripts"
     for path in monitor_paths(hermes_scripts):
         add_target(path, "optional Hermes monitor file")
 
     host_records, host_warnings = _candidate_host_records(
         normalized_config,
-        (*project_dirs, cwd or Path.cwd()),
+        (*project_dirs, cwd),
     )
     warnings.extend(host_warnings)
     credentials = ["Discord bot token"]
@@ -298,6 +319,9 @@ def build_uninstall_plan(
         unique_targets[target.path] = target
     return UninstallPlan(
         config_path=str(normalized_config),
+        home=str(home),
+        cwd=str(cwd),
+        hermes_home=str(selected_hermes_home),
         targets=tuple(sorted(unique_targets.values(), key=lambda item: item.path)),
         host_connections=host_records,
         credential_accounts=tuple(credentials),
@@ -407,10 +431,35 @@ def _remove_path(path: Path) -> None:
 
 
 def apply_uninstall(plan: UninstallPlan) -> dict[str, object]:
-    """Apply a previously reviewed uninstall plan without expanding its scope."""
+    """Apply only targets that remain safe under a freshly derived uninstall plan."""
     config_path = Path(plan.config_path)
+    fresh_plan = build_uninstall_plan(
+        config_path,
+        project_dirs=tuple(Path(record.project_dir) for record in plan.host_connections),
+        home=Path(plan.home),
+        cwd=Path(plan.cwd),
+        hermes_home=Path(plan.hermes_home),
+    )
+    fresh_targets = {target.path: target for target in fresh_plan.targets}
+    approved_targets: list[RemovalTarget] = []
+    revalidation_warnings: list[str] = []
+    for reviewed in plan.targets:
+        current = fresh_targets.get(reviewed.path)
+        if current is None:
+            revalidation_warnings.append(
+                f"Skipped target that is no longer authorized by current configuration: "
+                f"{reviewed.path}"
+            )
+        elif current.canonical_path != reviewed.canonical_path:
+            revalidation_warnings.append(
+                f"Skipped target whose parent resolution changed after review: {reviewed.path}"
+            )
+        else:
+            approved_targets.append(current)
+    approved_paths = {target.path for target in approved_targets}
+    config_is_stable = str(config_path) in approved_paths and not config_path.is_symlink()
     try:
-        config = load_config(config_path) if config_path.is_file() else None
+        config = load_config(config_path) if config_is_stable and config_path.is_file() else None
     except (OSError, ValueError):
         config = None
     actions = _stop_bridges(config_path, config)
@@ -435,21 +484,20 @@ def apply_uninstall(plan: UninstallPlan) -> dict[str, object]:
             )
 
     deleted: list[str] = []
-    for target in sorted(plan.targets, key=lambda item: len(Path(item.path).parts), reverse=True):
+    for target in sorted(
+        approved_targets,
+        key=lambda item: len(Path(item.path).parts),
+        reverse=True,
+    ):
         path = Path(target.path)
+        if str(_canonical_deletion_path(path)) != target.canonical_path:
+            revalidation_warnings.append(
+                f"Skipped target whose parent resolution changed during uninstall: {path}"
+            )
+            continue
         if path.exists() or path.is_symlink():
             _remove_path(path)
             deleted.append(str(path))
-
-    config_parent = config_path.parent
-    removable_parent_names = {"erga", "erga-mcp", ".erga", ".erga-mcp"}
-    if (
-        config_parent.is_dir()
-        and config_parent.name.casefold() in removable_parent_names
-        and not any(config_parent.iterdir())
-    ):
-        config_parent.rmdir()
-        deleted.append(str(config_parent))
     return {
         "status": "uninstalled",
         "deleted_paths": sorted(deleted),
@@ -457,7 +505,7 @@ def apply_uninstall(plan: UninstallPlan) -> dict[str, object]:
         "host_connections": host_results,
         "process_actions": actions,
         "preserved_sources": list(plan.preserved_sources),
-        "warnings": list(plan.warnings),
+        "warnings": [*fresh_plan.warnings, *revalidation_warnings],
     }
 
 

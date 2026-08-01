@@ -5,6 +5,11 @@ installation contract: résumé knowledge, private application state, CLI comman
 server remain usable when Discord is absent, stopped, misconfigured, or deleted. Any optional
 Obsidian projection is independent of Discord as well.
 
+Use this bridge when you want Discord access through a headless coding tool you already use—such
+as Codex, Claude Code, or OpenCode—and you do **not** already have a messaging gateway such as
+Hermes or OpenClaw managing Discord. If an existing gateway already owns your Discord connection,
+connect Erga's MCP server to that gateway instead of running a second bot and bridge.
+
 ## Install and configure
 
 Install the bridge's isolated dependency:
@@ -39,8 +44,9 @@ several through `erga connect`, or replace the Discord backend later.
 ## Login and credentials
 
 The optional readiness check runs one minimal headless turn using the coding tool's existing local
-login. Erga removes common model API-key variables for preset subscription-backed clients so the
-check and later bridge turns cannot silently fall back to an ambient API key.
+login. Every backend, including the advanced custom backend, receives a strict allowlist of basic
+operating-system and runtime variables. Arbitrary parent-process variables and credentials are not
+inherited, so a bridge turn cannot silently consume an ambient model key or unrelated secret.
 
 The Discord bot token is hidden during entry and stored in the operating-system credential store.
 It never appears in Erga's TOML configuration, `discord-bridge.json`, process arguments, or project

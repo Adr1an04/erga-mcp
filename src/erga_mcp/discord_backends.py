@@ -27,7 +27,6 @@ class DiscordBackend:
     probe_arguments: tuple[str, ...]
     run_arguments: tuple[str, ...]
     output_source: OutputSource
-    stripped_environment: tuple[str, ...] = ()
     injected_environment: tuple[tuple[str, str], ...] = ()
 
 
@@ -64,7 +63,6 @@ DISCORD_BACKENDS: dict[DiscordBackendName, DiscordBackend] = {
             "{prompt}",
         ),
         output_source="file",
-        stripped_environment=("OPENAI_API_KEY",),
     ),
     "claude-code": DiscordBackend(
         id="claude-code",
@@ -90,7 +88,6 @@ DISCORD_BACKENDS: dict[DiscordBackendName, DiscordBackend] = {
             "{prompt}",
         ),
         output_source="stdout",
-        stripped_environment=("ANTHROPIC_API_KEY",),
     ),
     "opencode": DiscordBackend(
         id="opencode",
@@ -134,11 +131,6 @@ DISCORD_BACKENDS: dict[DiscordBackendName, DiscordBackend] = {
             "{prompt}",
         ),
         output_source="stdout",
-        stripped_environment=(
-            "GEMINI_API_KEY",
-            "GOOGLE_API_KEY",
-            "GOOGLE_GENAI_USE_VERTEXAI",
-        ),
     ),
     "cursor": DiscordBackend(
         id="cursor",
@@ -164,7 +156,6 @@ DISCORD_BACKENDS: dict[DiscordBackendName, DiscordBackend] = {
             "{prompt}",
         ),
         output_source="stdout",
-        stripped_environment=("CURSOR_API_KEY",),
     ),
     "github-copilot": DiscordBackend(
         id="github-copilot",

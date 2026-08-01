@@ -10,9 +10,11 @@ from unittest.mock import patch
 
 from erga_mcp.host_connections import (
     SUPPORTED_HOSTS,
+    HostConnectionRecord,
     collect_optional_hosts,
     configure_hosts,
     ensure_host_configuration,
+    remove_host_connection,
     render_host_configuration,
     resolve_server_command,
 )
@@ -193,8 +195,77 @@ class HostConnectionTests(unittest.TestCase):
             )
 
             self.assertFalse(preview[0]["written"])
+            self.assertTrue(preview[0]["would_write"])
             self.assertFalse((root / ".codex" / "config.toml").exists())
             self.assertEqual(skipped, [])
+
+    def test_preview_runs_the_real_merge_and_conflict_checks(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config, server = self._files(root)
+            shared = root / ".mcp.json"
+            shared.write_text(
+                json.dumps({"theme": "dark", "mcpServers": {"other": {"command": "other"}}}),
+                encoding="utf-8",
+            )
+
+            preview = configure_hosts(
+                ("generic-mcp",),
+                project_dir=root,
+                config_path=config,
+                server_command=server,
+                write=False,
+            )
+            rendered = json.loads(preview[0]["content"])
+
+            self.assertEqual(rendered["theme"], "dark")
+            self.assertIn("other", rendered["mcpServers"])
+            self.assertIn("erga-mcp", rendered["mcpServers"])
+            self.assertEqual(
+                shared.read_text(encoding="utf-8"),
+                json.dumps({"theme": "dark", "mcpServers": {"other": {"command": "other"}}}),
+            )
+
+            shared.write_text(
+                json.dumps({"mcpServers": {"erga-mcp": {"command": "someone-else"}}}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "refusing to overwrite"):
+                configure_hosts(
+                    ("generic-mcp",),
+                    project_dir=root,
+                    config_path=config,
+                    server_command=server,
+                    write=False,
+                )
+
+    def test_cleanup_rejects_parent_symlink_redirection(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            project.mkdir()
+            config, server = self._files(project)
+            configure_hosts(
+                ("gemini-cli",),
+                project_dir=project,
+                config_path=config,
+                server_command=server,
+            )
+            original_directory = project / ".gemini"
+            outside_directory = root / "outside-gemini"
+            original_directory.rename(outside_directory)
+            original_directory.symlink_to(outside_directory, target_is_directory=True)
+            target = original_directory / "settings.json"
+            record = HostConnectionRecord(
+                host="gemini-cli",
+                project_dir=str(project),
+                target_path=str(target),
+            )
+
+            with self.assertRaisesRegex(ValueError, "inside the selected workspace"):
+                remove_host_connection(record, config_path=config)
+
+            self.assertTrue((outside_directory / "settings.json").is_file())
 
     def test_optional_picker_defaults_to_no_connection(self) -> None:
         prompt = unittest.mock.Mock()

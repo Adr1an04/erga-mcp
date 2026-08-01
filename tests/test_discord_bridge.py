@@ -160,15 +160,22 @@ class DiscordBridgeTests(unittest.TestCase):
             self.assertIn("--approve-mcps", cursor)
             self.assertIn("--allow-tool=erga-mcp", copilot)
 
-    def test_subscription_backends_do_not_inherit_model_api_keys(self) -> None:
+    def test_backend_processes_receive_only_allowlisted_runtime_environment(self) -> None:
         with patch.dict(
             os.environ,
             {
+                "PATH": "/safe/bin",
+                "HOME": "/safe/home",
+                "LC_ALL": "C.UTF-8",
                 "OPENAI_API_KEY": "secret",
                 "ANTHROPIC_API_KEY": "secret",
                 "GEMINI_API_KEY": "secret",
                 "CURSOR_API_KEY": "secret",
+                "AWS_SECRET_ACCESS_KEY": "secret",
+                "DATABASE_URL": "secret",
+                "ERGA_TEST_RANDOM_SECRET": "secret",
             },
+            clear=True,
         ):
             codex = _backend_environment("codex")
             claude = _backend_environment("claude-code")
@@ -180,6 +187,12 @@ class DiscordBridgeTests(unittest.TestCase):
         self.assertNotIn("ANTHROPIC_API_KEY", claude)
         self.assertNotIn("GEMINI_API_KEY", gemini)
         self.assertNotIn("CURSOR_API_KEY", cursor)
+        self.assertNotIn("AWS_SECRET_ACCESS_KEY", codex)
+        self.assertNotIn("DATABASE_URL", claude)
+        self.assertNotIn("ERGA_TEST_RANDOM_SECRET", gemini)
+        self.assertEqual(codex["PATH"], "/safe/bin")
+        self.assertEqual(codex["HOME"], "/safe/home")
+        self.assertEqual(codex["LC_ALL"], "C.UTF-8")
         self.assertEqual(copilot["GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP"], "true")
 
     def test_custom_backend_passes_arguments_without_a_shell(self) -> None:

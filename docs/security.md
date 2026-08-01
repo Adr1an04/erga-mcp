@@ -38,7 +38,9 @@ state.
 `erga connect` writes only an Erga stdio MCP entry under the project workspace the user selects.
 It preserves unrelated host settings, reuses identical shared `.mcp.json` entries, refuses to
 overwrite a differing server entry, and rejects symlinked or competing-precedence configuration
-targets. `--dry-run` renders exact content without writing.
+targets. Creation, preview, and cleanup resolve the target and all parent links against the selected
+project. `--dry-run` executes the same parse, conflict, and merge checks as a real connection and
+renders the complete merged content without writing.
 
 Host installation and authentication remain the host's responsibility. Erga neither invokes a
 model nor requests a host subscription, model API key, or provider credential while connecting.
@@ -60,11 +62,12 @@ usernames and stable numeric IDs, ignores bot authors, defaults to direct messag
 server mentions, serializes backend turns, caps input and output, and never passes message content
 through a shell.
 
-Preset subscription-backed processes remove common provider API-key environment variables before
-launch so an ambient key cannot silently replace the login the user chose. The advanced custom
-backend receives a reviewed argument array with a required `{prompt}` placeholder; shell command
-strings are not accepted. Full backend errors stay in the owner-only local log and are not returned
-to Discord.
+All preset and custom backend processes receive only a strict allowlist of basic operating-system,
+locale, terminal, and temporary-directory variables. Arbitrary parent variables—including provider
+keys and unrelated credentials—are not inherited, so an ambient secret cannot silently replace the
+login the user chose. The advanced custom backend receives a reviewed argument array with a
+required `{prompt}` placeholder; shell command strings are not accepted. Full backend errors stay
+in the owner-only local log and are not returned to Discord.
 
 Background process records contain a random nonce. Status and stop operations compare that nonce,
 the exact private config path, and the bridge module against the live process command before

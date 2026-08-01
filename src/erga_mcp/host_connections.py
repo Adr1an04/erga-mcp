@@ -497,8 +497,7 @@ def remove_host_connection(
     target = Path(record.target_path).expanduser().absolute()
     if target != expected_target:
         raise ValueError(f"recorded host target is outside its adapter path: {target}")
-    if target.is_symlink():
-        raise ValueError(f"refusing to modify a symlinked host configuration: {target}")
+    _validate_path_within_project(project_dir, target)
     if not target.is_file():
         return HostRemovalResult(record.host, str(target), False, "configuration is absent")
     content = target.read_text(encoding="utf-8")
@@ -535,26 +534,29 @@ def remove_host_connection(
     return HostRemovalResult(record.host, str(target), True, "Erga entry removed")
 
 
-def _validate_target(configuration: HostConfiguration) -> None:
-    project_dir = configuration.target_path
-    for _part in Path(host_adapter(configuration.host).project_target).parts:
-        project_dir = project_dir.parent
+def _validate_path_within_project(project_dir: Path, target: Path) -> None:
+    """Reject a final or parent symlink that redirects a shared config outside the project."""
     resolved_project = project_dir.resolve()
-    resolved_target = configuration.target_path.resolve(strict=False)
+    resolved_target = target.resolve(strict=False)
     try:
         resolved_target.relative_to(resolved_project)
     except ValueError as error:
         raise ValueError(
             "host configuration target must remain inside the selected workspace"
         ) from error
-    if configuration.target_path.is_symlink():
-        raise ValueError(
-            f"refusing to replace a symlinked host configuration: {configuration.target_path}"
-        )
+    if target.is_symlink():
+        raise ValueError(f"refusing to modify a symlinked host configuration: {target}")
 
 
-def ensure_host_configuration(configuration: HostConfiguration) -> HostConnectionResult:
-    """Create one host entry or safely reuse an identical shared entry."""
+def _validate_target(configuration: HostConfiguration) -> None:
+    project_dir = configuration.target_path
+    for _part in Path(host_adapter(configuration.host).project_target).parts:
+        project_dir = project_dir.parent
+    _validate_path_within_project(project_dir, configuration.target_path)
+
+
+def _planned_host_update(configuration: HostConfiguration) -> tuple[str, bool, bool]:
+    """Run every target, conflict, parse, and merge check without writing."""
     target = configuration.target_path
     _validate_target(configuration)
     if configuration.format in {"opencode", "opencode-v2"} and not target.exists():
@@ -573,17 +575,21 @@ def ensure_host_configuration(configuration: HostConfiguration) -> HostConnectio
     if existing and _server_from_content(configuration, existing) == _server_from_content(
         configuration, configuration.content
     ):
-        written = False
-        already_configured = True
-    else:
-        merged = (
-            _merge_codex(configuration, existing)
-            if configuration.format == "codex"
-            else _merge_json(configuration, existing)
-        )
+        return existing, False, True
+    merged = (
+        _merge_codex(configuration, existing)
+        if configuration.format == "codex"
+        else _merge_json(configuration, existing)
+    )
+    return merged, True, False
+
+
+def ensure_host_configuration(configuration: HostConfiguration) -> HostConnectionResult:
+    """Create one host entry or safely reuse an identical shared entry."""
+    target = configuration.target_path
+    merged, written, already_configured = _planned_host_update(configuration)
+    if written:
         _atomic_write(target, merged)
-        written = True
-        already_configured = False
     adapter = host_adapter(configuration.host)
     return HostConnectionResult(
         host=configuration.host,
@@ -629,11 +635,12 @@ def configure_hosts(
             results.append(asdict(result))
         else:
             adapter = host_adapter(host)
+            merged, would_write, already_configured = _planned_host_update(configuration)
             results.append(
                 {
                     "host": host,
                     "label": adapter.label,
-                    "content": configuration.content,
+                    "content": merged,
                     "installed_on_path": (
                         shutil.which(adapter.executable) is not None
                         if adapter.executable is not None
@@ -642,6 +649,8 @@ def configure_hosts(
                     "model_api_required": False,
                     "target_path": str(configuration.target_path),
                     "written": False,
+                    "would_write": would_write,
+                    "already_configured": already_configured,
                 }
             )
     return results

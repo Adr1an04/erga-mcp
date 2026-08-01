@@ -36,6 +36,37 @@ _LOG_NAME = "discord-bridge.log"
 _MAX_DISCORD_MESSAGE = 1_900
 _MAX_INCOMING_MESSAGE = 16_000
 _ALLOWED_ARGUMENT_FIELDS = ("{prompt}", "{project_dir}", "{output_path}")
+_BACKEND_ENVIRONMENT_ALLOWLIST = frozenset(
+    {
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "HOME",
+        "LANG",
+        "LANGUAGE",
+        "LOCALAPPDATA",
+        "LOGNAME",
+        "NO_COLOR",
+        "PATH",
+        "PATHEXT",
+        "SHELL",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "TMPDIR",
+        "USER",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -235,10 +266,14 @@ def resolve_backend_command(
 
 
 def _backend_environment(backend: DiscordBackendName) -> dict[str, str]:
-    environment = os.environ.copy()
+    # Discord turns are unattended. Pass only process/runtime plumbing; credentials must come
+    # from the selected CLI's own login store, never from Erga's ambient parent environment.
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name in _BACKEND_ENVIRONMENT_ALLOWLIST or name.startswith("LC_")
+    }
     adapter = discord_backend(backend)
-    for name in adapter.stripped_environment:
-        environment.pop(name, None)
     environment.update(adapter.injected_environment)
     return environment
 
