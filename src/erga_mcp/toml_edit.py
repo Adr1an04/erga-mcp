@@ -44,8 +44,9 @@ def update_table(raw: str, name: str, updates: dict[str, object]) -> str:
         return raw
     lines = raw.splitlines(keepends=True)
     expected_header = f"[{name}]"
+    table_header = re.compile(rf"^\s*\[{re.escape(name)}\]\s*(?:#.*)?(?:\r?\n)?$")
     start = next(
-        (index for index, line in enumerate(lines) if line.strip() == expected_header),
+        (index for index, line in enumerate(lines) if table_header.match(line)),
         None,
     )
     if start is None:
