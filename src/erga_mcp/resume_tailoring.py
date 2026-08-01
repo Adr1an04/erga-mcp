@@ -10,12 +10,9 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 from .models import Evidence
-from .resume import ResumeProposal, resolve_section_name
+from .resume import ResumeProposal, latex_to_text, resolve_section_name
 
 _TOKEN = re.compile(r"[a-z0-9+#.]+")
-_SPACE = re.compile(r"\s+")
-_LATEX_COMMAND_WITH_ARGUMENT = re.compile(r"\\[A-Za-z]+\*?(?:\[[^]]*\])?\{([^{}]*)\}")
-_LATEX_COMMAND = re.compile(r"\\[A-Za-z]+\*?(?:\[[^]]*\])?")
 _STOP_WORDS = frozenset(
     {
         "a",
@@ -126,20 +123,6 @@ class _RankedValue:
     text: str
     score: int
     matched_terms: tuple[str, ...]
-
-
-def latex_to_text(value: str) -> str:
-    """Render the text-bearing subset of LaTeX used by resume bullets."""
-    rendered = value
-    previous = None
-    while rendered != previous:
-        previous = rendered
-        rendered = _LATEX_COMMAND_WITH_ARGUMENT.sub(r"\1", rendered)
-    rendered = re.sub(r"\\([%&#_$])", r"\1", rendered)
-    rendered = _LATEX_COMMAND.sub(" ", rendered)
-    rendered = rendered.replace("{", " ").replace("}", " ")
-    rendered = rendered.replace("~", " ")
-    return _SPACE.sub(" ", rendered).strip()
 
 
 def _normalized(value: str) -> str:

@@ -38,7 +38,10 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --extra discord
+
+      - name: Verify optional Discord runtime
+        run: uv run python -c "import discord; print(discord.__version__)"
 
       - name: Verify lock file
         run: uv lock --check

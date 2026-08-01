@@ -33,6 +33,46 @@ The wizard configures no coding-assistant account, Discord bot, mail account, cr
 service. Those are separate opt-in connections and their failure cannot invalidate core local
 state.
 
+## Optional coding-host connections
+
+`erga connect` writes only an Erga stdio MCP entry under the project workspace the user selects.
+It preserves unrelated host settings, reuses identical shared `.mcp.json` entries, refuses to
+overwrite a differing server entry, and rejects symlinked or competing-precedence configuration
+targets. Creation, preview, and cleanup resolve the target and all parent links against the selected
+project. `--dry-run` executes the same parse, conflict, and merge checks as a real connection and
+renders the complete merged content without writing.
+
+Host installation and authentication remain the host's responsibility. Erga neither invokes a
+model nor requests a host subscription, model API key, or provider credential while connecting.
+Generated entries contain the local Erga configuration path, so users should review them before
+committing project host files to version control.
+
+## Optional Discord bridge
+
+Discord is a separately installed and explicitly configured interface. Core setup never needs a
+Discord account, bot, dependency, or execution backend. `erga discord configure` selects one local
+headless coding CLI only for unattended bridge turns and may replace that choice later without
+rebuilding Erga's private state, résumé knowledge, optional Obsidian projection, or other MCP
+connections.
+
+The bot token is stored under a configuration-specific account in the operating-system credential
+store. `discord-bridge.json` contains only the backend executable, project path, authorization
+policy, timeout, and non-secret argument array. The bridge accepts current unique Discord
+usernames and stable numeric IDs, ignores bot authors, defaults to direct messages or explicit
+server mentions, serializes backend turns, caps input and output, and never passes message content
+through a shell.
+
+All preset and custom backend processes receive only a strict allowlist of basic operating-system,
+locale, terminal, and temporary-directory variables. Arbitrary parent variables—including provider
+keys and unrelated credentials—are not inherited, so an ambient secret cannot silently replace the
+login the user chose. The advanced custom backend receives a reviewed argument array with a
+required `{prompt}` placeholder; shell command strings are not accepted. Full backend errors stay
+in the owner-only local log and are not returned to Discord.
+
+Background process records contain a random nonce. Status and stop operations compare that nonce,
+the exact private config path, and the bridge module against the live process command before
+signaling it. A stale or reused PID is removed without killing the unrelated process.
+
 ## Local MCP trust boundary
 
 The default MCP server is a local **stdio** process. It is not a security sandbox: it runs with the permissions of the client that starts it. Review the complete executable command, arguments, environment variables, and absolute paths before enabling it.

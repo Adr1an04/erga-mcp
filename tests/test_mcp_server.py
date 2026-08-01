@@ -557,6 +557,46 @@ class McpServerTests(unittest.TestCase):
                 )
             self.assertIn("inside configured resume output_root", str(error.exception))
 
+    def test_create_tailored_resume_enforces_configured_new_bullet_lengths(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace(
+                    "editable_sections = []", 'editable_sections = ["Experience"]'
+                )
+                .replace("bullet_min_chars = 0", "bullet_min_chars = 90")
+                .replace("bullet_target_chars = 0", "bullet_target_chars = 105")
+                .replace("bullet_max_chars = 0", "bullet_max_chars = 120"),
+                encoding="utf-8",
+            )
+            package = root / "output" / "fall-2026" / "example"
+            (package / "source").mkdir(parents=True)
+            (package / "artifacts").mkdir()
+            (package / "source" / "resume.tex").write_text(
+                "\\section{Experience}\nexisting\n", encoding="utf-8"
+            )
+            evidence = ErgaStore(root / "state" / "erga.sqlite3").add_evidence(
+                source_ref="approved", text="Verified outcome", approved=True
+            )
+            server = build_server(config_path)
+
+            with self.assertRaises(Exception) as error:
+                asyncio.run(
+                    server.call_tool(
+                        "create_tailored_resume",
+                        {
+                            "package_dir": str(package),
+                            "section": "Experience",
+                            "latex_content": "\\resumeItem{Too short}",
+                            "evidence_ids": [evidence.id],
+                        },
+                    )
+                )
+
+            self.assertIn("between 90 and 120", str(error.exception))
+            self.assertFalse((package / "artifacts" / "proposal.tex").exists())
+
     def test_scrape_tools_return_bounded_untrusted_content(self) -> None:
         from erga_mcp.web_scraping import ScrapedPage
 

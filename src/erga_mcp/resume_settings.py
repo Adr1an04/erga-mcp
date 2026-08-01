@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import json
 import os
-import re
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
 from .config import ResumeSettings, load_config
 from .private_files import restrict_private_file
+from .toml_edit import update_table
 
 
 def as_json(settings: ResumeSettings) -> dict[str, object]:
@@ -22,50 +21,12 @@ def as_json(settings: ResumeSettings) -> dict[str, object]:
 
 
 def update_settings(config_path: Path, updates: dict[str, object]) -> ResumeSettings:
-    """Replace the generated config's resume table without touching unrelated tables."""
+    """Update owned resume keys while preserving comments and forward-compatible settings."""
     config_path = config_path.expanduser()
     raw = config_path.read_text(encoding="utf-8")
-    current = load_config(config_path).resume
-    values: dict[str, object] = {
-        "master_path": str(current.master_path) if current.master_path else "",
-        "template_path": str(current.template_path) if current.template_path else "",
-        "reference_path": str(current.reference_path) if current.reference_path else "",
-        "editable_sections": list(current.editable_sections),
-        "bullet_min_chars": current.bullet_min_chars,
-        "bullet_target_chars": current.bullet_target_chars,
-        "bullet_max_chars": current.bullet_max_chars,
-        "max_pages": current.max_pages,
-        "output_root": str(current.output_root),
-        "output_pdf_name": current.output_pdf_name,
-        "latexmk": current.latexmk,
-    }
-    values.update({key: value for key, value in updates.items() if value is not None})
-    table = "\n".join(
-        [
-            "[resume]",
-            f"master_path = {json.dumps(values['master_path'])}",
-            f"template_path = {json.dumps(values['template_path'])}",
-            f"reference_path = {json.dumps(values['reference_path'])}",
-            f"editable_sections = {json.dumps(values['editable_sections'])}",
-            f"bullet_min_chars = {values['bullet_min_chars']}",
-            f"bullet_target_chars = {values['bullet_target_chars']}",
-            f"bullet_max_chars = {values['bullet_max_chars']}",
-            f"max_pages = {values['max_pages']}",
-            f"output_root = {json.dumps(values['output_root'])}",
-            f"output_pdf_name = {json.dumps(values['output_pdf_name'])}",
-            f"latexmk = {json.dumps(values['latexmk'])}",
-        ]
-    )
-    pattern = r"(?ms)^\[resume\]\n.*?(?=^\[|\Z)"
-    replaced = (
-        re.sub(
-            pattern,
-            lambda _match: f"{table}\n\n",
-            raw,
-        )
-        if re.search(pattern, raw) is not None
-        else f"{raw.rstrip()}\n\n{table}\n"
-    )
+    load_config(config_path)
+    selected = {key: value for key, value in updates.items() if value is not None}
+    replaced = update_table(raw, "resume", selected)
     with tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", dir=config_path.parent, delete=False
     ) as temporary:

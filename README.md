@@ -86,6 +86,17 @@ hash-verified storage, initializes local application tracking, and enables Erga'
 not require or configure Obsidian, a coding-AI subscription, Discord bot, Hermes installation, or
 separate model API key.
 
+Onboarding labels the master résumé as factual knowledge and a second, optional résumé as
+style-only. Use that second file only when you are confident it is a useful reference. A PDF page
+count prefills the maximum-page setting; section order and density are recorded as descriptive
+metadata, while the editable `.tex` template controls rendered layout. Reference wording can never
+authorize claims. The wizard also exposes page and bullet-length controls. Users may enter
+minimum/target/maximum character counts directly or paste one or two example bullets to calibrate
+those numbers. Example wording is discarded immediately and is never stored as evidence. The
+configured range is enforced when CLI or MCP workflows author new `\resumeItem{...}` bullets.
+Complete source context and derived style-reference metadata remain behind the explicit
+`career-private` profile; the recommended `career` profile does not receive either document.
+
 By default Erga's private machine state is independent of any optional vault:
 
 ```text
@@ -100,6 +111,37 @@ The configuration contains paths and feature settings, never credentials. Use
 `--config /absolute/path/to/config.toml` to select another location.
 `erga init` remains available as a low-level non-interactive initializer for advanced and scripted
 installations.
+
+After core setup, optionally connect any number of coding assistants:
+
+```bash
+# Arrow-key multi-select; selecting nothing is valid.
+uv run erga connect
+
+# Or configure explicit hosts without an interactive picker.
+uv run erga connect --host codex --host claude-code --project-dir /path/to/project
+```
+
+This writes only project-scoped MCP entries. It does not install a host, require a host login,
+select a model, or request an API key. Use `--dry-run` to inspect the exact configuration first.
+
+Discord is another optional interface. Install its isolated runtime extra, then choose exactly
+which existing headless coding CLI should power Discord replies:
+
+This bridge is specifically for users of tools such as Codex, Claude Code, or OpenCode who want
+Discord access without already running a messaging gateway. If Hermes, OpenClaw, or another
+gateway already manages Discord, connect Erga through MCP there instead of operating a second bot.
+
+```bash
+uv sync --extra discord
+uv run erga discord configure
+uv run erga discord start
+```
+
+The bridge supports the same presets plus an advanced custom argument array. It accepts current
+Discord usernames such as `emperor_sai` or stable numeric user IDs, stores the bot token only in
+the operating-system credential store, and never makes the selected backend a requirement for
+Erga's local core. See the [Discord bridge guide](docs/discord.md).
 
 ### Add evidence and a draft application
 
@@ -130,9 +172,11 @@ uv run erga applications list
 For résumé setup, mail connectors, job-link routing, and scheduled private alerts, continue with
 the [complete getting-started guide](docs/getting-started.md).
 
-## MCP and Hermes
+## Optional MCP hosts and Hermes
 
-Install the local MCP server runtime, then register the local stdio server:
+The `erga connect` command supports Codex, Claude Code, OpenCode, OpenCode V2, Gemini CLI, Cursor,
+GitHub Copilot CLI, and other clients that use standard `.mcp.json`. Manual registration and Hermes
+remain supported:
 
 ```bash
 uv sync
@@ -187,6 +231,7 @@ tests/                synthetic unit and MCP integration tests
 
 - [`docs/getting-started.md`](docs/getting-started.md) — full setup.
 - [`docs/mcp-clients.md`](docs/mcp-clients.md) — standard stdio and loopback HTTP setup for non-Hermes MCP clients.
+- [`docs/discord.md`](docs/discord.md) — optional private Discord bridge.
 - [`docs/security.md`](docs/security.md) — permissions and safety details.
 - [`docs/FUTURE.md`](docs/FUTURE.md) — ideas for later.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to run checks and contribute.

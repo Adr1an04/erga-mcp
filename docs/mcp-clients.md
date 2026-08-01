@@ -9,6 +9,25 @@ separate model API credential.
 > [!IMPORTANT]
 > Review the command and absolute paths before enabling it. The server runs with the same local permissions as the client that launches it. Do not put credentials, OAuth tokens, résumé contents, or vault contents in a client configuration.
 
+## Optional connection command
+
+Run `erga connect` after core setup for an arrow-key multi-select. Selecting nothing is supported,
+and the command may be rerun to add another host:
+
+```bash
+uv run erga connect \
+  --config ~/.config/erga-mcp/config.toml \
+  --project-dir /absolute/path/to/project
+```
+
+For scripts, repeat `--host`; use `--dry-run` to return the exact generated configuration without
+writing. Erga supports Codex, Claude Code, OpenCode classic and V2, Gemini CLI, Cursor, GitHub
+Copilot CLI, and a standard `.mcp.json` fallback. It never installs a host, checks a subscription,
+or requests a model API key.
+
+Project configuration can contain a machine-specific path to Erga's private config. Review it
+before committing a generated host file to version control.
+
 ## Shared stdio contract
 
 Replace both placeholders with absolute local paths:
@@ -156,6 +175,10 @@ Erga maintains official Python MCP SDK checks for both a spawned stdio server fr
 
 - [MCP Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
 - [Claude Code MCP](https://docs.anthropic.com/en/docs/claude-code/mcp)
-- [Codex MCP](https://developers.openai.com/learn/docs-mcp)
+- [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp)
+- [OpenCode MCP](https://opencode.ai/docs/mcp-servers)
+- [OpenCode V2 MCP](https://opencode.ai/v2/docs/mcp-servers)
+- [Gemini CLI MCP](https://geminicli.com/docs/tools/mcp-server/)
 - [VS Code MCP servers](https://code.visualstudio.com/docs/agent-customization/mcp-servers)
 - [Cursor MCP](https://docs.cursor.com/context/mcp)
+- [GitHub Copilot CLI MCP](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)

@@ -5,6 +5,8 @@ import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from erga_mcp.config import load_config
 from erga_mcp.doctor import check_installation
@@ -13,6 +15,8 @@ from erga_mcp.setup_wizard import (
     CoreSetupReport,
     CoreSetupSelections,
     apply_core_setup,
+    bullet_lengths_from_examples,
+    collect_core_setup_selections,
     normalize_dropped_path,
     render_core_setup_report,
     render_core_setup_review,
@@ -40,6 +44,15 @@ class SetupWizardTests(unittest.TestCase):
             self.assertIsNone(config.vault_path)
             self.assertFalse(config.tracker.enabled)
             self.assertEqual(config.resume.output_root, root / "private" / "generated-resumes")
+            self.assertEqual(
+                (
+                    config.resume.bullet_min_chars,
+                    config.resume.bullet_target_chars,
+                    config.resume.bullet_max_chars,
+                ),
+                (90, 105, 120),
+            )
+            self.assertEqual(config.resume.max_pages, 1)
             self.assertTrue(config.resume.output_root.is_dir())
             if os.name != "nt":
                 self.assertEqual(selections.config_path.parent.stat().st_mode & 0o777, 0o700)
@@ -181,6 +194,57 @@ folder = "Recruiting"
             self.assertEqual(config.mail_provider, "gmail")
             self.assertEqual(config.mail_folder, "Recruiting")
 
+    def test_core_setup_rerun_preserves_comments_and_unknown_owned_table_keys(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "private" / "config.toml"
+            master = root / "master.tex"
+            master.write_text("Approved master", encoding="utf-8")
+            selections = CoreSetupSelections(
+                config_path=config_path,
+                master_resume=master,
+            )
+            apply_core_setup(selections)
+            raw = config_path.read_text(encoding="utf-8")
+            raw = raw.replace(
+                "[paths]\n",
+                "[paths]\n# Keep custom path policy.\n"
+                'future_path_policy = "strict" # from a newer Erga\n',
+            ).replace(
+                f"data_dir = {json.dumps(str(config_path.parent / 'state'))}",
+                f"data_dir = {json.dumps(str(config_path.parent / 'state'))} # durable state",
+            )
+            raw = raw.replace(
+                "[tracking]\n",
+                "[tracking]\n# Keep custom tracker policy.\n"
+                'future_tracker_view = "kanban" # user preference\n',
+            ).replace(
+                "enabled = false",
+                "enabled = false # intentionally local-only",
+            )
+            raw = raw.replace(
+                "[mcp]\n",
+                "[mcp]\n# Keep custom capability policy.\n"
+                'future_approval_mode = "review" # forward-compatible\n',
+            ).replace(
+                'tool_profile = "career"',
+                'tool_profile = "career" # least privilege',
+            )
+            config_path.write_text(raw, encoding="utf-8")
+
+            apply_core_setup(selections)
+            rendered = config_path.read_text(encoding="utf-8")
+
+            self.assertIn("# Keep custom path policy.", rendered)
+            self.assertIn('future_path_policy = "strict" # from a newer Erga', rendered)
+            self.assertIn("# durable state", rendered)
+            self.assertIn("# Keep custom tracker policy.", rendered)
+            self.assertIn('future_tracker_view = "kanban" # user preference', rendered)
+            self.assertIn("enabled = false # intentionally local-only", rendered)
+            self.assertIn("# Keep custom capability policy.", rendered)
+            self.assertIn('future_approval_mode = "review" # forward-compatible', rendered)
+            self.assertIn('tool_profile = "career" # least privilege', rendered)
+
     def test_review_and_report_make_optional_connection_boundary_explicit(self) -> None:
         selections = CoreSetupSelections(
             config_path=Path("/private/config.toml"),
@@ -208,11 +272,120 @@ folder = "Recruiting"
 
         self.assertIn("What Erga will set up", review)
         self.assertIn("Your master resume: copied privately", review)
+        self.assertIn("Maximum resume length: 1 page (recommended)", review)
+        self.assertIn("90 / 105 / 120 characters", review)
         self.assertIn("Obsidian: not set up", review)
         self.assertIn("You can cancel now with no changes", review)
         self.assertIn("No Obsidian installation", report)
         self.assertNotIn("token", json.dumps(plan).casefold())
         self.assertIsNone(plan["vault_mode"])
+
+        style_review = render_core_setup_review(
+            CoreSetupSelections(
+                config_path=Path("/private/config.toml"),
+                master_resume=Path("/master.pdf"),
+                style_resume=Path("/style.pdf"),
+            )
+        )
+        self.assertIn("non-factual style metadata", style_review)
+        self.assertNotIn("use style.pdf as a style reference", style_review)
+
+    def test_core_setup_persists_custom_resume_shape_constraints(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master = root / "master.tex"
+            master.write_text("Approved master", encoding="utf-8")
+
+            apply_core_setup(
+                CoreSetupSelections(
+                    config_path=root / "private" / "config.toml",
+                    master_resume=master,
+                    bullet_min_chars=100,
+                    bullet_target_chars=115,
+                    bullet_max_chars=130,
+                    max_pages=2,
+                )
+            )
+            resume = load_config(root / "private" / "config.toml").resume
+
+            self.assertEqual(
+                (
+                    resume.bullet_min_chars,
+                    resume.bullet_target_chars,
+                    resume.bullet_max_chars,
+                ),
+                (100, 115, 130),
+            )
+            self.assertEqual(resume.max_pages, 2)
+
+    def test_example_bullets_calibrate_lengths_without_becoming_setup_state(self) -> None:
+        examples = (
+            "• Built a private local career workflow with explicit evidence boundaries.",
+            "- Added deterministic resume validation and application tracking.",
+        )
+
+        minimum, target, maximum = bullet_lengths_from_examples(examples)
+        plan = json.loads(
+            write_core_setup_plan(
+                CoreSetupSelections(
+                    config_path=Path("/private/config.toml"),
+                    master_resume=Path("/master.pdf"),
+                    bullet_min_chars=minimum,
+                    bullet_target_chars=target,
+                    bullet_max_chars=maximum,
+                )
+            )
+        )
+
+        self.assertLess(minimum, target)
+        self.assertLess(target, maximum)
+        self.assertNotIn("private local career workflow", json.dumps(plan))
+
+    def test_example_bullet_calibration_rejects_empty_input(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at least one"):
+            bullet_lengths_from_examples(("", "  "))
+
+    def test_interactive_setup_calibrates_examples_but_does_not_retain_them(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master = root / "master.tex"
+            master.write_text("Approved master", encoding="utf-8")
+            text_answers = iter(
+                [
+                    str(master),
+                    "2",
+                    "• Built a bounded local workflow for career evidence.",
+                    "- Added deterministic validation for generated resumes.",
+                ]
+            )
+            confirm_answers = iter([False, True, False, True, True])
+
+            def prompt(answer: object) -> SimpleNamespace:
+                return SimpleNamespace(ask=lambda: answer)
+
+            with (
+                patch(
+                    "erga_mcp.setup_wizard.questionary.text",
+                    side_effect=lambda *_args, **_kwargs: prompt(next(text_answers)),
+                ),
+                patch(
+                    "erga_mcp.setup_wizard.questionary.confirm",
+                    side_effect=lambda *_args, **_kwargs: prompt(next(confirm_answers)),
+                ),
+                patch(
+                    "erga_mcp.setup_wizard.questionary.select",
+                    return_value=prompt("examples"),
+                ),
+                patch("erga_mcp.setup_wizard.questionary.print"),
+            ):
+                selections = collect_core_setup_selections(
+                    default_config_path=root / "private" / "config.toml"
+                )
+
+            serialized = write_core_setup_plan(selections)
+            self.assertEqual(selections.max_pages, 2)
+            self.assertGreater(selections.bullet_min_chars, 0)
+            self.assertNotIn("bounded local workflow", serialized)
 
     def test_dragged_paths_accept_quotes_and_shell_escaped_spaces(self) -> None:
         with TemporaryDirectory() as directory:

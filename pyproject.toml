@@ -40,6 +40,7 @@ Issues = "https://github.com/Adr1an04/erga-mcp/issues"
 Repository = "https://github.com/Adr1an04/erga-mcp.git"
 
 [project.optional-dependencies]
+discord = ["discord.py>=2.6,<3"]
 dev = ["mypy>=1.14", "ruff>=0.9"]
 
 [project.scripts]

@@ -25,11 +25,14 @@ from .resume_sources import (
     snapshot_resume_source,
 )
 from .store import ErgaStore
+from .toml_edit import update_table
 
 VaultMode = Literal["existing", "new"]
 _ERGA_VAULT_DIRECTORY = "Erga"
 _TRACKER_DIRECTORY = "Applications"
 _OUTPUT_DIRECTORY = "Generated Resumes"
+_RECOMMENDED_BULLET_LENGTHS = (90, 105, 120)
+_MAX_STYLE_EXAMPLE_CHARS = 500
 _START_NOTE = """# Welcome to Erga
 
 Erga keeps career knowledge, application notes, and résumé work under your control.
@@ -58,6 +61,10 @@ class CoreSetupSelections:
     config_path: Path
     master_resume: Path
     style_resume: Path | None = None
+    bullet_min_chars: int = _RECOMMENDED_BULLET_LENGTHS[0]
+    bullet_target_chars: int = _RECOMMENDED_BULLET_LENGTHS[1]
+    bullet_max_chars: int = _RECOMMENDED_BULLET_LENGTHS[2]
+    max_pages: int | None = None
     output_root: Path | None = None
     obsidian_enabled: bool = False
     vault_mode: VaultMode | None = None
@@ -139,6 +146,54 @@ def _output_directory(value: str) -> bool | str:
     return True
 
 
+def _positive_integer(value: str) -> bool | str:
+    try:
+        parsed = int(value.strip())
+    except ValueError:
+        return "Enter a positive whole number."
+    return True if parsed > 0 else "Enter a positive whole number."
+
+
+def _style_example(value: str, *, required: bool) -> bool | str:
+    normalized = value.strip()
+    if required and not normalized:
+        return "Paste one representative resume bullet."
+    if len(normalized) > _MAX_STYLE_EXAMPLE_CHARS:
+        return f"Keep the example under {_MAX_STYLE_EXAMPLE_CHARS} characters."
+    return True
+
+
+def bullet_lengths_from_examples(examples: tuple[str, ...]) -> tuple[int, int, int]:
+    """Derive a practical character range without retaining style-example wording."""
+    raw_examples = tuple(example.strip() for example in examples if example.strip())
+    if any(len(example) > _MAX_STYLE_EXAMPLE_CHARS for example in raw_examples):
+        raise ValueError(f"bullet examples must be at most {_MAX_STYLE_EXAMPLE_CHARS} characters")
+    normalized = tuple(
+        re.sub(r"^(?:[\u2022*\-]+|\\item)\s*", "", example.strip()) for example in raw_examples
+    )
+    if not normalized:
+        raise ValueError("at least one non-empty bullet example is required")
+    lengths = tuple(len(example) for example in normalized)
+    target = round(sum(lengths) / len(lengths))
+    tolerance = max(10, round(target * 0.1))
+    return max(1, min(lengths) - tolerance), target, max(lengths) + tolerance
+
+
+def _resume_shape_defaults(config_path: Path) -> tuple[tuple[int, int, int], int]:
+    if not config_path.expanduser().is_file():
+        return _RECOMMENDED_BULLET_LENGTHS, 1
+    resume = load_config(config_path).resume
+    bullet_lengths = (
+        resume.bullet_min_chars,
+        resume.bullet_target_chars,
+        resume.bullet_max_chars,
+    )
+    return (
+        bullet_lengths,
+        resume.max_pages or 1,
+    )
+
+
 def collect_core_setup_selections(
     *,
     default_config_path: Path,
@@ -152,10 +207,10 @@ def collect_core_setup_selections(
         style="fg:#aaaaaa",
     )
     questionary.print(
-        "\nResume knowledge\n"
-        "Your master resume is Erga's source of facts. PDF, DOCX, and .tex files all work here. "
-        "Erga reads every page, creates a private hash-verified copy, and never modifies the "
-        "original.\n"
+        "\n1. Factual source: your master resume\n"
+        "This is the knowledge base Erga may use for claims. PDF, DOCX, and .tex files all work, "
+        "including multi-page master resumes. Erga reads every page, creates a private "
+        "hash-verified copy, and never modifies the original.\n"
         "To generate compiled LaTeX resumes later, you can add an editable .tex template after "
         "setup.",
         style="fg:#e0aa55",
@@ -171,16 +226,19 @@ def collect_core_setup_selections(
         )
     )
     questionary.print(
-        "\nResume layout (optional)\n"
-        "Erga can use a separate resume or template only as a layout reference. It will not use "
-        "that file for factual claims. You can change this later.",
+        "\n2. Style reference (optional)\n"
+        "Erga's clean one-page defaults are recommended. Add a second resume only if you are "
+        "confident it is a useful layout reference. A PDF page count can prefill the maximum; "
+        "section order and density are recorded as descriptive metadata. The editable .tex "
+        "template still controls rendered layout. Erga never treats reference wording as factual "
+        "evidence.",
         style="fg:#aaaaaa",
     )
     style_resume: Path | None = None
     if bool(
         _required(
             questionary.confirm(
-                "Use a separate resume or template as the layout reference?",
+                "Override Erga's recommended style with a separate resume or template?",
                 default=False,
             ).ask()
         )
@@ -189,12 +247,144 @@ def collect_core_setup_selections(
             str(
                 _required(
                     questionary.text(
-                        "Drop a resume or template whose layout you like here:",
+                        "Drop the resume or template you confidently want recorded as style:",
                         validate=_resume_file,
                     ).ask()
                 )
             )
         )
+
+    bullet_lengths, max_pages = _resume_shape_defaults(default_config_path)
+    if style_resume is not None:
+        style_page_count = load_resume_source(style_resume).page_count
+        if style_page_count:
+            max_pages = style_page_count
+    questionary.print(
+        "\n3. Resume shape\n"
+        "Erga enforces maximum page count when compiling and checks newly authored bullets in "
+        "supported LaTeX templates against the configured character range. Keep the recommended "
+        "values, enter exact limits, or calibrate from examples. Example wording is discarded "
+        "after calibration and never becomes career evidence.",
+        style="fg:#aaaaaa",
+    )
+    if bool(
+        _required(
+            questionary.confirm(
+                "Customize page count or bullet length?",
+                default=False,
+            ).ask()
+        )
+    ):
+        max_pages = int(
+            str(
+                _required(
+                    questionary.text(
+                        "Maximum pages:",
+                        default=str(max_pages),
+                        validate=_positive_integer,
+                    ).ask()
+                )
+            )
+        )
+        bullet_mode = str(
+            _required(
+                questionary.select(
+                    "How should Erga constrain bullet length?",
+                    choices=[
+                        Choice(
+                            "Keep recommended/current limits "
+                            f"({bullet_lengths[0]} / {bullet_lengths[1]} / "
+                            f"{bullet_lengths[2]} characters)",
+                            value="recommended",
+                        ),
+                        Choice("Enter minimum / target / maximum", value="manual"),
+                        Choice("Calibrate from one or two example bullets", value="examples"),
+                        Choice("Do not enforce bullet length", value="disabled"),
+                    ],
+                    default="recommended",
+                    use_shortcuts=True,
+                ).ask()
+            )
+        )
+        if bullet_mode == "manual":
+            minimum = int(
+                str(
+                    _required(
+                        questionary.text(
+                            "Minimum bullet characters:",
+                            default=str(bullet_lengths[0]),
+                            validate=_positive_integer,
+                        ).ask()
+                    )
+                )
+            )
+
+            def target_length(value: str) -> bool | str:
+                valid = _positive_integer(value)
+                return (
+                    valid
+                    if valid is not True or int(value.strip()) >= minimum
+                    else f"Enter a target of at least {minimum}."
+                )
+
+            target = int(
+                str(
+                    _required(
+                        questionary.text(
+                            "Target bullet characters:",
+                            default=str(max(minimum, bullet_lengths[1])),
+                            validate=target_length,
+                        ).ask()
+                    )
+                )
+            )
+
+            def maximum_length(value: str) -> bool | str:
+                valid = _positive_integer(value)
+                return (
+                    valid
+                    if valid is not True or int(value.strip()) >= target
+                    else f"Enter a maximum of at least {target}."
+                )
+
+            maximum = int(
+                str(
+                    _required(
+                        questionary.text(
+                            "Maximum bullet characters:",
+                            default=str(max(target, bullet_lengths[2])),
+                            validate=maximum_length,
+                        ).ask()
+                    )
+                )
+            )
+            bullet_lengths = (minimum, target, maximum)
+        elif bullet_mode == "examples":
+            first_example = str(
+                _required(
+                    questionary.text(
+                        "Paste a representative bullet (the wording will not be stored):",
+                        validate=lambda value: _style_example(value, required=True),
+                    ).ask()
+                )
+            )
+            second_example = str(
+                _required(
+                    questionary.text(
+                        "Paste a second bullet, or press Enter to skip:",
+                        validate=lambda value: _style_example(value, required=False),
+                    ).ask()
+                )
+            )
+            bullet_lengths = bullet_lengths_from_examples((first_example, second_example))
+            questionary.print(
+                "Erga calibrated minimum / target / maximum to "
+                f"{bullet_lengths[0]} / {bullet_lengths[1]} / {bullet_lengths[2]} characters. "
+                "Only these numbers will be saved.",
+                style="fg:#e0aa55",
+            )
+        elif bullet_mode == "disabled":
+            bullet_lengths = (0, 0, 0)
 
     obsidian_enabled = bool(
         _required(
@@ -278,6 +468,10 @@ def collect_core_setup_selections(
         config_path=default_config_path.expanduser().absolute(),
         master_resume=master_resume,
         style_resume=style_resume,
+        bullet_min_chars=bullet_lengths[0],
+        bullet_target_chars=bullet_lengths[1],
+        bullet_max_chars=bullet_lengths[2],
+        max_pages=max_pages,
         output_root=output_root,
         obsidian_enabled=obsidian_enabled,
         vault_mode=vault_mode,
@@ -297,9 +491,17 @@ def render_core_setup_review(selections: CoreSetupSelections) -> str:
         action = "create" if selections.vault_mode == "new" else "use"
         obsidian = f"{action} the Obsidian folder at {selections.vault_path}"
     style = (
-        f"use {selections.style_resume.name} as a style reference"
+        f"record {selections.style_resume.name} as non-factual style metadata"
         if selections.style_resume is not None
         else "use Erga's clean one-page layout (recommended)"
+    )
+    bullets = (
+        "not enforced"
+        if selections.bullet_min_chars == 0
+        else (
+            f"{selections.bullet_min_chars} / {selections.bullet_target_chars} / "
+            f"{selections.bullet_max_chars} characters (minimum / target / maximum)"
+        )
     )
     return "\n".join(
         [
@@ -307,6 +509,17 @@ def render_core_setup_review(selections: CoreSetupSelections) -> str:
             "",
             f"  Your master resume: copied privately from {selections.master_resume}",
             f"  Resume style: {style}",
+            "  Maximum resume length: "
+            + (
+                f"{selections.max_pages} page(s)"
+                if selections.max_pages is not None
+                else (
+                    "match the style reference's page count"
+                    if selections.style_resume is not None
+                    else "1 page (recommended)"
+                )
+            ),
+            f"  Bullet length: {bullets}",
             f"  Generated resumes: {selections.output_root}",
             "  Application tracking: a private local database",
             f"  Obsidian: {obsidian}",
@@ -324,15 +537,6 @@ def write_core_setup_plan(selections: CoreSetupSelections) -> str:
         value = payload[key]
         payload[key] = str(value) if value is not None else None
     return json.dumps(payload, indent=2, sort_keys=True)
-
-
-def _replace_table(raw: str, name: str, lines: list[str]) -> str:
-    table = "\n".join([f"[{name}]", *lines])
-    pattern = rf"(?ms)^\[{re.escape(name)}\]\n.*?(?=^\[|\Z)"
-    if re.search(pattern, raw):
-        return re.sub(pattern, lambda _match: f"{table}\n\n", raw)
-    separator = "" if not raw or raw.endswith("\n\n") else "\n"
-    return f"{raw}{separator}{table}\n"
 
 
 def _atomic_write_private(path: Path, text: str) -> None:
@@ -372,24 +576,24 @@ def _configure_core_paths(
         raw = DEFAULT_CONFIG
         data_dir = config_path.parent / "state"
         active_cycles = []
-    raw = _replace_table(
+    raw = update_table(
         raw,
         "paths",
-        [
-            f"data_dir = {json.dumps(str(data_dir))}",
-            f"vault_path = {json.dumps(str(vault_path) if vault_path is not None else '')}",
-        ],
+        {
+            "data_dir": str(data_dir),
+            "vault_path": str(vault_path) if vault_path is not None else "",
+        },
     )
-    raw = _replace_table(
+    raw = update_table(
         raw,
         "tracking",
-        [
-            f"enabled = {'true' if tracker_dir is not None else 'false'}",
-            f"tracker_dir = {json.dumps(str(tracker_dir) if tracker_dir is not None else '')}",
-            f"active_cycles = {json.dumps(active_cycles)}",
-        ],
+        {
+            "enabled": tracker_dir is not None,
+            "tracker_dir": str(tracker_dir) if tracker_dir is not None else "",
+            "active_cycles": active_cycles,
+        },
     )
-    raw = _replace_table(raw, "mcp", ['tool_profile = "career"'])
+    raw = update_table(raw, "mcp", {"tool_profile": "career"})
     tomllib.loads(raw)
     _atomic_write_private(config_path, raw)
     load_config(config_path)
@@ -459,17 +663,26 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         source_name=master.path.name,
     )
     current_resume = config.resume
+    resolved_max_pages = (
+        selections.max_pages
+        or (
+            managed_style.page_count
+            if managed_style is not None and managed_style.page_count
+            else None
+        )
+        or current_resume.max_pages
+        or 1
+    )
     update_settings(
         selections.config_path,
         {
             "master_path": str(managed_master.path),
             "reference_path": str(managed_style.path) if managed_style is not None else "",
             "output_root": str(output_root),
-            "max_pages": (
-                managed_style.page_count
-                if managed_style is not None and managed_style.page_count
-                else current_resume.max_pages or 1
-            ),
+            "bullet_min_chars": selections.bullet_min_chars,
+            "bullet_target_chars": selections.bullet_target_chars,
+            "bullet_max_chars": selections.bullet_max_chars,
+            "max_pages": resolved_max_pages,
         },
     )
     welcome_note_created = (

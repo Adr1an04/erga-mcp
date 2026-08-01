@@ -8,6 +8,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 
 from .config import DEFAULT_CONFIG, load_config
@@ -16,6 +17,16 @@ from .cover_letter import create_cover_letter_proposal, load_style_context
 from .cover_letter_settings import as_json as cover_letter_settings_as_json
 from .cover_letter_settings import update_settings as update_cover_letter_settings
 from .cron_setup import install_hermes_monitor_scripts
+from .discord_bridge import (
+    discord_status,
+    run_discord_bridge,
+    start_discord_bridge,
+    stop_discord_bridge,
+)
+from .discord_setup import (
+    collect_optional_discord,
+    configure_discord_interactive,
+)
 from .doctor import check_installation
 from .exporting import export_bundle
 from .git_evidence import (
@@ -26,6 +37,13 @@ from .git_evidence import (
     synthesize_diff_research,
     synthesize_project_research,
     validate_worktree,
+)
+from .host_connections import (
+    SUPPORTED_HOSTS,
+    HostName,
+    collect_connection_workspace,
+    collect_optional_hosts,
+    configure_hosts,
 )
 from .integrations.mail_provider import build_mail_provider
 from .integrations.obsidian import import_markdown_evidence
@@ -64,6 +82,12 @@ from .setup_wizard import (
     write_core_setup_plan,
 )
 from .store import ErgaStore
+from .uninstall import (
+    apply_uninstall,
+    build_uninstall_plan,
+    confirmation_phrase,
+    render_uninstall_plan,
+)
 from .zoho_oauth import (
     connect,
     read_client_secret,
@@ -103,6 +127,72 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="collect and review choices without changing local state",
     )
+
+    uninstall = subcommands.add_parser(
+        "uninstall",
+        help="remove Erga-owned state, credentials, bridges, and recorded MCP connections",
+    )
+    _config_argument(uninstall)
+    uninstall.add_argument(
+        "--project-dir",
+        type=Path,
+        action="append",
+        default=[],
+        help="additional workspace whose shared MCP config should have only Erga removed",
+    )
+    uninstall.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the complete bounded deletion plan without changing anything",
+    )
+    uninstall.add_argument(
+        "--yes",
+        action="store_true",
+        help="apply the displayed plan without typing the confirmation phrase",
+    )
+
+    connect_host = subcommands.add_parser(
+        "connect",
+        help="optionally connect zero, one, or multiple MCP coding hosts to Erga",
+    )
+    _config_argument(connect_host)
+    connect_host.add_argument(
+        "--host",
+        action="append",
+        choices=SUPPORTED_HOSTS,
+        default=[],
+        help="host to connect; repeat for multiple hosts, or omit for the arrow-key picker",
+    )
+    connect_host.add_argument("--project-dir", type=Path, default=Path.cwd())
+    connect_host.add_argument("--server-command", type=Path)
+    connect_host.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="preview exact host configuration without writing it",
+    )
+
+    discord_bridge = subcommands.add_parser(
+        "discord",
+        help="optionally configure and run a private Discord bridge",
+    )
+    discord_commands = discord_bridge.add_subparsers(
+        dest="discord_command",
+        required=True,
+    )
+    discord_configure = discord_commands.add_parser(
+        "configure",
+        help="choose one replaceable coding backend and configure the Discord bridge",
+    )
+    _config_argument(discord_configure)
+    discord_configure.add_argument("--project-dir", type=Path, default=Path.cwd())
+    for name, help_text in (
+        ("run", "run the configured Discord bridge in the foreground"),
+        ("start", "start the configured Discord bridge in the background"),
+        ("status", "show whether the optional Discord bridge is configured and running"),
+        ("stop", "stop the recorded background Discord bridge"),
+    ):
+        discord_command = discord_commands.add_parser(name, help=help_text)
+        _config_argument(discord_command)
 
     status = subcommands.add_parser("status", help="show local pipeline counts")
     _config_argument(status)
@@ -491,6 +581,29 @@ def _render_application_notes(application: Application, package_dir: Path | None
 
 def main(arguments: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(arguments)
+    if args.command == "uninstall":
+        plan = build_uninstall_plan(
+            args.config,
+            project_dirs=tuple(args.project_dir),
+        )
+        if args.dry_run:
+            _print_json(plan.as_json())
+            return 0
+        print(render_uninstall_plan(plan))
+        if not args.yes:
+            try:
+                response = input(f"\nType {confirmation_phrase()} to continue: ")
+            except EOFError:
+                response = ""
+            if response != confirmation_phrase():
+                print("Erga uninstall cancelled; nothing was deleted.")
+                return 130
+        try:
+            _print_json(apply_uninstall(plan))
+        except (OSError, RuntimeError, ValueError) as error:
+            print(f"Erga uninstall could not finish: {error}", file=sys.stderr)
+            return 1
+        return 0
     if args.command == "init":
         return _initialize(args.config)
     if args.command == "setup":
@@ -511,7 +624,98 @@ def main(arguments: Sequence[str] | None = None) -> int:
             print(f"Setup could not continue: {error}", file=sys.stderr)
             return 1
         print(render_core_setup_report(report))
+        optional_hosts = collect_optional_hosts()
+        if optional_hosts:
+            try:
+                connection_workspace = collect_connection_workspace(default=Path.cwd())
+                _print_json(
+                    configure_hosts(
+                        optional_hosts,
+                        project_dir=connection_workspace,
+                        config_path=args.config,
+                        write=True,
+                    )
+                )
+            except RuntimeError as error:
+                print(str(error))
+                return 0
+            except (FileNotFoundError, NotADirectoryError, OSError, ValueError) as error:
+                print(
+                    f"Erga's core remains ready, but the optional host connection failed: {error}",
+                    file=sys.stderr,
+                )
+                return 1
+        try:
+            if collect_optional_discord():
+                _print_json(
+                    configure_discord_interactive(
+                        config_path=args.config,
+                        default_project_dir=Path.cwd(),
+                    ).as_json()
+                )
+        except WizardCancelled as error:
+            print(str(error))
+            return 0
+        except (
+            FileNotFoundError,
+            NotADirectoryError,
+            OSError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            print(
+                f"Erga's core remains ready, but the optional Discord connection failed: {error}",
+                file=sys.stderr,
+            )
+            return 1
         return 0
+    if args.command == "connect":
+        hosts = (
+            tuple(cast(HostName, host) for host in args.host)
+            if args.host
+            else collect_optional_hosts(ask_to_connect=False)
+        )
+        _print_json(
+            configure_hosts(
+                hosts,
+                project_dir=args.project_dir,
+                config_path=args.config,
+                server_command=args.server_command,
+                write=not args.dry_run,
+            )
+        )
+        return 0
+    if args.command == "discord":
+        try:
+            if args.discord_command == "configure":
+                _print_json(
+                    configure_discord_interactive(
+                        config_path=args.config,
+                        default_project_dir=args.project_dir,
+                    ).as_json()
+                )
+                return 0
+            if args.discord_command == "run":
+                return run_discord_bridge(args.config)
+            if args.discord_command == "start":
+                _print_json(start_discord_bridge(args.config))
+            elif args.discord_command == "stop":
+                _print_json(stop_discord_bridge(args.config))
+            else:
+                _print_json(discord_status(args.config))
+            return 0
+        except WizardCancelled as error:
+            print(str(error))
+            return 130
+        except (
+            FileNotFoundError,
+            NotADirectoryError,
+            OSError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            print(f"Optional Discord bridge failed: {error}", file=sys.stderr)
+            return 1
     if args.command == "zoho" and args.zoho_command == "set-client-secret":
         secret = getpass.getpass(
             "Zoho OAuth client secret (stored only in the OS credential store): "
@@ -888,6 +1092,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
             section_name=args.section,
             latex_content=args.latex_content,
             evidence=store.approved_evidence(args.evidence_id),
+            bullet_min_chars=settings.bullet_min_chars,
+            bullet_target_chars=settings.bullet_target_chars,
+            bullet_max_chars=settings.bullet_max_chars,
         )
         _print_json(asdict(proposal))
         return 0

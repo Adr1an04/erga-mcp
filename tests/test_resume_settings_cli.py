@@ -82,6 +82,35 @@ class ResumeSettingsCliTests(unittest.TestCase):
 
             self.assertEqual(config.read_text(encoding="utf-8"), original)
 
+    def test_update_preserves_resume_comments_and_unknown_settings(self) -> None:
+        with TemporaryDirectory() as directory:
+            config = Path(directory) / "config.toml"
+            main(["init", "--config", str(config)])
+            raw = config.read_text(encoding="utf-8")
+            raw = raw.replace(
+                "[resume]\n",
+                "[resume]\n# Keep this explanation for future editors.\n"
+                'future_layout_mode = "compact" # owned by a newer Erga\n',
+            ).replace(
+                "bullet_target_chars = 0",
+                "bullet_target_chars = 0 # preferred visual density",
+            )
+            config.write_text(raw, encoding="utf-8")
+
+            update_settings(
+                config,
+                {
+                    "bullet_min_chars": 90,
+                    "bullet_target_chars": 95,
+                    "bullet_max_chars": 100,
+                },
+            )
+            rendered = config.read_text(encoding="utf-8")
+
+            self.assertIn("# Keep this explanation for future editors.", rendered)
+            self.assertIn('future_layout_mode = "compact" # owned by a newer Erga', rendered)
+            self.assertIn("bullet_target_chars = 95 # preferred visual density", rendered)
+
     def test_imports_durable_master_and_style_sources(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

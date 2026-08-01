@@ -67,6 +67,16 @@ if __name__ == "__main__":
 """
 
 
+def monitor_paths(scripts_dir: Path) -> tuple[Path, Path, Path]:
+    """Return the exact Erga-owned monitor files in a selected Hermes scripts directory."""
+    resolved = scripts_dir.expanduser().absolute()
+    return (
+        resolved / _SETTINGS_NAME,
+        resolved / _MAIL_SCRIPT_NAME,
+        resolved / _HISTORY_SCRIPT_NAME,
+    )
+
+
 def _write_atomic(path: Path, content: str) -> None:
     with tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", dir=path.parent, delete=False
@@ -90,11 +100,7 @@ def install_hermes_monitor_scripts(
     resolved_config = config_path.expanduser().resolve(strict=True)
     resolved_scripts = scripts_dir.expanduser().resolve()
     resolved_scripts.mkdir(parents=True, exist_ok=True)
-    targets = [
-        resolved_scripts / _SETTINGS_NAME,
-        resolved_scripts / _MAIL_SCRIPT_NAME,
-        resolved_scripts / _HISTORY_SCRIPT_NAME,
-    ]
+    targets = list(monitor_paths(resolved_scripts))
     existing = [path for path in targets if path.exists()]
     if existing and not replace:
         raise FileExistsError(f"monitor files already exist: {', '.join(map(str, existing))}")

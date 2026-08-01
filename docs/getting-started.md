@@ -26,6 +26,20 @@ complete master résumé, and enables the least-privilege `career` MCP profile. 
 configuration and SQLite data directory live outside the repository. Do not place personal paths,
 tokens, or imports in Git.
 
+The wizard separates résumé input into three explicit decisions:
+
+1. **Master résumé — factual source.** Erga may use its user-approved content for claims and reads
+   every page of a PDF.
+2. **Optional style résumé — non-factual reference.** Supply one only when you are confident it is
+   useful layout guidance. A PDF page count prefills the maximum-page setting; observed section
+   order and density are descriptive metadata. The editable `.tex` template—not the reference
+   file—controls rendered layout, and reference wording is never evidence.
+3. **Resume shape.** Keep the recommended one-page and 90/105/120-character bullet settings,
+   enter page and minimum/target/maximum bullet limits directly, disable bullet limits, or paste
+   one or two example bullets to calibrate the numeric range. Calibration discards the examples
+   and stores only the resulting numbers. Maximum pages are enforced during compilation; the
+   character range is enforced when CLI or MCP workflows author new `\resumeItem{...}` bullets.
+
 The résumé/evidence workflow and private application database are the ready-to-use career core.
 Obsidian is an optional human-readable workspace and tracker view. Coding assistants, Hermes,
 Discord, and mail providers are also optional connections configured separately; setup does not
@@ -41,8 +55,26 @@ without overwriting an existing note, and recommends `Erga/Generated Resumes` fo
 The dragged PDF, DOCX, or `.tex` master becomes approved factual knowledge. Erga creates a
 hash-verified private copy, so moving or deleting the original later does not break the workflow.
 An optional style résumé or template contributes only layout metadata; it can never add factual
-claims. It helps Erga match page count, section order, and content density. To compile a tailored
-PDF, configure an editable LaTeX `.tex` template after setup.
+claims. Erga can copy a PDF's page count into the configured maximum and records observed section
+order and density for an explicitly trusted private workflow. It does not transform those
+observations into a new layout. To compile a tailored PDF, configure the editable LaTeX `.tex`
+template that should control the output.
+
+Derived style-reference metadata remains part of `resume_source_context`, which is available only
+through the explicit `career-private` profile. Ordinary `career` connections receive neither the
+reference source nor master-resume text; the local server can still enforce the configured numeric
+page and bullet constraints without disclosing either document.
+
+The resulting constraints remain editable after onboarding:
+
+```bash
+uv run erga resume settings set \
+  --config ~/.config/erga-mcp/config.toml \
+  --bullet-min-chars 90 \
+  --bullet-target-chars 105 \
+  --bullet-max-chars 120 \
+  --max-pages 1
+```
 
 Advanced or scripted installations may still use the lower-level commands:
 
@@ -56,6 +88,28 @@ uv run erga resume sources import \
 Pass `--style /absolute/path/to/preferred-resume.pdf` only when intentionally overriding Erga's
 recommended one-page style. Importing an updated master deactivates prior master-résumé evidence,
 leaving exactly one current master approved.
+
+## 3. Add optional coding hosts
+
+Core setup finishes before asking about coding assistants. The default is to skip connections.
+Select zero, one, or several hosts; each is only another interface to the same Erga state:
+
+```bash
+# Interactive arrow-key multi-select.
+uv run erga connect --config ~/.config/erga-mcp/config.toml
+
+# Repeat --host to configure several project-scoped clients.
+uv run erga connect \
+  --config ~/.config/erga-mcp/config.toml \
+  --project-dir /absolute/path/to/project \
+  --host codex \
+  --host gemini-cli
+```
+
+Supported presets are `codex`, `claude-code`, `opencode`, `opencode-v2`, `gemini-cli`, `cursor`,
+`github-copilot`, and `generic-mcp`. Erga does not install, authenticate, or verify a subscription
+for any host. A missing executable is reported as informational connection metadata and never
+changes core readiness. Preview exact changes with `--dry-run`.
 
 Job-link intake needs a local LaTeX résumé template and an output directory. Configure them before
 connecting an agent; neither path is committed to the repository:
@@ -79,7 +133,49 @@ When intake cannot infer a recruiting season from its URL-only input, it files t
 the neutral `unsorted` cycle rather than guessing from the current date. Callers that know the
 cycle can pass it explicitly. A successful LaTeX build is stored under the configured PDF filename.
 
-## 3. Use the local workflow
+## 4. Add the optional Discord bridge
+
+Core setup also finishes before offering Discord, and skipping it is the default. Discord needs a
+bot token and one explicit local headless coding CLI because messages arrive while no interactive
+terminal session is open. That bridge-specific choice does not become Erga's core and does not
+prevent connecting other assistants.
+
+This bridge is intended for someone who uses a headless coding tool such as Codex, Claude Code, or
+OpenCode but does not already operate a Discord gateway. If Hermes, OpenClaw, or another gateway
+already owns the Discord connection, connect Erga's MCP server to that system instead of starting a
+second bot.
+
+Install the isolated runtime extra and open the bridge wizard:
+
+```bash
+uv sync --extra discord
+uv run erga discord configure \
+  --config ~/.config/erga-mcp/config.toml \
+  --project-dir /absolute/path/to/project
+```
+
+The wizard resolves the selected backend before asking for Discord credentials. Its optional
+readiness probe uses the backend's existing local login and passes only a strict allowlist of basic
+runtime environment variables. The bot token is entered through a hidden prompt and stored only in
+the operating-system credential store.
+
+Authorize a current unique Discord username such as `emperor_sai`, a stable numeric user ID, or
+several comma-separated identities. Old `name#1234` discriminator names are deliberately rejected
+with current-format guidance. In servers, requiring an `@mention` is the default.
+
+Run the bridge in the foreground while testing, then optionally use the managed background
+process:
+
+```bash
+uv run erga discord run --config ~/.config/erga-mcp/config.toml
+uv run erga discord start --config ~/.config/erga-mcp/config.toml
+uv run erga discord status --config ~/.config/erga-mcp/config.toml
+uv run erga discord stop --config ~/.config/erga-mcp/config.toml
+```
+
+See [`discord.md`](discord.md) for bot permissions, backend control, and failure isolation.
+
+## 5. Use the local workflow
 
 All state remains in the configured local SQLite database. Commands produce JSON suitable for review or scripting.
 
@@ -126,7 +222,7 @@ uv run erga zoho ingest-fixture \
   --fixture tests/fixtures/zoho_messages.json
 ```
 
-## 4. Connect Zoho Mail (read-only)
+## 6. Connect Zoho Mail (read-only)
 
 The live connector uses Zoho's **Mobile-based application** OAuth type, Authorization Code + PKCE,
 a fixed local redirect URI, and the operating system's credential store through Python `keyring`.
@@ -162,7 +258,7 @@ It requests only the read-only `ZohoMail.messages.READ`, `ZohoMail.folders.READ`
      --client-id '<client-id>'
    ```
 
-## 5. Connect Hermes through MCP
+## 7. Connect Hermes through MCP
 
 ### Plug-and-play registration
 
@@ -303,17 +399,43 @@ without retrying.
 After upgrading the server code or changing its configuration, run `/reload-mcp` in the active
 Hermes session or restart the gateway so the long-running stdio process and tool inventory refresh.
 
-## 6. Add the workflow skill
+## 8. Add the workflow skill
 
 For a personal Hermes installation, tap this repository with `hermes skills tap add Adr1an04/erga-mcp`, then install `skills/productivity/erga-mcp/SKILL.md` through the chosen skill workflow. The skill contains workflow and safety policy only; it contains no integration code or credentials.
 
-## 7. Verify
+## 9. Verify
 
 ```bash
 uv run erga status --config ~/.config/erga-mcp/config.toml
 uv run ruff check .
 uv run python -m unittest discover -v
 ```
+
+## Remove Erga
+
+Preview every Erga-owned path, credential, process, and recorded MCP connection that would be
+removed:
+
+```bash
+uv run erga uninstall --dry-run
+```
+
+Then run `uv run erga uninstall`. Erga prints the same bounded inventory and requires the exact
+`DELETE ERGA` confirmation phrase. Use `--yes` only for deliberate non-interactive cleanup. Pass
+`--project-dir /path/to/workspace` again for an older project connection created before Erga began
+recording connection locations.
+
+Immediately before mutation, Erga rebuilds that inventory from the current configuration. It
+removes only the intersection of the reviewed and current plans, rechecks resolved parent paths
+before each deletion, and reports anything that changed as skipped rather than expanding scope.
+
+Uninstall stops only a verified Erga Discord process; deletes private configuration, SQLite state,
+managed résumé copies, generated packages in Erga-owned output directories, optional Obsidian
+projection files, Erga keychain entries, optional Hermes monitor files, and legacy `.erga`/platform
+data locations; and removes only Erga's server entry from shared client configuration. It never
+deletes the original résumé files you imported, an AI client's own login, the source checkout,
+`.venv`, or uv's shared package cache. Remove the checkout separately with your normal file manager
+after the command exits if you no longer want the code itself.
 
 ## Deliberately bounded adapters
 
