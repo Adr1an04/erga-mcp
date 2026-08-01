@@ -73,6 +73,26 @@ Background process records contain a random nonce. Status and stop operations co
 the exact private config path, and the bridge module against the live process command before
 signaling it. A stale or reused PID is removed without killing the unrelated process.
 
+## Optional Keryx public-data cache
+
+Keryx is disabled by default and is not part of Erga's private core. `erga keryx enable` downloads
+one fixed public US job-index URL; the endpoint is not user-configurable, redirects are rejected,
+and the response is capped at 32 MiB. Erga validates the country and supported schema, bounds the
+job count and text fields, rejects duplicate identifiers, and independently checks each exposed
+application URL's HTTPS authority, link status, host metadata, and SHA-256 fingerprint before
+writing the cache.
+
+The complete public index is cached under owner-only Erga state so later searches are local. Search
+terms, résumé knowledge, application records, and all other private Erga data are never sent to
+Keryx. The MCP tool cannot refresh the cache; only the explicit CLI enable/sync commands perform a
+network read and local cache write.
+
+Keryx results are untrusted public leads. Search creates no application record, evidence, résumé
+change, tracker row, or network request. A user must separately select a returned URL and invoke
+Erga's ordinary intake workflow. Disabling Keryx blocks searches while retaining the harmless
+public cache for an explicit later re-enable; normal Erga uninstall removes the cache with the
+configured private data directory.
+
 ## Local MCP trust boundary
 
 The default MCP server is a local **stdio** process. It is not a security sandbox: it runs with the permissions of the client that starts it. Review the complete executable command, arguments, environment variables, and absolute paths before enabling it.
@@ -95,6 +115,7 @@ The server declares tool annotations so MCP clients can distinguish its capabili
 | Tools | Capability | Effect |
 | --- | --- | --- |
 | `pipeline_status`, `list_applications`, `list_evidence`, `list_mail_events` | read-only | Reads local SQLite state only. |
+| `search_keryx_jobs` | read-only | Searches an explicitly enabled local cache of public Keryx listings; performs no network request and creates no application. |
 | `resume_source_context` | read-only | Reads approved master knowledge and derived non-factual style metadata from managed local snapshots. |
 | `update_application_status` | local-write | Sets one existing application's canonical status and records a local audit event; it has no remote side effect. |
 | `intake_job_url` | network-read + local-write + local-exec | Fetches one validated public job URL; creates or upgrades a local package, deterministically reorders existing user-provided résumé content, compiles and page-validates the proposal, and writes cited research, an application record, and a configured Obsidian tracker note. |

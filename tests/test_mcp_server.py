@@ -487,6 +487,7 @@ class McpServerTests(unittest.TestCase):
                     "resume_source_context",
                     "list_mail_events",
                     "token_usage",
+                    "search_keryx_jobs",
                     "record_token_usage",
                     "sync_recruiting_mail",
                     "intake_job_url",
@@ -515,6 +516,7 @@ class McpServerTests(unittest.TestCase):
                 "list_evidence",
                 "resume_source_context",
                 "list_mail_events",
+                "search_keryx_jobs",
             }:
                 annotations = by_name[name].annotations
                 self.assertIsNotNone(annotations)

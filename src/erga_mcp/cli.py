@@ -55,6 +55,14 @@ from .integrations.zoho_live import (
     sync_metadata,
 )
 from .job_discovery import discover_job_research
+from .keryx import (
+    collect_optional_keryx,
+    disable_keryx,
+    enable_keryx,
+    keryx_status,
+    search_keryx_jobs,
+    sync_keryx,
+)
 from .mail_settings import as_json as mail_settings_as_json
 from .mail_settings import update_settings as update_mail_settings
 from .models import Application
@@ -198,6 +206,30 @@ def _parser() -> argparse.ArgumentParser:
     _config_argument(status)
     doctor = subcommands.add_parser("doctor", help="check core and optional local capabilities")
     _config_argument(doctor)
+
+    keryx = subcommands.add_parser(
+        "keryx",
+        help="optionally cache and search Keryx's public US opportunity index",
+    )
+    keryx_commands = keryx.add_subparsers(dest="keryx_command", required=True)
+    for name, help_text in (
+        ("enable", "explicitly enable Keryx and download its public index"),
+        ("disable", "disable Keryx discovery without deleting private Erga state"),
+        ("sync", "refresh the enabled local Keryx cache"),
+        ("status", "show whether the optional Keryx cache is ready"),
+    ):
+        keryx_command = keryx_commands.add_parser(name, help=help_text)
+        _config_argument(keryx_command)
+    keryx_search = keryx_commands.add_parser(
+        "search",
+        help="search the local Keryx cache without sending the query anywhere",
+    )
+    _config_argument(keryx_search)
+    keryx_search.add_argument("query", nargs="?", default="")
+    keryx_search.add_argument("--program", choices=("internship", "new-grad"), default="")
+    keryx_search.add_argument("--cycle", default="")
+    keryx_search.add_argument("--location", default="")
+    keryx_search.add_argument("--limit", type=int, default=20)
 
     evidence = subcommands.add_parser("evidence", help="manage local evidence records")
     evidence_commands = evidence.add_subparsers(dest="evidence_command", required=True)
@@ -668,6 +700,15 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
+        try:
+            if collect_optional_keryx():
+                _print_json(enable_keryx(args.config).as_json())
+        except (OSError, ValueError) as error:
+            print(
+                f"Erga's core remains ready, but optional Keryx setup failed: {error}",
+                file=sys.stderr,
+            )
+            return 1
         return 0
     if args.command == "connect":
         hosts = (
@@ -741,6 +782,31 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if args.command == "doctor":
         _print_json(asdict(check_installation(args.config)))
         return 0
+    if args.command == "keryx":
+        try:
+            if args.keryx_command == "enable":
+                _print_json(enable_keryx(args.config).as_json())
+            elif args.keryx_command == "disable":
+                _print_json(disable_keryx(args.config).as_json())
+            elif args.keryx_command == "sync":
+                _print_json(sync_keryx(load_config(args.config)).as_json())
+            elif args.keryx_command == "status":
+                _print_json(keryx_status(load_config(args.config)).as_json())
+            else:
+                _print_json(
+                    search_keryx_jobs(
+                        load_config(args.config),
+                        query=args.query,
+                        program=args.program,
+                        cycle=args.cycle,
+                        location=args.location,
+                        limit=args.limit,
+                    )
+                )
+            return 0
+        except (FileNotFoundError, OSError, ValueError) as error:
+            print(f"Optional Keryx integration failed: {error}", file=sys.stderr)
+            return 1
     if args.command == "mail" and args.mail_command == "configure":
         configured = update_mail_settings(
             args.config,

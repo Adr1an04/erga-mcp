@@ -52,6 +52,10 @@ tracker_dir = ""
 # Explicit recruiting cycles eligible for acknowledgement-based tracker imports.
 active_cycles = []
 
+[keryx]
+# Optional public US internship/new-grad index. Enabling it never sends private Erga data.
+enabled = false
+
 [contacts]
 # Optional contact projections. Each output is an explicit local sink, such as Obsidian.
 outputs = []
@@ -108,6 +112,11 @@ class McpSettings:
 
 
 @dataclass(frozen=True)
+class KeryxSettings:
+    enabled: bool
+
+
+@dataclass(frozen=True)
 class ErgaConfig:
     config_path: Path
     data_dir: Path
@@ -124,6 +133,7 @@ class ErgaConfig:
     retain_message_bodies: bool
     retain_attachments: bool
     mcp: McpSettings
+    keryx: KeryxSettings
 
 
 def _path(value: str, base_dir: Path) -> Path:
@@ -196,6 +206,7 @@ def load_config(config_path: Path) -> ErgaConfig:
     contacts = _section(document, "contacts")
     privacy = _section(document, "privacy")
     mcp = _section(document, "mcp")
+    keryx = _section(document, "keryx")
 
     data_dir = _path(str(paths.get("data_dir", "state")), config_path.parent)
     vault_value = str(paths.get("vault_path", "")).strip()
@@ -280,4 +291,5 @@ def load_config(config_path: Path) -> ErgaConfig:
         retain_message_bodies=bool(privacy.get("retain_message_bodies", False)),
         retain_attachments=bool(privacy.get("retain_attachments", False)),
         mcp=McpSettings(tool_profile=mcp_tool_profile),
+        keryx=KeryxSettings(enabled=bool(keryx.get("enabled", False))),
     )
