@@ -25,6 +25,7 @@ from .resume_sources import (
     snapshot_resume_source,
 )
 from .store import ErgaStore
+from .toml_edit import update_table
 
 VaultMode = Literal["existing", "new"]
 _ERGA_VAULT_DIRECTORY = "Erga"
@@ -538,15 +539,6 @@ def write_core_setup_plan(selections: CoreSetupSelections) -> str:
     return json.dumps(payload, indent=2, sort_keys=True)
 
 
-def _replace_table(raw: str, name: str, lines: list[str]) -> str:
-    table = "\n".join([f"[{name}]", *lines])
-    pattern = rf"(?ms)^\[{re.escape(name)}\]\n.*?(?=^\[|\Z)"
-    if re.search(pattern, raw):
-        return re.sub(pattern, lambda _match: f"{table}\n\n", raw)
-    separator = "" if not raw or raw.endswith("\n\n") else "\n"
-    return f"{raw}{separator}{table}\n"
-
-
 def _atomic_write_private(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     restrict_private_directory(path.parent)
@@ -584,24 +576,24 @@ def _configure_core_paths(
         raw = DEFAULT_CONFIG
         data_dir = config_path.parent / "state"
         active_cycles = []
-    raw = _replace_table(
+    raw = update_table(
         raw,
         "paths",
-        [
-            f"data_dir = {json.dumps(str(data_dir))}",
-            f"vault_path = {json.dumps(str(vault_path) if vault_path is not None else '')}",
-        ],
+        {
+            "data_dir": str(data_dir),
+            "vault_path": str(vault_path) if vault_path is not None else "",
+        },
     )
-    raw = _replace_table(
+    raw = update_table(
         raw,
         "tracking",
-        [
-            f"enabled = {'true' if tracker_dir is not None else 'false'}",
-            f"tracker_dir = {json.dumps(str(tracker_dir) if tracker_dir is not None else '')}",
-            f"active_cycles = {json.dumps(active_cycles)}",
-        ],
+        {
+            "enabled": tracker_dir is not None,
+            "tracker_dir": str(tracker_dir) if tracker_dir is not None else "",
+            "active_cycles": active_cycles,
+        },
     )
-    raw = _replace_table(raw, "mcp", ['tool_profile = "career"'])
+    raw = update_table(raw, "mcp", {"tool_profile": "career"})
     tomllib.loads(raw)
     _atomic_write_private(config_path, raw)
     load_config(config_path)

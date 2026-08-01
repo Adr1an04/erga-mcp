@@ -194,6 +194,57 @@ folder = "Recruiting"
             self.assertEqual(config.mail_provider, "gmail")
             self.assertEqual(config.mail_folder, "Recruiting")
 
+    def test_core_setup_rerun_preserves_comments_and_unknown_owned_table_keys(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "private" / "config.toml"
+            master = root / "master.tex"
+            master.write_text("Approved master", encoding="utf-8")
+            selections = CoreSetupSelections(
+                config_path=config_path,
+                master_resume=master,
+            )
+            apply_core_setup(selections)
+            raw = config_path.read_text(encoding="utf-8")
+            raw = raw.replace(
+                "[paths]\n",
+                "[paths]\n# Keep custom path policy.\n"
+                'future_path_policy = "strict" # from a newer Erga\n',
+            ).replace(
+                f"data_dir = {json.dumps(str(config_path.parent / 'state'))}",
+                f"data_dir = {json.dumps(str(config_path.parent / 'state'))} # durable state",
+            )
+            raw = raw.replace(
+                "[tracking]\n",
+                "[tracking]\n# Keep custom tracker policy.\n"
+                'future_tracker_view = "kanban" # user preference\n',
+            ).replace(
+                "enabled = false",
+                "enabled = false # intentionally local-only",
+            )
+            raw = raw.replace(
+                "[mcp]\n",
+                "[mcp]\n# Keep custom capability policy.\n"
+                'future_approval_mode = "review" # forward-compatible\n',
+            ).replace(
+                'tool_profile = "career"',
+                'tool_profile = "career" # least privilege',
+            )
+            config_path.write_text(raw, encoding="utf-8")
+
+            apply_core_setup(selections)
+            rendered = config_path.read_text(encoding="utf-8")
+
+            self.assertIn("# Keep custom path policy.", rendered)
+            self.assertIn('future_path_policy = "strict" # from a newer Erga', rendered)
+            self.assertIn("# durable state", rendered)
+            self.assertIn("# Keep custom tracker policy.", rendered)
+            self.assertIn('future_tracker_view = "kanban" # user preference', rendered)
+            self.assertIn("enabled = false # intentionally local-only", rendered)
+            self.assertIn("# Keep custom capability policy.", rendered)
+            self.assertIn('future_approval_mode = "review" # forward-compatible', rendered)
+            self.assertIn('tool_profile = "career" # least privilege', rendered)
+
     def test_review_and_report_make_optional_connection_boundary_explicit(self) -> None:
         selections = CoreSetupSelections(
             config_path=Path("/private/config.toml"),
