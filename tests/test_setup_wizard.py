@@ -208,7 +208,8 @@ folder = "Recruiting"
             raw = config_path.read_text(encoding="utf-8")
             raw = raw.replace(
                 "[paths]\n",
-                "[paths]\n# Keep custom path policy.\n"
+                "[paths] # Keep table-header comment.\n"
+                "# Keep custom path policy.\n"
                 'future_path_policy = "strict" # from a newer Erga\n',
             ).replace(
                 f"data_dir = {json.dumps(str(config_path.parent / 'state'))}",
