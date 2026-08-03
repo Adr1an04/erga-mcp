@@ -15,7 +15,7 @@ from typing import Literal, cast
 import questionary
 from questionary import Choice
 
-from .config import DEFAULT_CONFIG, load_config
+from .config import DEFAULT_CONFIG, load_config, validate_output_pdf_name
 from .private_files import restrict_private_directory, restrict_private_file
 from .resume_settings import update_settings
 from .resume_sources import (
@@ -33,6 +33,7 @@ _TRACKER_DIRECTORY = "Applications"
 _OUTPUT_DIRECTORY = "Generated Resumes"
 _RECOMMENDED_BULLET_LENGTHS = (90, 105, 120)
 _MAX_STYLE_EXAMPLE_CHARS = 500
+_DEFAULT_OUTPUT_PDF_NAME = "Firstname_Lastname_Resume.pdf"
 _START_NOTE = """# Welcome to Erga
 
 Erga keeps career knowledge, application notes, and résumé work under your control.
@@ -66,6 +67,7 @@ class CoreSetupSelections:
     bullet_max_chars: int = _RECOMMENDED_BULLET_LENGTHS[2]
     max_pages: int | None = None
     output_root: Path | None = None
+    output_pdf_name: str = _DEFAULT_OUTPUT_PDF_NAME
     obsidian_enabled: bool = False
     vault_mode: VaultMode | None = None
     vault_path: Path | None = None
@@ -109,6 +111,27 @@ def normalize_dropped_path(value: str) -> Path:
         if len(parsed) == 1:
             entered = parsed[0]
     return Path(entered).expanduser().absolute()
+
+
+def normalize_output_pdf_name(value: str) -> str:
+    """Accept a user-chosen resume label and return one safe PDF filename."""
+    name = value.strip()
+    if name and not name.casefold().endswith(".pdf"):
+        name += ".pdf"
+    elif name.casefold().endswith(".pdf"):
+        name = name[:-4] + ".pdf"
+    try:
+        return validate_output_pdf_name(name)
+    except ValueError as error:
+        raise ValueError("Enter a PDF filename without path components.") from error
+
+
+def _output_pdf_name(value: str) -> bool | str:
+    try:
+        normalize_output_pdf_name(value)
+    except ValueError as error:
+        return str(error)
+    return True
 
 
 def _existing_directory(value: str) -> bool | str:
@@ -464,6 +487,23 @@ def collect_core_setup_selections(
             )
         )
 
+    configured_output_name = (
+        load_config(default_config_path).resume.output_pdf_name
+        if default_config_path.expanduser().is_file()
+        else _DEFAULT_OUTPUT_PDF_NAME
+    )
+    output_pdf_name = normalize_output_pdf_name(
+        str(
+            _required(
+                questionary.text(
+                    "Name every generated resume PDF (you can omit .pdf):",
+                    default=configured_output_name,
+                    validate=_output_pdf_name,
+                ).ask()
+            )
+        )
+    )
+
     selections = CoreSetupSelections(
         config_path=default_config_path.expanduser().absolute(),
         master_resume=master_resume,
@@ -473,6 +513,7 @@ def collect_core_setup_selections(
         bullet_max_chars=bullet_lengths[2],
         max_pages=max_pages,
         output_root=output_root,
+        output_pdf_name=output_pdf_name,
         obsidian_enabled=obsidian_enabled,
         vault_mode=vault_mode,
         vault_path=vault_path,
@@ -521,6 +562,7 @@ def render_core_setup_review(selections: CoreSetupSelections) -> str:
             ),
             f"  Bullet length: {bullets}",
             f"  Generated resumes: {selections.output_root}",
+            f"  Generated PDF filename: {normalize_output_pdf_name(selections.output_pdf_name)}",
             "  Application tracking: a private local database",
             f"  Obsidian: {obsidian}",
             "",
@@ -679,6 +721,7 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
             "master_path": str(managed_master.path),
             "reference_path": str(managed_style.path) if managed_style is not None else "",
             "output_root": str(output_root),
+            "output_pdf_name": normalize_output_pdf_name(selections.output_pdf_name),
             "bullet_min_chars": selections.bullet_min_chars,
             "bullet_target_chars": selections.bullet_target_chars,
             "bullet_max_chars": selections.bullet_max_chars,

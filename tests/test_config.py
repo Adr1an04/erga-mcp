@@ -109,6 +109,18 @@ bullet_max_chars = 90
             with self.assertRaisesRegex(ValueError, "bullet character lengths"):
                 load_config(config_path)
 
+    def test_rejects_resume_output_names_with_cross_platform_path_components(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            for output_pdf_name in (r"..\resume.pdf", r"C:\temp\resume.pdf"):
+                with self.subTest(output_pdf_name=output_pdf_name):
+                    config_path.write_text(
+                        f"[resume]\noutput_pdf_name = {output_pdf_name!r}\n",
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(ValueError, "output_pdf_name"):
+                        load_config(config_path)
+
     def test_loads_active_tracker_cycles_for_mail_reconciliation(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"

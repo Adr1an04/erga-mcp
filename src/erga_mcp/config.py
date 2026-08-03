@@ -138,6 +138,21 @@ def _section(document: dict[str, Any], name: str) -> dict[str, Any]:
     return value
 
 
+def validate_output_pdf_name(value: str) -> str:
+    """Reject path-like values so attachment names remain inside their package."""
+    name = value.strip()
+    if (
+        not name
+        or not name.endswith(".pdf")
+        or name == ".pdf"
+        or "/" in name
+        or "\\" in name
+        or Path(name).name != name
+    ):
+        raise ValueError("resume output_pdf_name must be a PDF filename without path components")
+    return name
+
+
 def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings:
     resume = _section(document, "resume")
     master_value = str(resume.get("master_path", "")).strip()
@@ -167,9 +182,9 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
     latexmk = str(resume.get("latexmk", "latexmk")).strip()
     if not latexmk:
         raise ValueError("resume latexmk must be non-empty")
-    output_pdf_name = str(resume.get("output_pdf_name", "Firstname_Lastname_Resume.pdf")).strip()
-    if Path(output_pdf_name).name != output_pdf_name or not output_pdf_name.endswith(".pdf"):
-        raise ValueError("resume output_pdf_name must be a PDF filename without path components")
+    output_pdf_name = validate_output_pdf_name(
+        str(resume.get("output_pdf_name", "Firstname_Lastname_Resume.pdf"))
+    )
     return ResumeSettings(
         master_path=master_path,
         template_path=template_path,

@@ -18,6 +18,7 @@ from erga_mcp.setup_wizard import (
     bullet_lengths_from_examples,
     collect_core_setup_selections,
     normalize_dropped_path,
+    normalize_output_pdf_name,
     render_core_setup_report,
     render_core_setup_review,
     write_core_setup_plan,
@@ -357,6 +358,7 @@ folder = "Recruiting"
                     "2",
                     "• Built a bounded local workflow for career evidence.",
                     "- Added deterministic validation for generated resumes.",
+                    "Adrian_Osorio_Resume",
                 ]
             )
             confirm_answers = iter([False, True, False, True, True])
@@ -385,6 +387,7 @@ folder = "Recruiting"
 
             serialized = write_core_setup_plan(selections)
             self.assertEqual(selections.max_pages, 2)
+            self.assertEqual(selections.output_pdf_name, "Adrian_Osorio_Resume.pdf")
             self.assertGreater(selections.bullet_min_chars, 0)
             self.assertNotIn("bounded local workflow", serialized)
 
@@ -396,6 +399,44 @@ folder = "Recruiting"
             if os.name != "nt":
                 escaped = str(resume).replace(" ", r"\ ")
                 self.assertEqual(normalize_dropped_path(escaped), resume.absolute())
+
+    def test_resume_output_name_adds_pdf_extension_and_rejects_path_components(self) -> None:
+        self.assertEqual(
+            normalize_output_pdf_name("Adrian_Osorio_Resume"),
+            "Adrian_Osorio_Resume.pdf",
+        )
+        self.assertEqual(
+            normalize_output_pdf_name("Adrian_Osorio_Resume.pdf"),
+            "Adrian_Osorio_Resume.pdf",
+        )
+        for unsafe_name in (
+            "../resume.pdf",
+            r"..\resume.pdf",
+            r"C:\temp\resume.pdf",
+            r"\\server\share\resume.pdf",
+        ):
+            with self.subTest(unsafe_name=unsafe_name):
+                with self.assertRaisesRegex(ValueError, "filename"):
+                    normalize_output_pdf_name(unsafe_name)
+
+    def test_core_setup_persists_the_user_selected_resume_output_name(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master = root / "master.tex"
+            master.write_text("Approved master", encoding="utf-8")
+
+            apply_core_setup(
+                CoreSetupSelections(
+                    config_path=root / "private" / "config.toml",
+                    master_resume=master,
+                    output_pdf_name="Adrian_Osorio_Resume.pdf",
+                )
+            )
+
+            self.assertEqual(
+                load_config(root / "private" / "config.toml").resume.output_pdf_name,
+                "Adrian_Osorio_Resume.pdf",
+            )
 
 
 if __name__ == "__main__":
