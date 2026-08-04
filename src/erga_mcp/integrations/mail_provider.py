@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -19,6 +20,7 @@ class MailProvider(Protocol):
         page_size: int = 100,
         max_messages: int = 1000,
         include_content: bool = False,
+        known_message_ids: Collection[str] = (),
     ) -> list[MailMessageMetadata]: ...
 
 
@@ -32,8 +34,9 @@ class GmailMailProvider:
         page_size: int = 100,
         max_messages: int = 1000,
         include_content: bool = False,
+        known_message_ids: Collection[str] = (),
     ) -> list[MailMessageMetadata]:
-        del include_content
+        del include_content, known_message_ids
         return fetch_all_inbox_metadata_with_gws(
             gws_command=self.gws_command,
             page_size=page_size,
@@ -53,6 +56,7 @@ class ZohoMailProvider:
         page_size: int = 100,
         max_messages: int = 1000,
         include_content: bool = False,
+        known_message_ids: Collection[str] = (),
     ) -> list[MailMessageMetadata]:
         if not self.client_id:
             raise ValueError("mail client_id must be configured before Zoho sync")
@@ -65,6 +69,7 @@ class ZohoMailProvider:
             page_size=page_size,
             max_messages=max_messages,
             include_content=include_content,
+            known_message_ids=known_message_ids,
         )
 
 

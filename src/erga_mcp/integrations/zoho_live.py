@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -124,6 +124,7 @@ def fetch_inbox_metadata(
     folder: str = "Inbox",
     start: int = 0,
     include_content: bool = False,
+    known_message_ids: Collection[str] = (),
 ) -> list[MailMessageMetadata]:
     """Fetch read-only metadata from a named Zoho folder."""
 
@@ -177,7 +178,7 @@ def fetch_inbox_metadata(
         received_at = datetime.fromtimestamp(int(item["receivedTime"]) / 1000, UTC)
         message_id = str(item["messageId"])
         content = ""
-        if include_content:
+        if include_content and message_id not in known_message_ids:
             content_response = get(
                 f"https://mail.zoho.com/api/accounts/{account_id}/folders/{folder_id}/messages/"
                 f"{message_id}/content"
@@ -204,6 +205,7 @@ def fetch_all_inbox_metadata(
     page_size: int = 100,
     max_messages: int = 1000,
     include_content: bool = False,
+    known_message_ids: Collection[str] = (),
 ) -> list[MailMessageMetadata]:
     """Read a configured Zoho folder page by page, bounded by ``max_messages``."""
     if page_size < 1:
@@ -222,6 +224,7 @@ def fetch_all_inbox_metadata(
             limit=page_limit,
             start=start,
             include_content=include_content,
+            known_message_ids=known_message_ids,
         )
         result.extend(page)
         if len(page) < page_limit:

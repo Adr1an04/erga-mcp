@@ -108,6 +108,55 @@ class LiveZohoSyncTests(unittest.TestCase):
 
         self.assertEqual(messages[0].content, "Your application has been received.")
 
+    def test_fetches_content_only_for_unknown_messages(self) -> None:
+        urls: list[str] = []
+        responses = iter(
+            [
+                {"data": [{"accountId": "account-1"}]},
+                {"data": [{"folderId": "inbox-1", "folderType": "Inbox", "folderName": "Inbox"}]},
+                {
+                    "data": [
+                        {"messageId": "known-1", "receivedTime": "1784556770435"},
+                        {"messageId": "new-1", "receivedTime": "1784556770435"},
+                    ]
+                },
+                {"data": {"content": "New message content."}},
+            ]
+        )
+
+        class Response:
+            def __init__(self, payload: object) -> None:
+                self.payload = payload
+
+            def __enter__(self) -> Response:
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps(self.payload).encode("utf-8")
+
+        def fake_urlopen(request: object, *, timeout: int) -> Response:
+            self.assertEqual(timeout, 30)
+            urls.append(str(getattr(request, "full_url")))
+            return Response(next(responses))
+
+        with patch("erga_mcp.integrations.zoho_live.urlopen", fake_urlopen):
+            messages = fetch_inbox_metadata(
+                access_token="access-token",
+                folder="Inbox",
+                limit=2,
+                include_content=True,
+                known_message_ids={"known-1"},
+            )
+
+        self.assertEqual(messages[0].content, "")
+        self.assertEqual(messages[1].content, "New message content.")
+        content_urls = [url for url in urls if url.endswith("/content")]
+        self.assertEqual(len(content_urls), 1)
+        self.assertIn("/new-1/content", content_urls[0])
+
     def test_reads_each_page_until_the_configured_folder_is_exhausted(self) -> None:
         urls: list[str] = []
         responses = iter(

@@ -1305,12 +1305,17 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
     @profile_tool("sync_recruiting_mail", annotations=_NETWORK_READ_AND_WRITE)
     def sync_recruiting_mail() -> dict[str, object]:
         """Read configured mail page by page, persist local events, and summarize safely."""
+        known_message_ids = {event.message_id for event in store.list_mail_events()}
         messages = build_mail_provider(config).fetch_inbox_metadata(
             page_size=100,
             max_messages=1000,
             include_content=config.mail_provider != "gmail",
+            known_message_ids=known_message_ids,
         )
-        sync_result = sync_metadata(store, messages)
+        new_messages = [
+            message for message in messages if message.message_id not in known_message_ids
+        ]
+        sync_result = sync_metadata(store, new_messages)
         tracker_updates = 0
         tracker_imports = 0
         if config.tracker.enabled and config.tracker.tracker_dir is not None:
