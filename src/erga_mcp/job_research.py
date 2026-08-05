@@ -84,8 +84,14 @@ _JOB_ROLE_SIGNAL = re.compile(
     re.IGNORECASE,
 )
 _JOB_CONTENT_SIGNALS = (
-    re.compile(r"\b(?:job description|responsibilities|what you(?:'|’)ll do)\b", re.IGNORECASE),
-    re.compile(r"\b(?:qualifications|requirements|what we(?:'|’)re looking for)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:job description|responsibilities|what you(?:'|’)ll do|you will\s*:)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:qualifications|requirements|what we(?:'|’)re looking for|you are\s*:)",
+        re.IGNORECASE,
+    ),
     re.compile(
         r"\b(?:apply now|apply for this (?:job|role|position)|submit application)\b", re.IGNORECASE
     ),

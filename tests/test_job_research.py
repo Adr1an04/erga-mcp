@@ -337,6 +337,13 @@ class JobResearchTests(unittest.TestCase):
             "This page is rendered client-side.",
             job_url="https://jobs.lever.co/example/software-engineer",
         )
+        require_job_posting(
+            "[Summer 2027] Software Engineer Intern\n"
+            "You Will:\nBuild reliable systems used by millions of players.\n"
+            "You Are:\nA curious engineer who writes quality code.\n"
+            "Apply Now",
+            job_url="https://careers.roblox.com/jobs/8072713",
+        )
 
 
 if __name__ == "__main__":
