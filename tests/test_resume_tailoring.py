@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import unittest
 from datetime import UTC, datetime
@@ -421,6 +422,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
             source = root / "resume.tex"
             source.write_text(_TEMPLATE, encoding="utf-8")
             selected: dict[str, list[str]] = {}
+            latexmk = shutil.which("latexmk")
             for identifier, (_, tags) in tracks.items():
                 output_dir = root / identifier
                 result = create_automatic_resume_proposal(
@@ -432,23 +434,24 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
                     project_candidates=inventory,
                     project_count=1,
                 )
-                subprocess.run(
-                    [
-                        "latexmk",
-                        "-pdf",
-                        "-interaction=nonstopmode",
-                        "-halt-on-error",
-                        "proposal.tex",
-                    ],
-                    cwd=output_dir,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
+                if latexmk is not None:
+                    subprocess.run(
+                        [
+                            latexmk,
+                            "-pdf",
+                            "-interaction=nonstopmode",
+                            "-halt-on-error",
+                            "proposal.tex",
+                        ],
+                        cwd=output_dir,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(pdf_page_count(output_dir / "proposal.pdf"), 1)
                 report = json.loads(result.proposal.claim_report_path.read_text(encoding="utf-8"))
                 selected[identifier] = report["project_selection"]["selected_ids"]
                 self.assertTrue(result.meaningful_change)
-                self.assertEqual(pdf_page_count(output_dir / "proposal.pdf"), 1)
 
             self.assertEqual(selected, {identifier: [identifier] for identifier in tracks})
 
