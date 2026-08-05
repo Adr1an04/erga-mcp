@@ -113,6 +113,33 @@ project_count = 3
             )
             self.assertEqual(config.resume.project_count, 3)
 
+    def test_project_inventory_required_mode_needs_a_catalogue_path(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(
+                '[resume]\nproject_selection_mode = "inventory_required"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "project_inventory_path"):
+                load_config(config_path)
+
+    def test_loads_explicit_project_inventory_selection_mode(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(
+                """
+[resume]
+project_inventory_path = "projects.json"
+project_selection_mode = "inventory_required"
+""".strip(),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+            self.assertEqual(config.resume.project_selection_mode, "inventory_required")
+
     def test_rejects_an_invalid_resume_bullet_range(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"

@@ -38,6 +38,7 @@ _ALLOWED_CONTROL_SEQUENCES = frozenset(
         "resumeItemListStart",
         "resumeItemListEnd",
         "resumeItem",
+        "href",
         "textbf",
         "textit",
         "&",

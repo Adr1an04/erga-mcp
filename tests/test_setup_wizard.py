@@ -108,6 +108,71 @@ class SetupWizardTests(unittest.TestCase):
             self.assertEqual(len(evidence), 1)
             self.assertTrue(evidence[0].approved)
 
+    def test_core_setup_creates_and_requires_an_obsidian_project_inventory_from_master_projects(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            vault = root / "Career Vault"
+            vault.mkdir()
+            master = root / "Complete Master Resume.tex"
+            master.write_text(
+                r"""\section{Projects}
+\resumeSubHeadingListStart
+\resumeProjectHeading{\textbf{Systems Simulator} $|$ \textit{C++, Linux}}{}
+\resumeItemListStart
+\resumeItem{Built a C++ systems simulator on Linux.}
+\resumeItemListEnd
+\resumeSubHeadingListEnd
+""",
+                encoding="utf-8",
+            )
+
+            apply_core_setup(
+                CoreSetupSelections(
+                    config_path=root / "private" / "config.toml",
+                    master_resume=master,
+                    obsidian_enabled=True,
+                    vault_mode="existing",
+                    vault_path=vault,
+                )
+            )
+            config = load_config(root / "private" / "config.toml")
+
+            inventory_path = vault / "Erga" / "Project Inventory.json"
+            self.assertEqual(config.resume.project_inventory_path, inventory_path)
+            self.assertEqual(config.resume.project_selection_mode, "inventory_required")
+            inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+            self.assertEqual([project["id"] for project in inventory], ["systems-simulator"])
+            self.assertEqual(len(inventory[0]["bullet_evidence_ids"]), 1)
+            self.assertTrue(inventory[0]["bullet_evidence_ids"][0][0].startswith("ev_"))
+
+    def test_core_setup_connects_a_conventional_existing_obsidian_inventory(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            vault = root / "Career Vault"
+            catalogue = vault / "02 Projects" / "Project Inventory.json"
+            catalogue.parent.mkdir(parents=True)
+            catalogue.write_text("[]\n", encoding="utf-8")
+            master = root / "master.tex"
+            master.write_text("Approved master resume", encoding="utf-8")
+
+            apply_core_setup(
+                CoreSetupSelections(
+                    config_path=root / "private" / "config.toml",
+                    master_resume=master,
+                    obsidian_enabled=True,
+                    vault_mode="existing",
+                    vault_path=vault,
+                )
+            )
+
+            self.assertEqual(
+                load_config(root / "private" / "config.toml").resume.project_inventory_path,
+                catalogue,
+            )
+            self.assertEqual(catalogue.read_text(encoding="utf-8"), "[]\n")
+
     def test_core_setup_can_create_a_new_obsidian_vault(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

@@ -785,6 +785,13 @@ def _complete_intake_integrations(
     """Idempotently add research, local application state, and configured tracker artifacts."""
     package_dir = Path(result.package_dir)
     warnings: list[str] = []
+    if config.resume.project_selection_mode == "inventory_optional" and (
+        config.resume.project_inventory_path is None
+    ):
+        warnings.append(
+            "Project inventory is not configured; Projects were tailored by reordering the "
+            "template only. Run `erga setup` to create or connect an inventory."
+        )
     research_path: Path | None = None
     application_id: str | None = None
     tracker_notes: list[str] = []
