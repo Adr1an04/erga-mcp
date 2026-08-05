@@ -55,9 +55,7 @@ class JobIntakeTests(unittest.TestCase):
             "Compensation:\\n\\nPaid internship.\\n\\nApply Now"
         )
         page = (
-            "<html><body><main>Back</main><script>"
-            f"{json.dumps(description)}"
-            "</script></body></html>"
+            f"<html><body><main>Back</main><script>{json.dumps(description)}</script></body></html>"
         )
         url = "https://www.shopify.com/careers/applied-machine-learning-internships-winter-2027_example"
 

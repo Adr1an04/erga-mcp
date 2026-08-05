@@ -524,8 +524,11 @@ def _shopify_embedded_job_text(page: str) -> str:
             start = intern_start
         end = value.find("Description du poste", start)
         relevant = value[start:end] if end >= 0 else value[start:]
-        return relevant.replace("\\n", "\n").replace("\\\"", '"').replace("\\u003c", "<").replace(
-            "\\u003e", ">"
+        return (
+            relevant.replace("\\n", "\n")
+            .replace('\\"', '"')
+            .replace("\\u003c", "<")
+            .replace("\\u003e", ">")
         )
     return ""
 

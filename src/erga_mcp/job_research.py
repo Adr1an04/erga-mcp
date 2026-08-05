@@ -310,9 +310,13 @@ def require_job_posting(snapshot: str, *, job_url: str) -> None:
         return
     content = official_job_text(snapshot)
     has_role = _JOB_ROLE_SIGNAL.search(content) is not None
-    if _is_shopify_career_detail_url(job_url) and has_role and all(
-        marker in content
-        for marker in ("Being a Shopify Intern", "Qualifications:", "Compensation:")
+    if (
+        _is_shopify_career_detail_url(job_url)
+        and has_role
+        and all(
+            marker in content
+            for marker in ("Being a Shopify Intern", "Qualifications:", "Compensation:")
+        )
     ):
         return
     has_all_posting_sections = all(
