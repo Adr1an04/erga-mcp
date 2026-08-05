@@ -64,6 +64,7 @@ from .job_research import (
 )
 from .job_workspace import create_job_workspace
 from .models import Evidence
+from .project_inventory import ProjectCandidate, load_project_inventory, select_projects
 from .resume import (
     create_section_resume_proposal,
     normalize_cycle,
@@ -284,6 +285,34 @@ def _tailoring_context(research: JobResearch, snapshot: str) -> str:
         *research.logistics,
     ]
     return "\n".join([*extracted, official_job_text(snapshot)])
+
+
+def _inventory_candidates(
+    config: ErgaConfig, evidence: list[Evidence]
+) -> tuple[ProjectCandidate, ...]:
+    """Load the optional local project arsenal; an absent setting preserves legacy behavior."""
+    path = config.resume.project_inventory_path
+    return load_project_inventory(path, evidence) if path is not None else ()
+
+
+def _include_selected_project_evidence(
+    selected_evidence: list[Evidence],
+    all_approved: list[Evidence],
+    candidates: tuple[ProjectCandidate, ...],
+    job_description: str,
+    *,
+    project_count: int,
+) -> list[Evidence]:
+    """Keep provenance for every inventory block that can enter the tailored proposal."""
+    selected_ids = {
+        evidence_id
+        for candidate in select_projects(candidates, job_description, max_projects=project_count)
+        for evidence_id in candidate.evidence_ids
+    }
+    by_id = {item.id: item for item in [*selected_evidence, *all_approved]}
+    retained_ids = list(dict.fromkeys(item.id for item in selected_evidence))
+    retained_ids.extend(sorted(selected_ids - set(retained_ids)))
+    return [by_id[evidence_id] for evidence_id in retained_ids]
 
 
 def _compile_intake_proposal(
@@ -691,16 +720,28 @@ def _upgrade_existing_tailoring(
         snapshot = snapshot_path.read_text(encoding="utf-8")
     research = analyze_job_snapshot(snapshot, job_url=job_url)
     selected_ids = set(_selected_evidence_ids(package_dir / "research" / "selected-evidence.json"))
-    evidence = [item for item in store.list_evidence() if item.approved and item.id in selected_ids]
+    all_approved = [item for item in store.list_evidence() if item.approved]
+    evidence = [item for item in all_approved if item.id in selected_ids]
+    tailoring_context = _tailoring_context(research, snapshot)
+    project_candidates = _inventory_candidates(config, all_approved)
+    evidence = _include_selected_project_evidence(
+        evidence,
+        all_approved,
+        project_candidates,
+        tailoring_context,
+        project_count=config.resume.project_count,
+    )
     automatic = create_automatic_resume_proposal(
         resume_path=source_resume,
         output_dir=package_dir / "artifacts",
-        job_description=_tailoring_context(research, snapshot),
+        job_description=tailoring_context,
         evidence=evidence,
         editable_sections=config.resume.editable_sections,
         bullet_min_chars=config.resume.bullet_min_chars,
         bullet_target_chars=config.resume.bullet_target_chars,
         bullet_max_chars=config.resume.bullet_max_chars,
+        project_candidates=project_candidates,
+        project_count=config.resume.project_count,
     )
     validation = _compile_intake_proposal(
         automatic.proposal.proposed_tex_path,
@@ -1512,6 +1553,15 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         if not evidence:
             evidence = all_approved
             selection_strategy = "all_approved_baseline" if evidence else "no_approved_evidence"
+        tailoring_context = _tailoring_context(source_research, snapshot)
+        project_candidates = _inventory_candidates(config, all_approved)
+        evidence = _include_selected_project_evidence(
+            evidence,
+            all_approved,
+            project_candidates,
+            tailoring_context,
+            project_count=config.resume.project_count,
+        )
         final_package_dir = _package_dir(config.resume.output_root, resolved_cycle, resolved_slug)
         config.resume.output_root.mkdir(parents=True, exist_ok=True)
         cycle_dir = final_package_dir.parent
@@ -1536,12 +1586,14 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             automatic = create_automatic_resume_proposal(
                 resume_path=workspace.template_copy_path,
                 output_dir=workspace.package.package_dir / "artifacts",
-                job_description=_tailoring_context(source_research, snapshot),
+                job_description=tailoring_context,
                 evidence=evidence,
                 editable_sections=config.resume.editable_sections,
                 bullet_min_chars=config.resume.bullet_min_chars,
                 bullet_target_chars=config.resume.bullet_target_chars,
                 bullet_max_chars=config.resume.bullet_max_chars,
+                project_candidates=project_candidates,
+                project_count=config.resume.project_count,
             )
             proposal = automatic.proposal
             validation = _compile_intake_proposal(
@@ -1823,7 +1875,17 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         snapshot = fetch_job_snapshot(job_url)
         require_job_posting(snapshot, job_url=job_url)
         research = analyze_job_snapshot(snapshot, job_url=job_url)
-        evidence = select_relevant_evidence(snapshot, store.list_evidence())
+        all_approved = [item for item in store.list_evidence() if item.approved]
+        evidence = select_relevant_evidence(snapshot, all_approved)
+        tailoring_context = _tailoring_context(research, snapshot)
+        project_candidates = _inventory_candidates(config, all_approved)
+        evidence = _include_selected_project_evidence(
+            evidence,
+            all_approved,
+            project_candidates,
+            tailoring_context,
+            project_count=config.resume.project_count,
+        )
         workspace = create_job_workspace(
             output_root=config.resume.output_root,
             cycle=cycle,
@@ -1836,12 +1898,14 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         automatic = create_automatic_resume_proposal(
             resume_path=workspace.template_copy_path,
             output_dir=workspace.package.package_dir / "artifacts",
-            job_description=_tailoring_context(research, snapshot),
+            job_description=tailoring_context,
             evidence=evidence,
             editable_sections=config.resume.editable_sections,
             bullet_min_chars=config.resume.bullet_min_chars,
             bullet_target_chars=config.resume.bullet_target_chars,
             bullet_max_chars=config.resume.bullet_max_chars,
+            project_candidates=project_candidates,
+            project_count=config.resume.project_count,
         )
         proposal = automatic.proposal
         validation = _compile_intake_proposal(

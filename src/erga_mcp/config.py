@@ -25,6 +25,10 @@ bullet_target_chars = 0
 bullet_max_chars = 0
 max_pages = 0
 output_root = "output"
+# Optional local JSON arsenal of approved LaTeX project blocks. When configured,
+# intake selects role-relevant projects from it instead of only reordering the template.
+project_inventory_path = ""
+project_count = 4
 # The filename of every generated local PDF. Configure a real candidate name locally.
 output_pdf_name = "Firstname_Lastname_Resume.pdf"
 latexmk = "latexmk"
@@ -79,6 +83,8 @@ class ResumeSettings:
     bullet_max_chars: int
     max_pages: int
     output_root: Path
+    project_inventory_path: Path | None
+    project_count: int
     output_pdf_name: str
     latexmk: str
 
@@ -179,6 +185,11 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
     max_pages = int(resume.get("max_pages", 0))
     if max_pages < 0:
         raise ValueError("resume max_pages must be zero or positive")
+    inventory_value = str(resume.get("project_inventory_path", "")).strip()
+    project_inventory_path = _path(inventory_value, base_dir) if inventory_value else None
+    project_count = int(resume.get("project_count", 4))
+    if project_count < 1:
+        raise ValueError("resume project_count must be positive")
     latexmk = str(resume.get("latexmk", "latexmk")).strip()
     if not latexmk:
         raise ValueError("resume latexmk must be non-empty")
@@ -195,6 +206,8 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
         bullet_max_chars=bullet_lengths[2],
         max_pages=max_pages,
         output_root=_path(str(resume.get("output_root", "output")), base_dir),
+        project_inventory_path=project_inventory_path,
+        project_count=project_count,
         output_pdf_name=output_pdf_name,
         latexmk=latexmk,
     )

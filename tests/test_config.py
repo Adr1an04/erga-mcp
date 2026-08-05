@@ -94,6 +94,25 @@ latexmk = "latexmk"
             self.assertEqual(config.resume.output_root, config_path.parent / "applications")
         self.assertEqual(config.resume.output_pdf_name, "Firstname_Lastname_Resume.pdf")
 
+    def test_loads_project_inventory_settings(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(
+                """
+[resume]
+project_inventory_path = "projects.json"
+project_count = 3
+""".strip(),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+            self.assertEqual(
+                config.resume.project_inventory_path, config_path.parent / "projects.json"
+            )
+            self.assertEqual(config.resume.project_count, 3)
+
     def test_rejects_an_invalid_resume_bullet_range(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"

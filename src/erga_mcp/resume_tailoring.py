@@ -10,6 +10,7 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 from .models import Evidence
+from .project_inventory import ProjectCandidate, select_projects
 from .resume import ResumeProposal, latex_to_text, resolve_section_name
 
 _TOKEN = re.compile(r"[a-z0-9+#.]+")
@@ -94,7 +95,7 @@ _RELEVANCE_CLUSTERS = (
     frozenset({"pytorch", "tensorflow", "machine", "ml", "model", "inference"}),
     frozenset({"test", "testing", "pytest", "quality", "reliability"}),
 )
-TAILORING_VERSION = 4
+TAILORING_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -378,6 +379,33 @@ def _evidence_ids_for_claim(text: str, evidence: list[Evidence]) -> list[str]:
     return [item.id for item in evidence if _normalized(item.text) == normalized_claim]
 
 
+def _project_claim_records(
+    projects: tuple[ProjectCandidate, ...],
+) -> list[dict[str, object]]:
+    """Record explicit approved-evidence provenance for every selected inventory bullet."""
+    records: list[dict[str, object]] = []
+    for project in projects:
+        bullets = _command_spans(project.latex, "resumeItem")
+        if len(bullets) != len(project.bullet_evidence_ids) or any(
+            not evidence_ids for evidence_ids in project.bullet_evidence_ids
+        ):
+            raise ValueError("project inventory bullet_evidence_ids must map every bullet")
+        for index, (span, evidence_ids) in enumerate(
+            zip(bullets, project.bullet_evidence_ids, strict=True), start=1
+        ):
+            records.append(
+                {
+                    "evidence_ids": list(evidence_ids),
+                    "project_id": project.id,
+                    "project_title": project.title,
+                    "source_kind": "project_inventory",
+                    "source_ref": f"project_inventory/{project.id}/{index}",
+                    "text": latex_to_text(span.content),
+                }
+            )
+    return records
+
+
 def _claim_records(
     *, section: str, claims: list[_RankedValue], evidence: list[Evidence]
 ) -> list[dict[str, object]]:
@@ -477,8 +505,10 @@ def create_automatic_resume_proposal(
     bullet_min_chars: int = 0,
     bullet_target_chars: int = 0,
     bullet_max_chars: int = 0,
+    project_candidates: tuple[ProjectCandidate, ...] = (),
+    project_count: int = 4,
 ) -> AutomaticResumeProposal:
-    """Tailor a resume by reordering only user-provided claims and skill values."""
+    """Tailor a résumé using only user-provided claims and approved project blocks."""
     if resume_path.suffix.casefold() != ".tex" or not resume_path.is_file():
         raise ValueError("resume_path must point to an existing .tex file")
     if any(not item.approved for item in evidence):
@@ -491,7 +521,13 @@ def create_automatic_resume_proposal(
     requested = {re.sub(r"[^a-z0-9]+", "", item.casefold()) for item in editable_sections}
     changed_sections: list[str] = []
     claims: list[dict[str, object]] = []
+    project_claims: list[dict[str, object]] = []
     skill_records: list[dict[str, object]] = []
+    project_selection: dict[str, object] = {
+        "candidate_count": len(project_candidates),
+        "mode": "reorder_only",
+        "selected_ids": [],
+    }
 
     for requested_name, tailorer in (
         ("Experience", _tailor_experience),
@@ -501,10 +537,34 @@ def create_automatic_resume_proposal(
         if key not in requested:
             continue
         start, end, canonical = _section_body(proposed, requested_name)
+        if requested_name == "Projects" and project_candidates:
+            selected_projects = select_projects(
+                project_candidates, job_description, max_projects=project_count
+            )
+            if not selected_projects:
+                project_selection = {
+                    "candidate_count": len(project_candidates),
+                    "mode": "inventory_no_match",
+                    "selected_ids": [],
+                    "selected_titles": [],
+                }
+                # An enabled arsenal owns Projects selection; do not reshuffle stale entries.
+                continue
+            prefix, _, suffix = _entry_ranges(proposed[start:end], "resumeProjectHeading")
+            inventory_section = prefix + "".join(item.latex for item in selected_projects) + suffix
+            proposed = _replace_section_body(proposed, canonical, inventory_section)
+            start, end, canonical = _section_body(proposed, requested_name)
+            project_selection = {
+                "candidate_count": len(project_candidates),
+                "mode": "inventory",
+                "selected_ids": [item.id for item in selected_projects],
+                "selected_titles": [item.title for item in selected_projects],
+            }
+            project_claims = _project_claim_records(selected_projects)
         tailored, section_claims, changed = tailorer(proposed[start:end], job_description)
         proposed = _replace_section_body(proposed, canonical, tailored)
         claims.extend(_claim_records(section=canonical, claims=section_claims, evidence=evidence))
-        if changed:
+        if changed or project_selection["mode"] == "inventory":
             changed_sections.append(canonical)
 
     skills_key = re.sub(r"[^a-z0-9]+", "", "Technical Skills".casefold())
@@ -525,6 +585,16 @@ def create_automatic_resume_proposal(
     if violations:
         proposed = original
         changed_sections = []
+        claims = []
+        project_claims = []
+        skill_records = []
+        if project_candidates:
+            project_selection = {
+                "candidate_count": len(project_candidates),
+                "mode": "inventory_constraint_fallback",
+                "selected_ids": [],
+                "selected_titles": [],
+            }
 
     meaningful_change = proposed != original
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -553,6 +623,8 @@ def create_automatic_resume_proposal(
                 "claims": claims,
                 "constraints": {"bullet_characters": length_report},
                 "external_sync": "not performed",
+                "project_claims": project_claims,
+                "project_selection": project_selection,
                 "skills": skill_records,
                 "source_modified": False,
                 "tailoring": {
