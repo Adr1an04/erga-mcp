@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 import socket
 import ssl
@@ -499,6 +500,44 @@ def fetch_public_page(page_url: str) -> str:
     raise result
 
 
+def _shopify_embedded_job_text(page: str) -> str:
+    """Recover Shopify's server-delivered job description without executing page code.
+
+    Shopify serializes the posting into an escaped hydration-data string while rendering only
+    navigation in the initial HTML.  Restrict this fallback to a single matching payload and
+    preserve it as untrusted text for the existing deterministic parser.
+    """
+    for match in re.finditer(r'"((?:\\.|[^"\\])*)"', page):
+        try:
+            value = json.loads(f'"{match.group(1)}"')
+        except json.JSONDecodeError:
+            continue
+        if (
+            "Being a Shopify Intern" not in value
+            or "Qualifications:" not in value
+            or "Compensation:" not in value
+        ):
+            continue
+        intern_start = value.find("Being a Shopify Intern")
+        start = value.rfind("About the role", 0, intern_start)
+        if start < 0:
+            start = intern_start
+        end = value.find("Description du poste", start)
+        relevant = value[start:end] if end >= 0 else value[start:]
+        return relevant.replace("\\n", "\n").replace("\\\"", '"').replace("\\u003c", "<").replace(
+            "\\u003e", ">"
+        )
+    return ""
+
+
+def _is_shopify_careers_url(job_url: str) -> bool:
+    parsed = urlsplit(job_url)
+    hostname = (parsed.hostname or "").casefold()
+    return (
+        hostname == "shopify.com" or hostname.endswith(".shopify.com")
+    ) and parsed.path.casefold().startswith("/careers/")
+
+
 def fetch_job_snapshot(job_url: str) -> str:
     """Retrieve a job page as untrusted text within one 30-second deadline.
 
@@ -512,6 +551,10 @@ def fetch_job_snapshot(job_url: str) -> str:
         )
     page = fetch_public_page(job_url)
     text = build_job_snapshot(page)
+    if _is_shopify_careers_url(job_url):
+        embedded = _shopify_embedded_job_text(page)
+        if embedded:
+            text = "\n\n".join(part for part in (text, embedded) if part.strip())
     if not text:
         raise ValueError("job page did not contain readable text")
     return text

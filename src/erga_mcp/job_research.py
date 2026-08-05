@@ -270,6 +270,17 @@ def _has_career_host_and_detail_path(job_url: str) -> bool:
     return bool(hostname_parts & _JOB_HOST_LABELS) and bool(path_parts & _JOB_PATH_SEGMENTS)
 
 
+def _is_shopify_career_detail_url(job_url: str) -> bool:
+    parsed = urlsplit(job_url)
+    hostname = (parsed.hostname or "").casefold()
+    path_parts = [part for part in parsed.path.split("/") if part]
+    return (
+        (hostname == "shopify.com" or hostname.endswith(".shopify.com"))
+        and len(path_parts) >= 2
+        and path_parts[0].casefold() == "careers"
+    )
+
+
 def _credible_structured_job_posting(snapshot: str) -> bool:
     posting = _structured_job_posting(snapshot)
     if posting is None:
@@ -299,6 +310,11 @@ def require_job_posting(snapshot: str, *, job_url: str) -> None:
         return
     content = official_job_text(snapshot)
     has_role = _JOB_ROLE_SIGNAL.search(content) is not None
+    if _is_shopify_career_detail_url(job_url) and has_role and all(
+        marker in content
+        for marker in ("Being a Shopify Intern", "Qualifications:", "Compensation:")
+    ):
+        return
     has_all_posting_sections = all(
         signal.search(content) is not None for signal in _JOB_CONTENT_SIGNALS
     )
