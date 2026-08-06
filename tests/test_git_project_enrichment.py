@@ -4,6 +4,7 @@ import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from erga_mcp.git_evidence import GitCommit
@@ -166,6 +167,17 @@ class GitProjectEnrichmentTests(unittest.TestCase):
                     "erga_mcp.git_project_enrichment.analyze_commits",
                     return_value=observations,
                 ),
+                patch(
+                    "erga_mcp.git_project_enrichment.summarize_git_project_metrics",
+                    return_value=SimpleNamespace(
+                        attribution="connected_github_user",
+                        commit_count=1,
+                        source_files_changed=1,
+                        test_files_changed=1,
+                        languages=("Python",),
+                        resume_use="supporting_evidence_only",
+                    ),
+                ) as summarize_metrics,
             ):
                 result = enrich_ranked_projects_from_git(
                     candidates=candidates,
@@ -190,6 +202,10 @@ class GitProjectEnrichmentTests(unittest.TestCase):
         self.assertTrue(result.evidence[0].approved)
         self.assertTrue(result.evidence[0].source_ref.startswith("git-derived:api-platform@"))
         self.assertEqual(result.reports[0]["authored_commits"], 1)
+        repository_report = result.reports[0]["repositories"][0]
+        self.assertTrue(repository_report["metric_context"]["has_test_changes"])
+        self.assertEqual(repository_report["metric_context"]["languages"], ["Python"])
+        self.assertEqual(summarize_metrics.call_args.kwargs["attributed_commit_shas"], {"a" * 40})
         self.assertEqual(result.reports[0]["resume_bullets_source"], "approved_catalogue")
         self.assertEqual(result.warnings, ())
 

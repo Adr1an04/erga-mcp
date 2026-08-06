@@ -9,7 +9,12 @@ from typing import Any, Protocol
 from mcp.types import SamplingMessage, TextContent, Tool, ToolChoice, ToolUseContent
 
 from .models import Evidence
-from .project_inventory import ProjectCandidate, project_quality_issues
+from .project_inventory import (
+    ProjectCandidate,
+    project_quality_issues,
+    select_project_rationales,
+    select_projects,
+)
 from .resume import latex_to_text, replace_section_contents, resume_item_texts
 
 _NUMBER = re.compile(
@@ -242,6 +247,7 @@ def _validate_submission(
     baseline_leads: frozenset[str],
     allowed_leads: frozenset[str],
     require_unique_lead_verbs: bool,
+    required_project_ids: tuple[str, ...],
 ) -> tuple[ProjectCandidate, ...]:
     raw_projects = submission.get("projects")
     if not isinstance(raw_projects, list) or len(raw_projects) != project_count:
@@ -337,6 +343,11 @@ def _validate_submission(
         if issues:
             raise ValueError("AI-authored project contains internal research prose")
         drafted.append(candidate)
+    if required_project_ids and selected_ids != set(required_project_ids):
+        raise ValueError(
+            "the tailoring model must preserve the required project selection: "
+            + ", ".join(required_project_ids)
+        )
     return tuple(drafted)
 
 
@@ -356,6 +367,7 @@ async def draft_evidence_backed_projects(
     bullet_max_chars: int,
     require_unique_lead_verbs: bool,
     retry_feedback: str = "",
+    required_project_ids: tuple[str, ...] = (),
 ) -> AIProjectTailoring:
     """Ask the connected MCP client's model for bounded, evidence-cited project bullets."""
     evidence_by_id = {item.id: item for item in evidence if item.approved}
@@ -363,6 +375,31 @@ async def draft_evidence_backed_projects(
         project_id: report
         for report in reports
         if isinstance((project_id := report.get("project_id")), str)
+    }
+    if required_project_ids and (
+        len(required_project_ids) != project_count
+        or len(set(required_project_ids)) != len(required_project_ids)
+    ):
+        raise ValueError("required_project_ids must contain the exact distinct project selection")
+    ranked = list(
+        select_projects(
+            candidates,
+            job_description,
+            max_projects=max(1, len(candidates)),
+            minimum_bullets=bullets_per_project,
+        )
+    )
+    ranked_ids = {candidate.id for candidate in ranked}
+    ranked.extend(candidate for candidate in candidates if candidate.id not in ranked_ids)
+    relevance_rank = {candidate.id: index + 1 for index, candidate in enumerate(ranked)}
+    rationales = {
+        rationale.id: rationale
+        for rationale in select_project_rationales(
+            candidates,
+            job_description,
+            max_projects=max(1, len(candidates)),
+            minimum_bullets=bullets_per_project,
+        )
     }
     contexts: list[dict[str, object]] = []
     candidate_by_id: dict[str, ProjectCandidate] = {}
@@ -380,12 +417,29 @@ async def draft_evidence_backed_projects(
         candidate_by_id[candidate.id] = candidate
         source_text_by_project[candidate.id] = scoped_text
         allowed_ids_by_project[candidate.id] = allowed_ids
+        raw_repository_reports = report.get("repositories")
+        repository_reports = (
+            [item for item in raw_repository_reports if isinstance(item, dict)]
+            if isinstance(raw_repository_reports, list)
+            else []
+        )
+        git_engineering_signals = [
+            context
+            for repository_report in repository_reports
+            if isinstance((context := repository_report.get("metric_context")), dict)
+            and context.get("status") == "verified"
+        ]
+        rationale = rationales.get(candidate.id)
         contexts.append(
             {
                 "project_id": candidate.id,
                 "title": candidate.title,
                 "tags": list(candidate.tags),
                 "repositories": list(candidate.git_repositories),
+                "relevance_rank": relevance_rank[candidate.id],
+                "matched_role_terms": list(rationale.matched_terms) if rationale else [],
+                "matched_role_signals": list(rationale.matched_signals) if rationale else [],
+                "git_engineering_signals_for_ranking_only": git_engineering_signals,
                 "sources": sources,
             }
         )
@@ -401,8 +455,13 @@ async def draft_evidence_backed_projects(
         raise ValueError("not enough unused action verbs are available for AI project bullets")
     retry_forbidden_numbers = tuple(dict.fromkeys(_NUMBER.findall(retry_feedback)))
     prompt = {
-        "task": "Select the strongest projects for the job and draft new resume bullets.",
+        "task": (
+            "Rewrite the required projects without changing the selection."
+            if required_project_ids
+            else "Select the strongest projects for the job and draft new resume bullets."
+        ),
         "retry_feedback": retry_feedback,
+        "required_project_ids": list(required_project_ids),
         "forbidden_numeric_tokens_from_prior_attempt": list(retry_forbidden_numbers),
         "job_description": job_description,
         "project_count": project_count,
@@ -438,8 +497,13 @@ async def draft_evidence_backed_projects(
         "and paraphrase supported facts, but never invent a metric, technology, result, scale, "
         "ownership claim, or implementation detail. Preserve every number exactly as supported. "
         "Never add a year or date from general knowledge. "
-        "Do not mention commits, diffs, files, line counts, evidence, Git, or the tailoring "
-        "process. "
+        "Match the specificity and polish of the approved_resume_bullet sources. Combine concrete "
+        "diff-backed implementation details with approved outcome metrics when both are supported; "
+        "never replace an outcome with Git accounting or generic task prose. Prefer required role "
+        "terms, matched role signals, and complementary engineering depth when selecting projects. "
+        "Use relevance_rank, matched role signals, and Git engineering signals only to compare "
+        "projects; they are not publishable claims. Do not mention commits, diffs, files, line "
+        "counts, evidence, Git, or the tailoring process. "
         "When allowed_lead_verbs is non-empty, begin every bullet with a different verb from that "
         "exact list; no two bullets anywhere in the submission may share a lead verb. Return plain "
         "text, never LaTeX. Prefer concrete engineering scope and outcomes over generic prose."
@@ -460,6 +524,11 @@ async def draft_evidence_backed_projects(
                     )
                 ),
             )
+        )
+    if required_project_ids:
+        system_prompt += (
+            " Preserve exactly the required_project_ids selection. Do not substitute another "
+            "project during correction; rewrite the same projects to fix copy or layout defects."
         )
     result = await session.create_message(
         messages,
@@ -493,6 +562,7 @@ async def draft_evidence_backed_projects(
         baseline_leads=baseline_leads,
         allowed_leads=frozenset(verb.casefold() for verb in allowed_lead_verbs),
         require_unique_lead_verbs=require_unique_lead_verbs,
+        required_project_ids=required_project_ids,
     )
     return AIProjectTailoring(
         candidates=drafted,

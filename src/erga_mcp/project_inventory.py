@@ -209,6 +209,14 @@ _INTERNAL_RESEARCH_PATTERNS = (
         "code-churn wording",
         re.compile(r"\b(?:code|lines?)\s+(?:added|removed|changed)\b", re.I),
     ),
+    (
+        "generic low-signal résumé wording",
+        re.compile(
+            r"\b(?:added code|code added|helped with|responsible for|worked on|"
+            r"various (?:features|tasks)|multiple tasks)\b",
+            re.I,
+        ),
+    ),
 )
 
 

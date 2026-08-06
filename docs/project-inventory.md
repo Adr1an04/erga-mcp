@@ -44,14 +44,21 @@ Erga rejects duplicate IDs, missing/unapproved evidence IDs, non-project LaTeX b
 - When the connected MCP client advertises sampling, Erga researches authenticated authored-Git
   changes for a broader shortlist (up to twice the final project count). The host model then chooses
   the final projects and drafts new bullets from only the bounded project evidence it receives.
+- Git scope analysis recognizes implementation and test files while excluding generated output,
+  dependencies, lockfiles, snapshots, documentation, data, and media. Language/test signals may
+  help rank projects, but raw commit, file, and line totals remain non-publishable supporting facts.
 - Every model-authored bullet must cite evidence IDs for that same project. Server-side validation
   rejects invented numbers, cross-project evidence, raw commit/file/line accounting, duplicate
   lead verbs, unsafe LaTeX, hard character overflow, and rendered line wrapping.
 - The configured minimum character count is a soft preference. Underflow is recorded for review;
   it never aborts an otherwise complete bullet or intake. The maximum and one-line layout remain
   hard constraints, and Erga retries model copy with progressively tighter caps when necessary.
-- When client sampling is unavailable or model validation cannot be repaired, the deterministic
-  fallback selects and copies approved inventory blocks. Its ties are deterministic by project ID.
+- Once the model chooses a valid project set, layout and copy retries lock those project IDs. A
+  wrapped bullet must be rewritten for the same project instead of silently swapping in a less
+  relevant catalogue entry.
+- When client sampling is unavailable, the deterministic fallback selects and copies approved
+  inventory blocks. If sampling was available but model validation cannot be repaired, Erga keeps
+  the master résumé projects rather than lowering quality with an unrelated substitution.
 - The package claim report records the inventory mode, candidate count, selected IDs/titles, and a `project_claims` entry for every selected project bullet with its approved evidence IDs.
 - If no inventory project matches in deterministic fallback mode, the report uses
   `inventory_no_match` and leaves the template Projects section unchanged—there is no

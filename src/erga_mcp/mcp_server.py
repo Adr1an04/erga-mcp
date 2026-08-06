@@ -595,6 +595,7 @@ async def _ai_tailored_project_enrichment(
     feedback = ""
     last_error: ValueError | None = None
     model_max_chars = config.resume.bullet_max_chars
+    locked_project_ids: tuple[str, ...] = ()
     for attempt in range(3):
         try:
             drafted = await draft_evidence_backed_projects(
@@ -616,7 +617,10 @@ async def _ai_tailored_project_enrichment(
                 bullet_max_chars=model_max_chars,
                 require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
                 retry_feedback=feedback,
+                required_project_ids=locked_project_ids,
             )
+            if not locked_project_ids:
+                locked_project_ids = tuple(candidate.id for candidate in drafted.candidates)
             selection_plan = plan_resume_project_selection(
                 resume_path=resume_path,
                 candidates=drafted.candidates,
@@ -643,7 +647,8 @@ async def _ai_tailored_project_enrichment(
                 )
                 feedback = (
                     f"{last_error}. Choose candidates and assigned lead verbs that do not repeat "
-                    "the retained resume's verbs, and keep every bullet within the hard maximum."
+                    "the retained resume's verbs, preserve the required project IDs, and keep "
+                    "every bullet within the hard maximum."
                 )
                 continue
             with TemporaryDirectory(prefix="erga-ai-layout-") as layout_directory:
@@ -667,7 +672,8 @@ async def _ai_tailored_project_enrichment(
                 )
                 feedback = (
                     "The prior draft did not fit the configured one-line layout. "
-                    f"Shorten or replace these projects while preserving cited facts: {rejected}. "
+                    f"Rewrite these same projects shorter while preserving cited facts: "
+                    f"{rejected}. Do not replace any required project. "
                     f"The hard character maximum for every retry bullet is {model_max_chars}; "
                     "the former minimum is disabled for this correction."
                 )
@@ -712,7 +718,7 @@ async def _project_enrichment_for_tailoring(
     job_description: str,
     evidence: list[Evidence],
 ) -> GitProjectEnrichment:
-    """Build model-authored project copy when supported, with a safe deterministic fallback."""
+    """Build model-authored project copy, preserving the master when sampling cannot do so."""
     if config.resume.project_selection_mode == "template_only":
         return GitProjectEnrichment((), (), (), (), 0)
     ai_tailoring = _client_supports_ai_tailoring(ctx)
@@ -736,25 +742,18 @@ async def _project_enrichment_for_tailoring(
             evidence=evidence,
             enrichment=enrichment,
         )
-    except Exception as error:  # Sampling/provider failures must preserve local fallback.
-        deterministic = _git_enriched_inventory_candidates(
-            config=config,
-            store=store,
-            evidence=evidence,
-            job_description=job_description,
-            resume_path=resume_path,
-        )
+    except Exception as error:  # Sampling/provider failures must never lower résumé quality.
         return GitProjectEnrichment(
-            candidates=deterministic.candidates,
-            evidence=deterministic.evidence,
-            reports=deterministic.reports,
+            candidates=(),
+            evidence=enrichment.evidence,
+            reports=enrichment.reports,
             warnings=(
-                "Host-model project tailoring was unavailable; used the deterministic "
-                f"evidence-only fallback: {error}",
-                *deterministic.warnings,
+                "Host-model project tailoring was unavailable; preserved and only reordered "
+                f"the configured master résumé projects instead of substituting weaker copy: "
+                f"{error}",
+                *enrichment.warnings,
             ),
-            catalogue_candidate_count=deterministic.catalogue_candidate_count,
-            quality_rejections=deterministic.quality_rejections,
+            catalogue_candidate_count=enrichment.catalogue_candidate_count,
         )
 
 
@@ -1865,18 +1864,19 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
 
     @profile_tool(
         "propose_project_metrics",
-        title="Propose attributable Git-backed project metrics",
+        title="Analyze attributable Git-backed project scope",
         description=(
-            "Inspect a single explicit local Git worktree and propose review-only, "
-            "author-attributed project metrics. It never estimates business impact, test "
-            "coverage, or performance; it never writes evidence or changes a resume."
+            "Inspect a single explicit local Git worktree and return review-only, "
+            "author-attributed supporting facts from recognized source and test files. Generated "
+            "assets, dependencies, locks, snapshots, docs, and data are excluded. Results are not "
+            "resume-ready and never estimate impact, coverage, or performance."
         ),
         annotations=_READ_ONLY,
     )
     def propose_project_metrics(
         repo_path: str, author_email: str, commit_limit: int = 200
     ) -> dict[str, object]:
-        """Return user-confirmation-required Git metrics for one explicit repository."""
+        """Return user-confirmation-required Git scope facts for one explicit repository."""
         proposal = propose_git_project_metrics(
             Path(repo_path), author_email=author_email, commit_limit=commit_limit
         )

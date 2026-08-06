@@ -18,6 +18,7 @@ from .github_projects import (
 )
 from .models import Evidence, GitResearchBullet
 from .project_inventory import ProjectCandidate, select_projects, with_canonical_project_link
+from .project_metrics import project_metric_model_context, summarize_git_project_metrics
 from .store import ErgaStore
 
 _TOKEN = re.compile(r"[a-z0-9+#.]+")
@@ -257,6 +258,23 @@ def enrich_ranked_projects_from_git(
                 observations = analyze_commits(worktree, commits)
                 for observation in observations:
                     store.save_git_change_observation(observation)
+                metric_context: dict[str, object]
+                try:
+                    metrics = summarize_git_project_metrics(
+                        worktree,
+                        attributed_commit_shas={commit.sha for commit in commits},
+                    )
+                except ValueError as error:
+                    metric_context = {
+                        "status": "unavailable",
+                        "reason": str(error),
+                        "resume_use": "supporting_evidence_only",
+                    }
+                else:
+                    metric_context = {
+                        "status": "verified",
+                        **project_metric_model_context(metrics),
+                    }
                 summary, bullets = synthesize_diff_research(
                     str(worktree),
                     observations,
@@ -279,6 +297,7 @@ def enrich_ranked_projects_from_git(
                         "repository": repository,
                         "authored_commits": len(commits),
                         "observed_commits": len(observations),
+                        "metric_context": metric_context,
                     }
                 )
         except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:

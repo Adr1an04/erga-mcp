@@ -27,6 +27,7 @@ from erga_mcp.mcp_server import (
     _compile_intake_proposal,
     _layout_safe_project_selection,
     _metadata_from_url,
+    _project_enrichment_for_tailoring,
     _require_constraint_valid_proposal,
     _require_master_template_parity,
     build_server,
@@ -209,6 +210,72 @@ class McpServerTests(unittest.TestCase):
                 [call.kwargs["bullet_min_chars"] for call in draft.await_args_list],
                 [99, 0],
             )
+            self.assertEqual(
+                [call.kwargs["required_project_ids"] for call in draft.await_args_list],
+                [(), ("api",)],
+            )
+            self.assertIn(
+                "Do not replace any required project",
+                draft.await_args_list[1].kwargs["retry_feedback"],
+            )
+
+    def test_ai_failure_preserves_master_projects_instead_of_weak_catalogue_fallback(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            resume = root / "resume.tex"
+            resume.write_text("synthetic resume", encoding="utf-8")
+            config_path = root / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config = load_config(config_path)
+            evidence = Evidence(
+                "ev_api",
+                "approved:api",
+                "Approved API evidence.",
+                True,
+                datetime.now(UTC),
+            )
+            candidate = ProjectCandidate(
+                id="api",
+                title="API",
+                latex="synthetic project",
+                evidence_ids=(evidence.id,),
+                bullet_evidence_ids=((evidence.id,),),
+                tags=("python", "api"),
+            )
+            enrichment = GitProjectEnrichment(
+                candidates=(candidate,),
+                evidence=(),
+                reports=({"project_id": "api", "title": "API", "evidence_ids": []},),
+                warnings=(),
+                catalogue_candidate_count=1,
+            )
+            with (
+                patch("erga_mcp.mcp_server._client_supports_ai_tailoring", return_value=True),
+                patch(
+                    "erga_mcp.mcp_server._git_enriched_inventory_candidates",
+                    return_value=enrichment,
+                ),
+                patch(
+                    "erga_mcp.mcp_server._ai_tailored_project_enrichment",
+                    new=AsyncMock(side_effect=ValueError("bad model copy")),
+                ),
+            ):
+                result = asyncio.run(
+                    _project_enrichment_for_tailoring(
+                        ctx=SimpleNamespace(),
+                        config=config,
+                        store=ErgaStore(root / "state.sqlite3"),
+                        resume_path=resume,
+                        job_description="Python API",
+                        evidence=[evidence],
+                    )
+                )
+
+        self.assertEqual(result.candidates, ())
+        self.assertEqual(result.reports, enrichment.reports)
+        self.assertIn("preserved and only reordered", result.warnings[0])
 
     def test_layout_fallback_rejects_a_wrapped_project_and_selects_the_next_candidate(
         self,
@@ -715,7 +782,9 @@ class McpServerTests(unittest.TestCase):
 
         self.assertEqual(payload["commit_count"], 1)
         self.assertTrue(payload["requires_user_confirmation"])
-        self.assertEqual(len(payload["resume_metric_candidates"]), 3)
+        self.assertEqual(payload["resume_use"], "supporting_evidence_only")
+        self.assertEqual(len(payload["review_facts"]), 3)
+        self.assertNotIn("resume_metric_candidates", payload)
 
     def test_git_research_tool_requires_existing_explicit_roots(self) -> None:
         with TemporaryDirectory() as directory:

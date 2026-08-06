@@ -82,7 +82,13 @@ class AIResumeTailoringTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ASCII"):
             _latex_text("Shipped an interface 🚀")
 
-    def _draft(self, submission: dict[str, object], *, retry_feedback: str = ""):
+    def _draft(
+        self,
+        submission: dict[str, object],
+        *,
+        retry_feedback: str = "",
+        required_project_ids: tuple[str, ...] = (),
+    ):
         with TemporaryDirectory() as directory:
             resume = Path(directory) / "resume.tex"
             resume.write_text(
@@ -134,6 +140,19 @@ class AIResumeTailoringTests(unittest.TestCase):
                         {
                             "project_id": "api-platform",
                             "evidence_ids": ["ev_git"],
+                            "repositories": [
+                                {
+                                    "repository": "example/api-platform",
+                                    "metric_context": {
+                                        "status": "verified",
+                                        "attributed_changes_observed": True,
+                                        "has_implementation_changes": True,
+                                        "has_test_changes": True,
+                                        "languages": ["Python"],
+                                        "resume_use": "supporting_evidence_only",
+                                    },
+                                }
+                            ],
                         },
                     ),
                     project_count=1,
@@ -143,6 +162,7 @@ class AIResumeTailoringTests(unittest.TestCase):
                     bullet_max_chars=116,
                     require_unique_lead_verbs=True,
                     retry_feedback=retry_feedback,
+                    required_project_ids=required_project_ids,
                 )
             )
             return result, session
@@ -194,6 +214,61 @@ class AIResumeTailoringTests(unittest.TestCase):
         prompt = json.loads(messages[0].content.text)
         self.assertIn("Engineered", prompt["allowed_lead_verbs"])
         self.assertIn("Validated", prompt["allowed_lead_verbs"])
+        self.assertEqual(prompt["projects"][0]["relevance_rank"], 1)
+        self.assertTrue(
+            prompt["projects"][0]["git_engineering_signals_for_ranking_only"][0]["has_test_changes"]
+        )
+
+    def test_retry_can_lock_the_semantic_project_selection_during_copy_repair(self) -> None:
+        result, session = self._draft(
+            {
+                "projects": [
+                    {
+                        "project_id": "api-platform",
+                        "bullets": [
+                            {
+                                "text": "Engineered a Python API serving 100 users safely.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                            {
+                                "text": "Validated 20 API routes across request failures.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                        ],
+                    }
+                ]
+            },
+            retry_feedback="Shorten the same project bullets.",
+            required_project_ids=("api-platform",),
+        )
+
+        self.assertEqual(result.candidates[0].id, "api-platform")
+        prompt = json.loads(session.messages[0][0].content.text)
+        self.assertEqual(prompt["required_project_ids"], ["api-platform"])
+        self.assertIn("Do not substitute another project", session.calls[0]["system_prompt"])
+
+    def test_rejects_a_retry_that_substitutes_a_locked_project(self) -> None:
+        with self.assertRaisesRegex(ValueError, "preserve the required project selection"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": "Engineered a Python API serving 100 users safely.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated 20 API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                required_project_ids=("different-project",),
+            )
 
     def test_rejects_a_metric_absent_from_the_cited_project_evidence(self) -> None:
         with self.assertRaisesRegex(ValueError, "number absent.*999"):
