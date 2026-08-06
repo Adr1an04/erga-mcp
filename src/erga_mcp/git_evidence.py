@@ -206,6 +206,7 @@ def synthesize_diff_research(
     candidates: list[GitEvidenceCandidate],
     *,
     minimum_characters: int = 0,
+    target_characters: int = 0,
     maximum_characters: int = 0,
 ) -> tuple[str, list[GitResearchBullet]]:
     """Create factual, review-only workstreams from stored diff observations, never subjects."""
@@ -227,6 +228,7 @@ def synthesize_diff_research(
             files,
             group,
             minimum_characters=minimum_characters,
+            target_characters=target_characters,
             maximum_characters=maximum_characters,
         )
         if description is None:
@@ -356,6 +358,7 @@ def _describe_change(
     observations: list[GitChangeObservation],
     *,
     minimum_characters: int = 0,
+    target_characters: int = 0,
     maximum_characters: int = 0,
 ) -> str | None:
     if not files:
@@ -376,14 +379,44 @@ def _describe_change(
             shortened = shortened.rsplit(" ", maxsplit=1)[0]
         focus = re.sub(r"\s+(?:and|or)$", "", shortened)
     description = prefix + focus
-    for suffix in (
-        " with diff-backed validation",
-        " via reviewed diffs",
-        " from Git history",
-    ):
-        if minimum_characters and len(description) < minimum_characters:
-            if not maximum_characters or len(description + suffix) <= maximum_characters:
-                description += suffix
+    # Leave enough room for the longest configured lead-verb shortening. For example,
+    # replacing "Implemented" with "Added" removes six characters. Generating at the hard
+    # minimum made a valid 99-character bullet become an invalid 93-98-character bullet during
+    # the subsequent uniqueness repair.
+    preferred_minimum = max(minimum_characters, target_characters)
+    if minimum_characters:
+        preferred_minimum = max(preferred_minimum, minimum_characters + 6)
+    if maximum_characters:
+        preferred_minimum = min(preferred_minimum, maximum_characters)
+
+    if len(description) < preferred_minimum:
+        suffixes = (
+            " via Git",
+            " from Git",
+            " in Git diffs",
+            " via Git diffs",
+            " from Git diffs",
+            " from Git history",
+            " through Git diffs",
+            " via reviewed diffs",
+            " with reviewed diffs",
+            " through reviewed diffs",
+            " with diff-backed validation",
+        )
+        candidates = [
+            description + suffix
+            for suffix in suffixes
+            if len(description + suffix) >= preferred_minimum
+            and (not maximum_characters or len(description + suffix) <= maximum_characters)
+        ]
+        if candidates:
+            description = min(candidates, key=lambda value: (len(value), value))
+
+    # The lower bound is a presentation preference, not a validity boundary. Preserve a
+    # complete Git-backed statement when padding cannot reach the target; downstream
+    # validation records the underflow as a soft deviation instead of aborting intake.
+    if maximum_characters and len(description) > maximum_characters:
+        return None
     return description
 
 

@@ -151,6 +151,7 @@ class GitProjectEnrichmentTests(unittest.TestCase):
                     project_count=1,
                     bullets_per_project=2,
                     bullet_min_characters=99,
+                    bullet_target_characters=105,
                     bullet_max_characters=116,
                     store=store,
                     cache_root=root / "cache",
@@ -161,6 +162,7 @@ class GitProjectEnrichmentTests(unittest.TestCase):
         self.assertIn("1 commit", result.candidates[0].latex)
         self.assertIn("2 files", result.candidates[0].latex)
         self.assertIn("+120/-18 lines", result.candidates[0].latex)
+        self.assertTrue(all(105 <= len(item.text) <= 116 for item in result.evidence))
         self.assertEqual(len(result.evidence), 1)
         self.assertTrue(result.evidence[0].approved)
         self.assertTrue(result.evidence[0].source_ref.startswith("git-derived:api-platform@"))
@@ -175,6 +177,7 @@ class GitProjectEnrichmentTests(unittest.TestCase):
                 project_count=1,
                 bullets_per_project=2,
                 bullet_min_characters=0,
+                bullet_target_characters=0,
                 bullet_max_characters=0,
                 store=ErgaStore(Path(directory) / "state.sqlite3"),
                 cache_root=Path(directory) / "cache",

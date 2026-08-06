@@ -199,7 +199,7 @@ _LEAD_VERB_ALTERNATIVES = {
     "shipped": ("Delivered", "Released", "Launched", "Published", "Deployed", "Produced"),
     "won": ("Earned", "Secured", "Captured"),
 }
-TAILORING_VERSION = 11
+TAILORING_VERSION = 12
 
 
 @dataclass(frozen=True)
@@ -574,12 +574,16 @@ def _bullet_constraint_report(
         original_counts[text] = original_counts.get(text, 0) + 1
     legacy: list[dict[str, object]] = []
     introduced: list[dict[str, object]] = []
+    soft_deviations: list[dict[str, object]] = []
     seen: dict[str, int] = {}
     equivalents = equivalent_originals or {}
     if configured:
         for text in proposed_text:
             length = len(text)
             if minimum <= length <= maximum:
+                continue
+            if length < minimum:
+                soft_deviations.append({"length": length, "text": text})
                 continue
             source_text = equivalents.get(text, text)
             occurrence = seen.get(source_text, 0)
@@ -601,6 +605,7 @@ def _bullet_constraint_report(
             "minimum": minimum,
             "new_violations": introduced,
             "passed": not introduced,
+            "soft_deviations": soft_deviations,
             "target": target,
         },
         violations,

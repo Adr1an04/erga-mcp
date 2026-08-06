@@ -576,7 +576,7 @@ class McpServerTests(unittest.TestCase):
                 )
             self.assertIn("inside configured resume output_root", str(error.exception))
 
-    def test_create_tailored_resume_enforces_configured_new_bullet_lengths(self) -> None:
+    def test_create_tailored_resume_softens_configured_minimum_bullet_length(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "config.toml"
@@ -600,21 +600,25 @@ class McpServerTests(unittest.TestCase):
             )
             server = build_server(config_path)
 
-            with self.assertRaises(Exception) as error:
-                asyncio.run(
-                    server.call_tool(
-                        "create_tailored_resume",
-                        {
-                            "package_dir": str(package),
-                            "section": "Experience",
-                            "latex_content": "\\resumeItem{Too short}",
-                            "evidence_ids": [evidence.id],
-                        },
-                    )
+            call: Any = asyncio.run(
+                server.call_tool(
+                    "create_tailored_resume",
+                    {
+                        "package_dir": str(package),
+                        "section": "Experience",
+                        "latex_content": "\\resumeItem{Too short}",
+                        "evidence_ids": [evidence.id],
+                    },
                 )
+            )
 
-            self.assertIn("between 90 and 120", str(error.exception))
-            self.assertFalse((package / "artifacts" / "proposal.tex").exists())
+            result = cast(dict[str, Any], call.structured_content)
+            report = json.loads(Path(result["claim_report"]).read_text(encoding="utf-8"))
+            lengths = report["constraints"]["bullet_characters"]
+            self.assertTrue(lengths["passed"])
+            self.assertEqual(lengths["violations"], [])
+            self.assertEqual(lengths["soft_deviations"][0]["length"], 9)
+            self.assertTrue((package / "artifacts" / "proposal.tex").exists())
 
     def test_scrape_tools_return_bounded_untrusted_content(self) -> None:
         from erga_mcp.web_scraping import ScrapedPage
@@ -1032,7 +1036,7 @@ class McpServerTests(unittest.TestCase):
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
             self.assertTrue(result["tailoring_meaningful_change"])
             self.assertEqual(result["tailoring_changed_sections"], ["Experience"])
-            self.assertEqual(result["tailoring_version"], 11)
+            self.assertEqual(result["tailoring_version"], 12)
             self.assertEqual(result["git_project_research"], [])
             output_pdf = Path(result["validation"]["pdf"])
             self.assertEqual(output_pdf.name, "Candidate_Resume.pdf")
@@ -1041,7 +1045,7 @@ class McpServerTests(unittest.TestCase):
                 (Path(result["package_dir"]) / "package.json").read_text(encoding="utf-8")
             )
             self.assertTrue(manifest["tailoring"]["meaningful_change"])
-            self.assertEqual(manifest["tailoring"]["version"], 11)
+            self.assertEqual(manifest["tailoring"]["version"], 12)
 
     def test_rebuilds_an_incomplete_legacy_package_and_preserves_its_files(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1110,7 +1114,7 @@ class McpServerTests(unittest.TestCase):
             )
             manifest = json.loads((repaired / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["legacy_backup"], "legacy-backup")
-            self.assertEqual(manifest["tailoring"]["version"], 11)
+            self.assertEqual(manifest["tailoring"]["version"], 12)
             self.assertIn("Legacy package preserved", result["integration_warnings"][-1])
 
     def test_compile_rejects_a_pdf_over_the_configured_page_cap(self) -> None:

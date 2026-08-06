@@ -82,19 +82,42 @@ class ResumeEditorTests(unittest.TestCase):
             self.assertIn("No approved evidence overlapped", report)
             self.assertIn('"approved_evidence": []', report)
 
-    def test_section_proposal_enforces_configured_limits_on_new_bullets(self) -> None:
+    def test_section_proposal_records_short_bullets_as_soft_deviations(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "resume.tex"
             source.write_text("\\section{Experience}\nold\n", encoding="utf-8")
             evidence = Evidence("ev1", "approved", "verified", True, datetime.now(UTC))
 
-            with self.assertRaisesRegex(ValueError, "between 90 and 120.*received 9"):
+            proposal = create_section_resume_proposal(
+                resume_path=source,
+                output_dir=root / "proposal",
+                section_name="Experience",
+                latex_content="\\resumeItem{Too short}",
+                evidence=[evidence],
+                bullet_min_chars=90,
+                bullet_target_chars=105,
+                bullet_max_chars=120,
+            )
+
+            report = proposal.claim_report_path.read_text(encoding="utf-8")
+            self.assertIn('"passed": true', report)
+            self.assertIn('"soft_deviations"', report)
+            self.assertIn('"length": 9', report)
+
+    def test_section_proposal_rejects_bullets_over_the_configured_maximum(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text("\\section{Experience}\nold\n", encoding="utf-8")
+            evidence = Evidence("ev1", "approved", "verified", True, datetime.now(UTC))
+
+            with self.assertRaisesRegex(ValueError, "must not exceed 120.*received 121"):
                 create_section_resume_proposal(
                     resume_path=source,
                     output_dir=root / "proposal",
                     section_name="Experience",
-                    latex_content="\\resumeItem{Too short}",
+                    latex_content=f"\\resumeItem{{{'A' * 121}}}",
                     evidence=[evidence],
                     bullet_min_chars=90,
                     bullet_target_chars=105,

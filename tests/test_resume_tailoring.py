@@ -61,7 +61,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 11)
+        self.assertEqual(TAILORING_VERSION, 12)
 
     def test_relevance_requires_term_boundaries_and_rejects_substring_collisions(self) -> None:
         for skill, unrelated in (
@@ -223,7 +223,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
             self.assertTrue(report["tailoring"]["baseline_fallback"])
             self.assertIn("No meaningful", report["tailoring"]["reason"])
 
-    def test_length_constraints_report_legacy_outliers_without_blocking_safe_reordering(
+    def test_length_constraints_report_legacy_underflows_as_soft_deviations(
         self,
     ) -> None:
         with TemporaryDirectory() as directory:
@@ -245,9 +245,62 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
             report = json.loads(result.proposal.claim_report_path.read_text(encoding="utf-8"))
             lengths = report["constraints"]["bullet_characters"]
             self.assertTrue(lengths["passed"])
-            self.assertGreater(len(lengths["legacy_violations"]), 0)
+            self.assertEqual(lengths["legacy_violations"], [])
             self.assertEqual(lengths["new_violations"], [])
+            self.assertGreater(len(lengths["soft_deviations"]), 0)
             self.assertEqual(result.constraint_violations, ())
+
+    def test_under_minimum_length_is_a_soft_deviation(self) -> None:
+        bullet = "Built a Python API with deterministic tests and reviewed Git provenance."
+        self.assertLess(len(bullet), 98)
+        evidence = Evidence(
+            "ev_soft_length",
+            "git-derived:soft-length",
+            bullet,
+            True,
+            datetime.now(UTC),
+        )
+        project = ProjectCandidate(
+            id="soft-length",
+            title="Soft Length",
+            latex=(
+                r"\resumeProjectHeading{\textbf{Soft Length} $|$ \textit{Python}}{}"
+                "\n"
+                r"\resumeItemListStart"
+                "\n"
+                rf"\resumeItem{{{bullet}}}"
+                "\n"
+                r"\resumeItemListEnd"
+                "\n"
+            ),
+            evidence_ids=(evidence.id,),
+            bullet_evidence_ids=((evidence.id,),),
+            tags=("python", "api"),
+        )
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text(_TEMPLATE, encoding="utf-8")
+            result = create_automatic_resume_proposal(
+                resume_path=source,
+                output_dir=root / "artifacts",
+                job_description="Required Python API",
+                evidence=[evidence],
+                editable_sections=("projects",),
+                bullet_min_chars=99,
+                bullet_target_chars=105,
+                bullet_max_chars=116,
+                project_candidates=(project,),
+                project_count=1,
+            )
+
+            report = json.loads(result.proposal.claim_report_path.read_text(encoding="utf-8"))
+            lengths = report["constraints"]["bullet_characters"]
+            self.assertTrue(result.meaningful_change)
+            self.assertEqual(result.constraint_violations, ())
+            self.assertEqual(lengths["new_violations"], [])
+            self.assertIn({"length": len(bullet), "text": bullet}, lengths["soft_deviations"])
 
     def test_duplicate_lead_verbs_are_resolved_before_constraint_validation(self) -> None:
         with TemporaryDirectory() as directory:
@@ -352,11 +405,11 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
                     "\n"
                     r"\resumeItemListStart"
                     "\n"
-                    rf"\resumeItem{{Implemented Python API workstream {project * 2} "
-                    "from Git history.}"
+                    rf"\resumeItem{{Implemented Python API workstream {project * 2} across "
+                    "reviewed commits and files with deterministic Git provenance.}"
                     "\n"
-                    rf"\resumeItem{{Implemented Python testing workstream {project * 2 + 1} "
-                    "from Git history.}"
+                    rf"\resumeItem{{Implemented Python API workstream {project * 2 + 1} across "
+                    "reviewed commits and files with deterministic Git provenance.}"
                     "\n"
                     r"\resumeItemListEnd"
                     "\n"
@@ -381,6 +434,9 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
                 editable_sections=("projects",),
                 project_candidates=projects,
                 project_count=3,
+                bullet_min_chars=99,
+                bullet_target_chars=105,
+                bullet_max_chars=116,
                 require_unique_lead_verbs=True,
             )
 

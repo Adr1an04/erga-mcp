@@ -188,16 +188,22 @@ def resume_bullet_length_report(
     bullets = tuple(
         latex_to_text(value) for value in _command_arguments(latex_content, "resumeItem")
     )
+    soft_deviations = [
+        {"length": len(text), "text": text}
+        for text in bullets
+        if configured and len(text) < minimum
+    ]
     violations = [
         {"length": len(text), "text": text}
         for text in bullets
-        if configured and not minimum <= len(text) <= maximum
+        if configured and len(text) > maximum
     ]
     return {
         "configured": configured,
         "maximum": maximum,
         "minimum": minimum,
         "passed": not violations,
+        "soft_deviations": soft_deviations,
         "target": target,
         "validated_bullets": len(bullets),
         "violations": violations,
@@ -281,8 +287,8 @@ def create_section_resume_proposal(
     if isinstance(violations, list) and violations:
         rendered = ", ".join(str(item["length"]) for item in violations)
         raise ValueError(
-            "new resume bullet lengths must be between "
-            f"{bullet_min_chars} and {bullet_max_chars} characters; received {rendered}"
+            "new resume bullet lengths must not exceed "
+            f"{bullet_max_chars} characters; received {rendered}"
         )
     original = resume_path.read_text(encoding="utf-8")
     proposed = append_section_contents(original, section_name, latex_content)

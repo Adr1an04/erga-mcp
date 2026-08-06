@@ -171,6 +171,7 @@ def enrich_ranked_projects_from_git(
     project_count: int,
     bullets_per_project: int,
     bullet_min_characters: int,
+    bullet_target_characters: int,
     bullet_max_characters: int,
     store: ErgaStore,
     cache_root: Path,
@@ -225,6 +226,7 @@ def enrich_ranked_projects_from_git(
                     observations,
                     store.list_git_candidates(repo_path=str(worktree)),
                     minimum_characters=bullet_min_characters,
+                    target_characters=bullet_target_characters,
                     maximum_characters=bullet_max_characters,
                 )
                 store.save_git_research_draft(
