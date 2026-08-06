@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import load_config
+from .keryx import keryx_status
 from .resume import resolve_latexmk_executable
 from .store import ErgaStore
 
@@ -67,4 +68,11 @@ def check_installation(config_path: Path) -> DoctorReport:
         warnings["latexmk"] = "unavailable"
     else:
         checks["latexmk"] = "ok"
+    keryx = keryx_status(config)
+    if not keryx.enabled:
+        warnings["keryx"] = "optional public opportunity index not enabled"
+    elif not keryx.cache_ready:
+        warnings["keryx"] = "enabled but cache is missing; run `erga keryx sync`"
+    else:
+        checks["keryx"] = f"ok; {keryx.cached_jobs} public roles cached"
     return DoctorReport(core_ready=core_ready, checks=checks, warnings=warnings)

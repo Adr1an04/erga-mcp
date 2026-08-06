@@ -168,6 +168,20 @@ Discord usernames such as `emperor_sai` or stable numeric user IDs, stores the b
 the operating-system credential store, and never makes the selected backend a requirement for
 Erga's local core. See the [Discord bridge guide](docs/discord.md).
 
+Keryx is an optional public job-discovery source. Enabling it downloads the fixed, public US
+internship and new-graduate index into Erga's local state; searches never send a query, résumé,
+profile, or application data anywhere:
+
+```bash
+uv run erga keryx enable
+uv run erga keryx search 'software engineer' --program internship --cycle summer-2027
+```
+
+Search results remain untrusted public leads. Erga does not create an application or run résumé
+intake until the user separately chooses an individual posting URL. Disable the extension at any
+time with `uv run erga keryx disable`. The harmless public cache remains available for a later
+re-enable and is removed with the rest of Erga-owned state by `erga uninstall`.
+
 ### Add evidence and a draft application
 
 ```bash
@@ -228,6 +242,7 @@ The recommended `career` MCP profile includes:
 | `update_application_status` | Set an application to draft, applied, OA, assessment, interview, offer, rejected, or withdrawn in the private local database |
 | `application_tracker` | Render the optional configured Obsidian tracker as a compact, read-only message card |
 | `list_evidence` | Read local evidence records |
+| `search_keryx_jobs` | Search an explicitly enabled local cache of public Keryx roles without network access or application creation |
 | `intake_job_url` | Research one job and build local review artifacts end to end |
 | `prepare_job_workspace` | Create a bounded local job package from a supplied URL |
 | `create_tailored_resume` | Create a proposal, diff, and evidence report |

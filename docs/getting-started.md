@@ -178,7 +178,49 @@ uv run erga discord stop --config ~/.config/erga-mcp/config.toml
 
 See [`discord.md`](discord.md) for bot permissions, backend control, and failure isolation.
 
-## 5. Use the local workflow
+## 5. Add optional Keryx job discovery
+
+Keryx is a standalone, self-updating public database of United States internships and new-graduate
+roles. Erga setup offers it only after the private core is ready, and skipping it is the default.
+Enable it later with the same explicit command:
+
+```bash
+uv run erga keryx enable --config ~/.config/erga-mcp/config.toml
+```
+
+This downloads the fixed public Keryx JSON index into owner-only Erga cache storage. Erga sends no
+résumé text, profile data, application history, search terms, or identifiers to Keryx. Refreshing is
+also an explicit CLI operation:
+
+```bash
+uv run erga keryx sync --config ~/.config/erga-mcp/config.toml
+uv run erga keryx status --config ~/.config/erga-mcp/config.toml
+```
+
+Searches use only that local cache:
+
+```bash
+uv run erga keryx search 'machine learning' \
+  --config ~/.config/erga-mcp/config.toml \
+  --program internship \
+  --cycle summer-2027 \
+  --location 'New York' \
+  --limit 20
+```
+
+The `career` and local `read` MCP profiles expose the same local-only `search_keryx_jobs` tool.
+That tool never refreshes the cache and never tracks a returned job. To research and create local
+review artifacts for one result, explicitly pass its application URL to `intake_job_url` as a
+separate action. Keryx qualification text remains untrusted posting data, not résumé evidence or
+instructions.
+
+Disable searches without deleting the public cache:
+
+```bash
+uv run erga keryx disable --config ~/.config/erga-mcp/config.toml
+```
+
+## 6. Use the local workflow
 
 All state remains in the configured local SQLite database. Commands produce JSON suitable for review or scripting.
 
@@ -225,7 +267,7 @@ uv run erga zoho ingest-fixture \
   --fixture tests/fixtures/zoho_messages.json
 ```
 
-## 6. Connect Zoho Mail (read-only)
+## 7. Connect Zoho Mail (read-only)
 
 The live connector uses Zoho's **Mobile-based application** OAuth type, Authorization Code + PKCE,
 a fixed local redirect URI, and the operating system's credential store through Python `keyring`.
@@ -261,7 +303,7 @@ It requests only the read-only `ZohoMail.messages.READ`, `ZohoMail.folders.READ`
      --client-id '<client-id>'
    ```
 
-## 7. Connect Hermes through MCP
+## 8. Connect Hermes through MCP
 
 ### Plug-and-play registration
 
@@ -297,6 +339,8 @@ Hermes exposes tools prefixed with `mcp__erga_mcp__`:
 - `pipeline_status`
 - `list_applications`
 - `list_evidence`
+- `search_keryx_jobs` — when explicitly enabled, searches only the local public cache and preserves
+  Keryx's separate `required`, `preferred`, and `stated` academic-condition classifications.
 
 **Explicit local artifact actions**
 
@@ -407,11 +451,11 @@ without retrying.
 After upgrading the server code or changing its configuration, run `/reload-mcp` in the active
 Hermes session or restart the gateway so the long-running stdio process and tool inventory refresh.
 
-## 8. Add the workflow skill
+## 9. Add the workflow skill
 
 For a personal Hermes installation, tap this repository with `hermes skills tap add Adr1an04/erga-mcp`, then install `skills/productivity/erga-mcp/SKILL.md` through the chosen skill workflow. The skill contains workflow and safety policy only; it contains no integration code or credentials.
 
-## 9. Verify
+## 10. Verify
 
 ```bash
 uv run erga status --config ~/.config/erga-mcp/config.toml

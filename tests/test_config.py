@@ -8,6 +8,13 @@ from erga_mcp.config import DEFAULT_CONFIG, load_config
 
 
 class ConfigTests(unittest.TestCase):
+    def test_keryx_is_disabled_by_default_and_requires_explicit_opt_in(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+
+            self.assertFalse(load_config(config_path).keryx.enabled)
+
     def test_loads_client_neutral_career_tool_profile(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
