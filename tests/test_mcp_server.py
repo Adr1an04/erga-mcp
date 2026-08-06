@@ -443,7 +443,7 @@ class McpServerTests(unittest.TestCase):
     def test_rejects_coerced_boolean_token_counts_at_the_mcp_boundary(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG)
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
             server = build_server(config_path)
             store = ErgaStore(Path(directory) / "state" / "erga.sqlite3")
             application = store.create_application(
@@ -469,7 +469,7 @@ class McpServerTests(unittest.TestCase):
     def test_exposes_read_and_explicit_local_workspace_tools(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG)
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
 
             server = build_server(config_path)
             tools = asyncio.run(server.list_tools())
@@ -696,7 +696,7 @@ class McpServerTests(unittest.TestCase):
     def test_exposes_one_job_url_tool_for_end_to_end_intake(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG)
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
 
             tools = asyncio.run(build_server(config_path).list_tools())
 
@@ -794,7 +794,7 @@ class McpServerTests(unittest.TestCase):
     def test_hermes_monitor_tool_prepares_scripts_without_creating_delivery_jobs(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG)
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
             hermes_home = Path(directory) / "hermes-profile"
             server = build_server(config_path)
             prepared = {
@@ -825,7 +825,7 @@ class McpServerTests(unittest.TestCase):
     def test_export_tool_creates_a_private_attachable_zip(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG)
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
             result: Any = asyncio.run(build_server(config_path).call_tool("export_data", {}))
 
             exported = cast(dict[str, object], result.structured_content)

@@ -505,9 +505,7 @@ def _lead_verb_report(source: str, *, required: bool) -> tuple[dict[str, object]
             verbs.setdefault(words[0].casefold(), []).append(latex_to_text(span.content))
     duplicates = {verb: bullets for verb, bullets in verbs.items() if len(bullets) > 1}
     violations = (
-        tuple(f"duplicate lead verb '{verb}'" for verb in sorted(duplicates))
-        if required
-        else ()
+        tuple(f"duplicate lead verb '{verb}'" for verb in sorted(duplicates)) if required else ()
     )
     return (
         {

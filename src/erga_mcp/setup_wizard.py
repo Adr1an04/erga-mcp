@@ -607,9 +607,7 @@ def _atomic_write_private(path: Path, text: str) -> None:
 
 def _project_inventory_entries(master_latex: str, evidence_id: str) -> list[dict[str, object]]:
     """Project the master resume's existing LaTeX project blocks into strict inventory entries."""
-    section = re.search(
-        r"(?ms)^\\section\{Projects\}\s*$.*?(?=^\\section\{|\Z)", master_latex
-    )
+    section = re.search(r"(?ms)^\\section\{Projects\}\s*$.*?(?=^\\section\{|\Z)", master_latex)
     if section is None:
         return []
     body = section.group(0)
@@ -793,9 +791,7 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         managed_master,
         source_name=master.path.name,
     )
-    inventory_path = _project_inventory_path(
-        selections.config_path, erga_vault_dir, vault_path
-    )
+    inventory_path = _project_inventory_path(selections.config_path, erga_vault_dir, vault_path)
     inventory_created, inventory_count = _write_project_inventory(
         inventory_path,
         master_latex=master.text if master.format == "tex" else "",
