@@ -11,15 +11,19 @@ from tempfile import TemporaryDirectory
 from threading import Barrier
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from mcp.server.mcpserver.exceptions import ToolError
 from starlette.testclient import TestClient
 
+from erga_mcp.ai_resume_tailoring import AIProjectTailoring
 from erga_mcp.config import DEFAULT_CONFIG, load_config
+from erga_mcp.git_project_enrichment import GitProjectEnrichment
 from erga_mcp.mcp_server import (
     IntakeJobResult,
     IntakeValidationResult,
+    _ai_research_shortlist_ids,
+    _ai_tailored_project_enrichment,
     _compile_intake_proposal,
     _layout_safe_project_selection,
     _metadata_from_url,
@@ -35,6 +39,124 @@ from erga_mcp.store import ErgaStore
 
 
 class McpServerTests(unittest.TestCase):
+    def test_ai_shortlist_ranks_projects_without_rejecting_their_old_bullet_wording(self) -> None:
+        def candidate(project_id: str, tags: tuple[str, ...], bullet: str) -> ProjectCandidate:
+            return ProjectCandidate(
+                id=project_id,
+                title=project_id.replace("-", " ").title(),
+                latex=(
+                    rf"\resumeProjectHeading{{\textbf{{{project_id}}}}}{{}}"
+                    "\n"
+                    r"\resumeItemListStart"
+                    "\n"
+                    rf"\resumeItem{{{bullet}}}"
+                    "\n"
+                    r"\resumeItem{Approved second source bullet.}"
+                    "\n"
+                    r"\resumeItemListEnd"
+                ),
+                evidence_ids=(f"ev_{project_id}",),
+                bullet_evidence_ids=((f"ev_{project_id}",), (f"ev_{project_id}",)),
+                tags=tags,
+            )
+
+        candidates = (
+            candidate(
+                "api-runtime",
+                ("python", "fastapi", "api"),
+                "Analyzed 8 commits and 12 files from Git history.",
+            ),
+            candidate("frontend", ("react", "css"), "Built an approved interface."),
+            candidate("robotics", ("c++", "ros2"), "Created an approved controller."),
+        )
+
+        selected = _ai_research_shortlist_ids(
+            candidates,
+            job_description="Required: Python FastAPI API engineering",
+            project_count=1,
+            minimum_bullets=2,
+        )
+
+        self.assertEqual(selected[0], "api-runtime")
+        self.assertEqual(len(selected), 2)
+
+    def test_ai_layout_retry_lowers_the_hard_cap_and_disables_the_soft_minimum(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            resume = root / "resume.tex"
+            resume.write_text("synthetic resume", encoding="utf-8")
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace('template_path = ""', f'template_path = "{resume}"')
+                .replace("project_count = 4", "project_count = 1")
+                .replace("bullet_min_chars = 0", "bullet_min_chars = 99")
+                .replace("bullet_target_chars = 0", "bullet_target_chars = 105")
+                .replace("bullet_max_chars = 0", "bullet_max_chars = 116"),
+                encoding="utf-8",
+            )
+            config = load_config(config_path)
+            evidence = Evidence(
+                "ev_api",
+                "approved:api",
+                "Approved API evidence.",
+                True,
+                datetime.now(UTC),
+            )
+            candidate = ProjectCandidate(
+                id="api",
+                title="API",
+                latex="synthetic project",
+                evidence_ids=(evidence.id,),
+                bullet_evidence_ids=((evidence.id,), (evidence.id,)),
+                tags=("python", "api"),
+            )
+            enrichment = GitProjectEnrichment(
+                candidates=(candidate,),
+                evidence=(),
+                reports=({"project_id": "api", "title": "API", "evidence_ids": []},),
+                warnings=(),
+                catalogue_candidate_count=1,
+            )
+            drafted = AIProjectTailoring((candidate,), "synthetic-tailor", (evidence.id,))
+            plan = SimpleNamespace(selected=(candidate,), quality_rejections=())
+
+            with (
+                patch(
+                    "erga_mcp.mcp_server.draft_evidence_backed_projects",
+                    new=AsyncMock(return_value=drafted),
+                ) as draft,
+                patch("erga_mcp.mcp_server.plan_resume_project_selection", return_value=plan),
+                patch(
+                    "erga_mcp.mcp_server._layout_safe_project_selection",
+                    side_effect=[
+                        (("api",), ({"id": "api", "title": "API", "reasons": ["wrap"]},)),
+                        (("api",), ()),
+                    ],
+                ),
+            ):
+                result = asyncio.run(
+                    _ai_tailored_project_enrichment(
+                        ctx=SimpleNamespace(session=object(), request_id="request-1"),
+                        config=config,
+                        resume_path=resume,
+                        job_description="Required: Python API",
+                        evidence=[evidence],
+                        enrichment=enrichment,
+                    )
+                )
+
+            self.assertEqual(
+                result.reports[0]["resume_bullets_source"], "host_model_evidence_synthesis"
+            )
+            self.assertEqual(
+                [call.kwargs["bullet_max_chars"] for call in draft.await_args_list],
+                [116, 106],
+            )
+            self.assertEqual(
+                [call.kwargs["bullet_min_chars"] for call in draft.await_args_list],
+                [99, 0],
+            )
+
     def test_layout_fallback_rejects_a_wrapped_project_and_selects_the_next_candidate(
         self,
     ) -> None:
@@ -1527,7 +1649,7 @@ class McpServerTests(unittest.TestCase):
                 ),
                 ThreadPoolExecutor(max_workers=2) as pool,
             ):
-                results = list(pool.map(lambda _: tool.fn(job_url), range(2)))
+                results = list(pool.map(lambda _: asyncio.run(tool.fn(job_url)), range(2)))
 
             self.assertEqual(sorted(result.reused for result in results), [False, True])
             self.assertEqual(results[0].package_dir, results[1].package_dir)

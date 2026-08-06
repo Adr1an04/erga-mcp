@@ -301,7 +301,7 @@ Hermes exposes tools prefixed with `mcp__erga_mcp__`:
 **Explicit local artifact actions**
 
 - `update_application_status` — records a deliberate local workflow transition such as applied, OA, interview, offer, rejected, or withdrawn. It never contacts an employer or changes a remote service.
-- `intake_job_url` — the primary first-turn action for a bare job URL, Markdown/chat link, or URL followed by preview text. It accepts the URL alone, atomically publishes the complete local review package, writes detailed source-cited posting research and an idempotent local application record, deterministically reorders existing résumé bullets/projects/all skill categories, compiles the exact configured PDF, creates/synchronizes the appropriate Obsidian cycle tracker, and reuses current repeats of the same listing (including tracking-only URL variants). Legacy packages are upgraded once using a freshly sanitized snapshot; incomplete legacy files are retained under `legacy-backup/` after a clean rebuild. Jobs with no discoverable time bucket go to `Unscheduled Application Tracker.md` and `Unscheduled Application Notes/`.
+- `intake_job_url` — the primary first-turn action for a bare job URL, Markdown/chat link, or URL followed by preview text. It accepts the URL alone, atomically publishes the complete local review package, writes detailed source-cited posting research and an idempotent local application record, ranks the approved project catalogue, researches attributable Git changes for a broader shortlist, and asks a sampling-capable connected host model to draft new role-specific project bullets with per-bullet evidence IDs. Deterministic validation rejects invented numbers, cross-project citations, duplicate lead verbs, unsafe LaTeX, excessive length, and rendered wrapping. Clients without MCP sampling use the approved-copy fallback. It compiles the exact configured PDF, creates/synchronizes the appropriate Obsidian cycle tracker, and reuses current repeats of the same listing (including tracking-only URL variants). Legacy packages are upgraded once using a freshly sanitized snapshot; incomplete legacy files are retained under `legacy-backup/` after a clean rebuild. Jobs with no discoverable time bucket go to `Unscheduled Application Tracker.md` and `Unscheduled Application Notes/`.
 - `record_secondary_research` — records bounded host-provided web/community search results after intake, clearly separated from official-posting facts and labeled unverified.
 - `prepare_job_workspace` — an advanced second-stage variant for callers that already have company, role, cycle, and slug metadata and explicitly need tracker integration. It is not the entry point for pasted links.
 - `create_tailored_resume` — writes only a reviewable tailored `.tex`, diff, and claim report inside that package, gated by supplied approved evidence IDs and configured editable sections.
@@ -343,13 +343,16 @@ is available as an explicit fallback.
 
 On messaging platforms, a successful validated PDF is emitted through Hermes' document-upload
 directive so Discord/Telegram/etc. receive an actual attachment rather than a server-local path.
-The PDF is the compiled tailored proposal, not a stale baseline build. Automatic tailoring changes
-ordering only: every claim remains byte-for-byte sourced from the user-provided template, with
-per-claim provenance in `claim-report.json`. Configured bullet limits prevent new violations;
-automatic intake also performs an exact TeX width preflight and selects another approved project
-when a candidate's bullet would wrap. A final width check prevents publication if any bullet still
-needs a second line. A configured `max_pages` is enforced with the same pure-Python PDF parser on
-macOS, Linux, and Windows.
+The PDF is the compiled tailored proposal, not a stale baseline build. When the connected MCP
+client advertises sampling, Erga sends the host model a bounded set of approved project bullets and
+authenticated Git-diff evidence. The model may synthesize new wording, but every returned bullet
+must cite evidence IDs belonging to that project. Erga rejects unsupported numbers, cross-project
+citations, raw Git accounting prose, duplicate lead verbs, unsafe LaTeX, and excessive length.
+Without sampling, intake keeps the deterministic approved-copy behavior. All output records
+per-claim provenance in `claim-report.json`. An exact TeX width preflight selects another approved
+project or retries model wording when a candidate would wrap; a final width check prevents
+publication if any bullet still needs a second line. A configured `max_pages` is enforced with the
+same pure-Python PDF parser on macOS, Linux, and Windows.
 Before ranking, the fetcher keeps visible official job text and bounded structured job metadata but
 removes scripts, styles, navigation, and footer content. Relevance matching is boundary-aware and
 does not treat substrings inside unrelated words as skill matches.

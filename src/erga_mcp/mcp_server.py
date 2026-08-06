@@ -7,7 +7,7 @@ import re
 import subprocess
 from collections.abc import Iterable, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field, StrictInt
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
+from .ai_resume_tailoring import draft_evidence_backed_projects
 from .cli import DEFAULT_CONFIG_PATH, _notes_application, _package_for_application
 from .config import ErgaConfig, load_config
 from .contact_projection import project_recruiter_contacts
@@ -73,6 +74,7 @@ from .models import Evidence
 from .project_inventory import (
     ProjectCandidate,
     load_project_inventory,
+    select_projects,
     sync_project_inventory_from_master,
 )
 from .resume import (
@@ -240,9 +242,13 @@ as job_url, including its query string. This is the first action for Ashby, Gree
 Workday, LinkedIn, Indeed, and company careers links; do not browse or merely summarize the posting
 first. The tool performs the complete local intake: it fetches an untrusted snapshot, creates cited
 posting research, selects only approved career evidence, creates an isolated job package and local
-application record, deterministically reorders existing user-provided resume bullets, projects,
-and every skill category, writes a reviewable proposal/diff/per-claim provenance report, compiles
-and page-validates the exact attachment PDF, and synchronizes an enabled local Obsidian tracker.
+application record, ranks approved projects, researches attributable Git changes, and—when the
+connected MCP client enables sampling—asks that host model to synthesize role-specific project
+bullets with per-bullet evidence IDs. Deterministic validators reject unsupported metrics,
+cross-project citations, duplicate lead verbs, unsafe LaTeX, and rendered overflow before the tool
+writes a reviewable proposal/diff/per-claim provenance report, compiles and page-validates the exact
+attachment PDF, and synchronizes an enabled local Obsidian tracker. Clients without sampling use a
+deterministic approved-copy fallback.
 It never submits an application, sends a message, changes the master resume, or writes to a remote
 service. If the user explicitly asks to summarize only or not to run intake, respect that request
 and do not call this tool."""
@@ -430,6 +436,38 @@ def _require_single_line_resume_layout(
         )
 
 
+def _ai_research_shortlist_ids(
+    candidates: tuple[ProjectCandidate, ...],
+    *,
+    job_description: str,
+    project_count: int,
+    minimum_bullets: int,
+) -> tuple[str, ...]:
+    """Rank the full eligible catalogue without treating old bullet prose as final copy."""
+    research_count = min(len(candidates), max(project_count, project_count * 2))
+    rankable = tuple(
+        replace(
+            candidate,
+            latex=rf"\resumeProjectHeading{{\textbf{{{candidate.title}}}}}{{}}",
+        )
+        for candidate in candidates
+    )
+    ranked = list(
+        select_projects(
+            rankable,
+            job_description,
+            max_projects=max(1, research_count),
+            minimum_bullets=minimum_bullets,
+        )
+    )
+    # Sparse postings can contain fewer matching terms than the requested shortlist. Preserve
+    # the user's catalogue order as a deterministic tie-break so the model still receives a
+    # broad enough evidence set to make the final semantic choice.
+    ranked_ids = {candidate.id for candidate in ranked}
+    ranked.extend(candidate for candidate in rankable if candidate.id not in ranked_ids)
+    return tuple(candidate.id for candidate in ranked[:research_count])
+
+
 def _git_enriched_inventory_candidates(
     *,
     config: ErgaConfig,
@@ -437,6 +475,7 @@ def _git_enriched_inventory_candidates(
     evidence: list[Evidence],
     job_description: str,
     resume_path: Path,
+    ai_tailoring: bool = False,
 ) -> GitProjectEnrichment:
     """Plan once, then Git-research the exact projects eligible for the final résumé."""
     curated = _inventory_candidates(config, evidence)
@@ -468,7 +507,14 @@ def _git_enriched_inventory_candidates(
     selected_project_ids: tuple[str, ...] = ()
     layout_rejections: tuple[dict[str, object], ...] = ()
     if projects_editable:
-        if config.resume.bullet_max_chars:
+        if ai_tailoring:
+            selected_project_ids = _ai_research_shortlist_ids(
+                eligible_candidates,
+                job_description=job_description,
+                project_count=config.resume.project_count,
+                minimum_bullets=config.resume.project_min_bullets,
+            )
+        elif config.resume.bullet_max_chars:
             with TemporaryDirectory(prefix="erga-project-layout-") as layout_directory:
                 selected_project_ids, layout_rejections = _layout_safe_project_selection(
                     resume_path=resume_path,
@@ -511,6 +557,199 @@ def _git_enriched_inventory_candidates(
         catalogue_candidate_count=enrichment.catalogue_candidate_count,
         quality_rejections=layout_rejections,
     )
+
+
+def _client_supports_ai_tailoring(ctx: Context | None) -> bool:
+    if ctx is None:
+        return False
+    try:
+        capabilities = ctx.client_capabilities
+    except ValueError:
+        return False
+    return capabilities is not None and capabilities.sampling is not None
+
+
+async def _ai_tailored_project_enrichment(
+    *,
+    ctx: Context,
+    config: ErgaConfig,
+    resume_path: Path,
+    job_description: str,
+    evidence: list[Evidence],
+    enrichment: GitProjectEnrichment,
+) -> GitProjectEnrichment:
+    """Use host-model sampling to draft evidence-cited bullets, then enforce exact layout."""
+    researched_ids = _git_researched_project_ids(enrichment)
+    researched = tuple(
+        candidate for candidate in enrichment.candidates if candidate.id in researched_ids
+    )
+    if len(researched) < config.resume.project_count:
+        raise ValueError("Git research did not produce enough role-relevant project candidates")
+    all_evidence = _merge_evidence(evidence, enrichment.evidence)
+    feedback = ""
+    last_error: ValueError | None = None
+    model_max_chars = config.resume.bullet_max_chars
+    for attempt in range(3):
+        try:
+            drafted = await draft_evidence_backed_projects(
+                session=ctx.session,
+                related_request_id=ctx.request_id,
+                resume_path=resume_path,
+                job_description=job_description,
+                candidates=researched,
+                evidence=all_evidence,
+                reports=enrichment.reports,
+                project_count=config.resume.project_count,
+                bullets_per_project=config.resume.project_min_bullets,
+                bullet_min_chars=config.resume.bullet_min_chars if attempt == 0 else 0,
+                bullet_target_chars=(
+                    min(config.resume.bullet_target_chars, max(1, model_max_chars - 5))
+                    if model_max_chars
+                    else config.resume.bullet_target_chars
+                ),
+                bullet_max_chars=model_max_chars,
+                require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+                retry_feedback=feedback,
+            )
+            selection_plan = plan_resume_project_selection(
+                resume_path=resume_path,
+                candidates=drafted.candidates,
+                job_description=job_description,
+                project_count=config.resume.project_count,
+                maximum_characters=config.resume.bullet_max_chars,
+                require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+            )
+            if len(selection_plan.selected) != config.resume.project_count:
+
+                def rejection_text(item: dict[str, object]) -> str:
+                    raw_reasons = item.get("reasons")
+                    reasons = raw_reasons if isinstance(raw_reasons, list) else []
+                    return f"{item.get('title', item.get('id', 'project'))}: " + ", ".join(
+                        str(reason) for reason in reasons
+                    )
+
+                reasons = "; ".join(
+                    rejection_text(item) for item in selection_plan.quality_rejections
+                )
+                last_error = ValueError(
+                    "AI-authored projects were rejected before layout"
+                    + (f": {reasons}" if reasons else "")
+                )
+                feedback = (
+                    f"{last_error}. Choose candidates and assigned lead verbs that do not repeat "
+                    "the retained resume's verbs, and keep every bullet within the hard maximum."
+                )
+                continue
+            with TemporaryDirectory(prefix="erga-ai-layout-") as layout_directory:
+                selected_ids, layout_rejections = _layout_safe_project_selection(
+                    resume_path=resume_path,
+                    output_dir=Path(layout_directory),
+                    job_description=job_description,
+                    evidence=all_evidence,
+                    project_candidates=drafted.candidates,
+                    config=config,
+                )
+            if len(selected_ids) != config.resume.project_count or layout_rejections:
+                rejected = ", ".join(
+                    str(item.get("title", item.get("id", "project"))) for item in layout_rejections
+                )
+                if model_max_chars:
+                    model_max_chars = max(80, model_max_chars - 10)
+                last_error = ValueError(
+                    "AI-authored project bullets did not fit the configured one-line layout"
+                    + (f": {rejected}" if rejected else "")
+                )
+                feedback = (
+                    "The prior draft did not fit the configured one-line layout. "
+                    f"Shorten or replace these projects while preserving cited facts: {rejected}. "
+                    f"The hard character maximum for every retry bullet is {model_max_chars}; "
+                    "the former minimum is disabled for this correction."
+                )
+                continue
+            candidate_by_id = {candidate.id: candidate for candidate in drafted.candidates}
+            report_by_id = {
+                project_id: report
+                for report in enrichment.reports
+                if isinstance((project_id := report.get("project_id")), str)
+            }
+            final_candidates = tuple(candidate_by_id[project_id] for project_id in selected_ids)
+            final_reports = tuple(
+                {
+                    **report_by_id[project_id],
+                    "generated_bullets": len(candidate_by_id[project_id].bullet_evidence_ids),
+                    "resume_bullets_source": "host_model_evidence_synthesis",
+                    "tailoring_model": drafted.model,
+                }
+                for project_id in selected_ids
+            )
+            return GitProjectEnrichment(
+                candidates=final_candidates,
+                evidence=enrichment.evidence,
+                reports=final_reports,
+                warnings=enrichment.warnings,
+                catalogue_candidate_count=enrichment.catalogue_candidate_count,
+            )
+        except ValueError as error:
+            last_error = error
+            feedback = f"The prior structured draft failed validation: {error}"
+    if last_error is not None:
+        raise last_error
+    raise ValueError("host-model tailoring did not produce a layout-safe project selection")
+
+
+async def _project_enrichment_for_tailoring(
+    *,
+    ctx: Context | None,
+    config: ErgaConfig,
+    store: ErgaStore,
+    resume_path: Path,
+    job_description: str,
+    evidence: list[Evidence],
+) -> GitProjectEnrichment:
+    """Build model-authored project copy when supported, with a safe deterministic fallback."""
+    if config.resume.project_selection_mode == "template_only":
+        return GitProjectEnrichment((), (), (), (), 0)
+    ai_tailoring = _client_supports_ai_tailoring(ctx)
+    enrichment = _git_enriched_inventory_candidates(
+        config=config,
+        store=store,
+        evidence=evidence,
+        job_description=job_description,
+        resume_path=resume_path,
+        ai_tailoring=ai_tailoring,
+    )
+    if not ai_tailoring or not enrichment.candidates:
+        return enrichment
+    assert ctx is not None
+    try:
+        return await _ai_tailored_project_enrichment(
+            ctx=ctx,
+            config=config,
+            resume_path=resume_path,
+            job_description=job_description,
+            evidence=evidence,
+            enrichment=enrichment,
+        )
+    except Exception as error:  # Sampling/provider failures must preserve local fallback.
+        deterministic = _git_enriched_inventory_candidates(
+            config=config,
+            store=store,
+            evidence=evidence,
+            job_description=job_description,
+            resume_path=resume_path,
+        )
+        return GitProjectEnrichment(
+            candidates=deterministic.candidates,
+            evidence=deterministic.evidence,
+            reports=deterministic.reports,
+            warnings=(
+                "Host-model project tailoring was unavailable; used the deterministic "
+                f"evidence-only fallback: {error}",
+                *deterministic.warnings,
+            ),
+            catalogue_candidate_count=deterministic.catalogue_candidate_count,
+            quality_rejections=deterministic.quality_rejections,
+        )
 
 
 def _include_selected_project_evidence(
@@ -1801,7 +2040,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         annotations=_JOB_INTAKE,
         structured_output=True,
     )
-    def intake_job_url(
+    async def intake_job_url(
         job_url: Annotated[
             str,
             Field(
@@ -1815,6 +2054,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 json_schema_extra={"format": "uri"},
             ),
         ],
+        ctx: Context = None,  # type: ignore[assignment]
         cycle: Annotated[
             str,
             Field(
@@ -1857,10 +2097,11 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             if legacy_manifest.is_file():
                 legacy_manifest.rename(preserved_manifest)
             try:
-                repaired = intake_job_url(
+                repaired = await intake_job_url(
                     job_url,
                     cycle=legacy_package.parent.name,
                     application_slug=legacy_package.name,
+                    ctx=ctx,
                 )
             except Exception:
                 if preserved_manifest.is_file():
@@ -1958,16 +2199,13 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             evidence = all_approved
             selection_strategy = "all_approved_baseline" if evidence else "no_approved_evidence"
         tailoring_context = _tailoring_context(source_research, snapshot)
-        enrichment = (
-            GitProjectEnrichment((), (), (), (), 0)
-            if config.resume.project_selection_mode == "template_only"
-            else _git_enriched_inventory_candidates(
-                config=config,
-                store=store,
-                evidence=all_approved,
-                job_description=tailoring_context,
-                resume_path=config.resume.template_path,
-            )
+        enrichment = await _project_enrichment_for_tailoring(
+            ctx=ctx,
+            config=config,
+            store=store,
+            resume_path=config.resume.template_path,
+            job_description=tailoring_context,
+            evidence=all_approved,
         )
         project_candidates = enrichment.candidates
         all_approved = _merge_evidence(all_approved, enrichment.evidence)
@@ -2299,8 +2537,13 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         return {**result, "export_root": str(export_root.resolve())}
 
     @profile_tool("prepare_job_workspace", annotations=_NETWORK_READ_AND_WRITE)
-    def prepare_job_workspace(
-        job_url: str, company: str, role: str, cycle: str, application_slug: str
+    async def prepare_job_workspace(
+        job_url: str,
+        company: str,
+        role: str,
+        cycle: str,
+        application_slug: str,
+        ctx: Context = None,  # type: ignore[assignment]
     ) -> dict[str, object]:
         """Advanced second-stage workspace setup when all job metadata is already known.
 
@@ -2316,16 +2559,13 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         all_approved = [item for item in store.list_evidence() if item.approved]
         evidence = select_relevant_evidence(snapshot, all_approved)
         tailoring_context = _tailoring_context(research, snapshot)
-        enrichment = (
-            GitProjectEnrichment((), (), (), (), 0)
-            if config.resume.project_selection_mode == "template_only"
-            else _git_enriched_inventory_candidates(
-                config=config,
-                store=store,
-                evidence=all_approved,
-                job_description=tailoring_context,
-                resume_path=config.resume.template_path,
-            )
+        enrichment = await _project_enrichment_for_tailoring(
+            ctx=ctx,
+            config=config,
+            store=store,
+            resume_path=config.resume.template_path,
+            job_description=tailoring_context,
+            evidence=all_approved,
         )
         project_candidates = enrichment.candidates
         all_approved = _merge_evidence(all_approved, enrichment.evidence)

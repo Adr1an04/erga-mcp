@@ -97,7 +97,7 @@ The server declares tool annotations so MCP clients can distinguish its capabili
 | `pipeline_status`, `list_applications`, `list_evidence`, `list_mail_events` | read-only | Reads local SQLite state only. |
 | `resume_source_context` | read-only | Reads approved master knowledge and derived non-factual style metadata from managed local snapshots. |
 | `update_application_status` | local-write | Sets one existing application's canonical status and records a local audit event; it has no remote side effect. |
-| `intake_job_url` | network-read + local-write + local-exec | Fetches one validated public job URL; creates or upgrades a local package, deterministically reorders existing user-provided résumé content, compiles and page-validates the proposal, and writes cited research, an application record, and a configured Obsidian tracker note. |
+| `intake_job_url` | network-read + local-write + local-exec + optional client sampling | Fetches one validated public job URL; creates or upgrades a local package; ranks approved projects; collects attributable Git evidence; optionally asks the already-connected MCP client's model for structured, evidence-cited project bullets; validates and compiles the proposal; and writes cited research, an application record, and a configured Obsidian tracker note. |
 | `record_secondary_research` | local-write | Stores bounded host-provided search results for an existing job package; results are labeled unverified and separated from official-posting facts. |
 | `prepare_job_workspace` | network-read + local-write | Fetches a job URL and creates configured local package/tracker artifacts. |
 | `create_tailored_resume` | local-write | Writes a reviewable proposal, diff, and claim report inside a configured package. |
@@ -129,7 +129,7 @@ weakening SSRF controls. Stored snapshots retain visible posting text and bounde
 metadata while removing executable scripts, styles, navigation, and page chrome. Imported page text
 remains data and is never evaluated as an instruction.
 
-Obsidian import is read-only, requires an explicitly configured vault root, rejects paths outside that root, and creates unapproved evidence candidates. New résumé claims may reference approved evidence only. Automatic job tailoring does not create or rewrite claims: it only reorders claims and skill values already supplied in the source template and records per-claim provenance.
+Obsidian import is read-only, requires an explicitly configured vault root, rejects paths outside that root, and creates unapproved evidence candidates. New résumé claims may reference approved evidence only. When MCP client sampling is enabled, automatic job tailoring may synthesize project-bullet wording from bounded approved bullets and authenticated authored-Git evidence. Every bullet must cite project-scoped evidence IDs. Server-side checks reject unsupported numbers, evidence from another project, raw Git accounting prose, duplicate lead verbs, unsafe LaTeX, character overflow, and rendered line overflow. Sampling receives no ambient MCP context. Clients can disable sampling and retain deterministic approved-copy tailoring.
 
 ## Human authority
 

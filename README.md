@@ -42,7 +42,8 @@ records and generated files stay on your computer.
 - Keep your applications and status history in one local database.
 - Save job postings before they disappear.
 - Create a separate folder and tailored résumé for each role.
-- Reorder existing résumé bullets, projects, and skills to better match a job description.
+- Rank the approved project catalogue and, with a sampling-capable host, synthesize new
+  evidence-cited project bullets from approved claims plus authenticated authored-Git changes.
 - Compile the result to a PDF and show exactly what changed.
 - Read limited Gmail or Zoho metadata to spot interviews, assessments, offers, and rejections.
 - Use the same tools from the CLI or an MCP client.
@@ -127,12 +128,14 @@ paths or credentials:
 
 When at least one inventory entry has this mapping and GitHub CLI is already authenticated, job
 intake refreshes a private JSON index of owned and direct-collaborator repositories. It ranks the
-full metadata catalogue before reading source code, then fetches only the selected repositories.
-Erga attributes commits to the connected GitHub identity, inspects all fetched refs, and derives
-reviewable bullets with computed commit, file, and line-change counts. Generated claims retain a
-commit anchor and diff hashes; collaborator commits and invented impact metrics are excluded. If
-GitHub or a selected repository is unavailable, intake keeps an existing approved catalogue bullet
-or skips an unverified discovered project and returns an actionable warning.
+full approved catalogue before reading source code, then researches a broader role-relevant
+shortlist instead of filtering projects by their existing résumé wording. Erga attributes commits
+to the connected GitHub identity and inspects all fetched refs. When the MCP client enables
+sampling, its connected model receives bounded approved bullets plus authenticated diff evidence
+and returns structured, role-specific project bullets with evidence IDs. Server-side validation
+rejects unsupported numbers, cross-project citations, raw commit/file/line accounting, duplicate
+lead verbs, unsafe LaTeX, and rendered overflow. The deterministic approved-copy path remains the
+fallback when sampling, GitHub, or a selected repository is unavailable.
 
 After core setup, optionally connect any number of coding assistants:
 

@@ -494,6 +494,58 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
                 "Built a real-time inference engine with low-latency Python services.",
             )
 
+    def test_replacement_projects_can_reuse_a_lead_from_the_removed_project_section(self) -> None:
+        project = ProjectCandidate(
+            id="api-platform",
+            title="API Platform",
+            latex=(
+                r"\resumeProjectHeading{\textbf{API Platform} $|$ \textit{Python, API}}{}"
+                "\n"
+                r"\resumeItemListStart"
+                "\n"
+                r"\resumeItem{Engineered a Python API platform with authenticated requests.}"
+                "\n"
+                r"\resumeItem{Validated API failures through approved integration tests.}"
+                "\n"
+                r"\resumeItemListEnd"
+            ),
+            evidence_ids=("ev_api",),
+            bullet_evidence_ids=(("ev_api",), ("ev_api",)),
+            tags=("python", "api", "testing"),
+        )
+        evidence = Evidence(
+            "ev_api",
+            "approved:api-platform",
+            "Approved API Platform evidence.",
+            True,
+            datetime.now(UTC),
+        )
+        source_text = _TEMPLATE.replace(
+            "Designed a responsive website", "Engineered a responsive website"
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text(source_text, encoding="utf-8")
+
+            result = create_automatic_resume_proposal(
+                resume_path=source,
+                output_dir=root / "artifacts",
+                job_description="Required: Python API testing",
+                evidence=[evidence],
+                editable_sections=("projects",),
+                bullet_max_chars=116,
+                project_candidates=(project,),
+                project_count=1,
+                require_unique_lead_verbs=True,
+            )
+
+            proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
+            self.assertEqual(result.constraint_violations, ())
+            self.assertEqual(result.project_selection["selected_ids"], ["api-platform"])
+            self.assertIn("Engineered a Python API platform", proposed)
+            self.assertNotIn("Engineered a responsive website", proposed)
+
     def test_duplicate_award_lead_verbs_use_an_award_specific_replacement(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

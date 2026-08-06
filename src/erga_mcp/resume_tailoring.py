@@ -547,9 +547,11 @@ def _project_quality_rejections(
     original_bullets = {
         _normalized(span.content) for span in _command_spans(original, "resumeItem")
     }
+    projects_start, projects_end, _ = _section_body(original, "Projects")
+    retained_original = original[:projects_start] + original[projects_end:]
     original_leads = {
         words[0].casefold()
-        for span in _command_spans(original, "resumeItem")
+        for span in _command_spans(retained_original, "resumeItem")
         if (words := re.findall(r"[A-Za-z]+", latex_to_text(span.content)))
     }
     rejections: list[dict[str, object]] = []

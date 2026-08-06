@@ -22,7 +22,9 @@ user-selected Obsidian vault as an optional durable, human-readable projection.
 
 ### Evidence ledger for résumé integrity
 
-A résumé bullet must be a derived artifact, never a free-form model output.
+A résumé bullet must be a derived artifact, never an uncited free-form model output. A connected
+host model may synthesize wording only from a bounded project evidence bundle, and each returned
+bullet must identify the exact evidence records it used before deterministic validation accepts it.
 
 Each career claim records:
 
@@ -40,7 +42,7 @@ The résumé proposer can only use approved evidence. It must return citations t
 1. **Zoho intake:** a read-only Zoho Mail OAuth adapter polls a user-designated folder. It stores source message IDs and minimal normalized metadata, then classifies messages into candidate events. Request `ZohoMail.messages.READ`; add `ZohoMail.accounts.READ` only if account discovery cannot be configured locally without it.
 2. **Application state:** deterministic rules handle known acknowledgement/denial phrases. High-confidence acknowledgement events may update the *local* tracker automatically with the source message, confidence, notification, and undo/audit record; ambiguous messages are queued for review.
 3. **Job enrichment:** a job description URL/manual capture is the primary source. Optional web research produces cited notes, with source URLs and capture time. Reddit is optional enrichment only; use authorized APIs or user-provided links, preserve attribution, and never treat anecdotal content as fact.
-4. **Résumé tailoring:** matching selects approved evidence against a saved job description. The result is a proposed LaTex patch plus a claim report and a PDF diff/compile result.
+4. **Résumé tailoring:** matching ranks the approved project catalogue against a saved job description, authenticates authored Git changes for a broader shortlist, and optionally uses MCP client sampling to synthesize project bullets with project-scoped evidence IDs. Unsupported numbers, cross-project citations, internal Git accounting, duplicate lead verbs, and rendered overflow are rejected deterministically. The result is a proposed LaTex patch plus a claim report and a PDF diff/compile result; clients without sampling retain the deterministic approved-copy path.
 5. **Overleaf:** use an Overleaf Git working copy as the initial integration. Tokens live in the OS credential store. The pipeline creates a local branch/patch; the user reviews the diff and explicitly initiates any push/sync.
 6. **Submission:** always outside the automation boundary. The product can prepare a checklist, opened links, tailored documents, and tracking data, but never completes an external application form or submits it.
 
