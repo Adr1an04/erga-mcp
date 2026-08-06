@@ -31,7 +31,7 @@ The configured file is a local JSON array. Each project needs a stable lowercase
 ]
 ```
 
-Erga rejects duplicate IDs, missing/unapproved evidence IDs, non-project LaTeX blocks, and `\\input`, `\\include`, or shell-writing LaTeX commands.
+Erga rejects duplicate IDs, missing/unapproved evidence IDs, non-project LaTeX blocks, and `\\input`, `\\include`, or shell-writing LaTeX commands. When `git_repositories` contains an `owner/repo` mapping, Erga makes an otherwise unlinked project heading clickable using the first repository's canonical `https://github.com/owner/repo` URL. An existing custom `\\href` in the heading takes precedence and is preserved unchanged.
 
 ## Selection behavior
 

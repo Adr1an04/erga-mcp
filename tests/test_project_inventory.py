@@ -80,6 +80,43 @@ class ProjectInventoryTests(unittest.TestCase):
             projects = load_project_inventory(path, evidence)
 
         self.assertEqual(projects[0].git_repositories, ("example/api-platform",))
+        self.assertIn(
+            r"\href{https://github.com/example/api-platform}{\textbf{API Platform}}",
+            projects[0].latex,
+        )
+
+    def test_inventory_preserves_an_existing_custom_project_heading_link(self) -> None:
+        evidence = [
+            Evidence("ev_ok", "Career#Project", "Verified project", True, datetime.now(UTC)),
+        ]
+        payload = [
+            {
+                "id": "api-platform",
+                "title": "API Platform",
+                "latex": (
+                    r"\resumeProjectHeading{\href{https://example.com/api-platform}"
+                    r"{\textbf{API Platform}}}{}"
+                    "\n"
+                    r"\resumeItemListStart"
+                    "\n"
+                    r"\resumeItem{Built a verified API platform.}"
+                    "\n"
+                    r"\resumeItemListEnd"
+                ),
+                "evidence_ids": ["ev_ok"],
+                "bullet_evidence_ids": [["ev_ok"]],
+                "tags": ["python", "api"],
+                "git_repositories": ["example/api-platform"],
+            }
+        ]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "projects.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            projects = load_project_inventory(path, evidence)
+
+        self.assertIn(r"\href{https://example.com/api-platform}", projects[0].latex)
+        self.assertNotIn(r"\href{https://github.com/example/api-platform}", projects[0].latex)
 
     def test_inventory_rejects_non_github_repository_mappings(self) -> None:
         evidence = [

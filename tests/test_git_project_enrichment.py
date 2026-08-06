@@ -94,6 +94,10 @@ class GitProjectEnrichmentTests(unittest.TestCase):
         self.assertEqual(len(merged), 1)
         self.assertEqual(merged[0].git_repositories, ("example/ctrl-arm",))
         self.assertIn("real-time", merged[0].tags)
+        self.assertIn(
+            r"\href{https://github.com/example/ctrl-arm}{\textbf{Ctrl-ARM}}",
+            merged[0].latex,
+        )
 
     def test_ranks_json_but_keeps_git_research_out_of_resume_copy(self) -> None:
         with TemporaryDirectory() as directory:

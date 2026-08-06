@@ -17,7 +17,7 @@ from .github_projects import (
     github_authored_commit_shas,
 )
 from .models import Evidence, GitResearchBullet
-from .project_inventory import ProjectCandidate, select_projects
+from .project_inventory import ProjectCandidate, select_projects, with_canonical_project_link
 from .store import ErgaStore
 
 _TOKEN = re.compile(r"[a-z0-9+#.]+")
@@ -116,7 +116,7 @@ def merge_github_project_catalogue(
                 git_repositories=(project.repository,),
             )
         )
-    return (*enriched, *generated)
+    return tuple(with_canonical_project_link(candidate) for candidate in (*enriched, *generated))
 
 
 def _latex_text(value: str) -> str:

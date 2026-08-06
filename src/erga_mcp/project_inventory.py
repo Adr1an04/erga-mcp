@@ -4,7 +4,7 @@ import json
 import os
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
@@ -233,6 +233,61 @@ class ProjectCandidate:
     git_repositories: tuple[str, ...] = ()
 
 
+def _command_argument_bounds(source: str, command: str) -> tuple[int, int] | None:
+    """Return the content bounds of one balanced required command argument."""
+    command_start = source.find(f"\\{command}")
+    if command_start < 0:
+        return None
+    opening = command_start + len(command) + 1
+    while opening < len(source) and source[opening].isspace():
+        opening += 1
+    if opening >= len(source) or source[opening] != "{":
+        return None
+    depth = 0
+    position = opening
+    while position < len(source):
+        character = source[position]
+        escaped = position > 0 and source[position - 1] == "\\"
+        if character == "{" and not escaped:
+            depth += 1
+        elif character == "}" and not escaped:
+            depth -= 1
+            if depth == 0:
+                return opening + 1, position
+        position += 1
+    raise ValueError(f"unterminated \\{command} argument")
+
+
+def with_canonical_project_link(candidate: ProjectCandidate) -> ProjectCandidate:
+    """Link an unlinked project heading to its first configured GitHub repository."""
+    if not candidate.git_repositories:
+        return candidate
+    heading_bounds = _command_argument_bounds(candidate.latex, "resumeProjectHeading")
+    if heading_bounds is None:
+        return candidate
+    heading_start, heading_end = heading_bounds
+    heading = candidate.latex[heading_start:heading_end]
+    if r"\href{" in heading:
+        return candidate
+
+    repository_url = f"https://github.com/{candidate.git_repositories[0]}"
+    title_bounds = _command_argument_bounds(heading, "textbf")
+    if title_bounds is None:
+        linked_heading = rf"\href{{{repository_url}}}{{{heading}}}"
+    else:
+        title_start, title_end = title_bounds
+        textbf_start = heading.rfind(r"\textbf", 0, title_start)
+        if textbf_start < 0:
+            return candidate
+        textbf_end = title_end + 1
+        linked_title = rf"\href{{{repository_url}}}{{{heading[textbf_start:textbf_end]}}}"
+        linked_heading = heading[:textbf_start] + linked_title + heading[textbf_end:]
+    return replace(
+        candidate,
+        latex=candidate.latex[:heading_start] + linked_heading + candidate.latex[heading_end:],
+    )
+
+
 def _terms(value: str) -> frozenset[str]:
     return frozenset(
         term
@@ -375,12 +430,14 @@ def load_project_inventory(
     approved_ids = frozenset(item.id for item in evidence if item.approved)
     candidates = tuple(_candidate_from_json(item) for item in payload)
     seen_ids: set[str] = set()
+    linked_candidates: list[ProjectCandidate] = []
     for candidate in candidates:
         _validate_candidate(candidate, approved_ids)
         if candidate.id in seen_ids:
             raise ValueError(f"project inventory contains duplicate ID: {candidate.id}")
         seen_ids.add(candidate.id)
-    return candidates
+        linked_candidates.append(with_canonical_project_link(candidate))
+    return tuple(linked_candidates)
 
 
 def project_inventory_entries_from_master(
