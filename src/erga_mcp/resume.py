@@ -185,9 +185,7 @@ def resume_bullet_length_report(
     configured = any((minimum, target, maximum))
     if configured and not 0 < minimum <= target <= maximum:
         raise ValueError("resume bullet character lengths must be zero or ordered positive values")
-    bullets = tuple(
-        latex_to_text(value) for value in _command_arguments(latex_content, "resumeItem")
-    )
+    bullets = resume_item_texts(latex_content)
     soft_deviations = [
         {"length": len(text), "text": text}
         for text in bullets
@@ -208,6 +206,11 @@ def resume_bullet_length_report(
         "validated_bullets": len(bullets),
         "violations": violations,
     }
+
+
+def resume_item_texts(latex_content: str) -> tuple[str, ...]:
+    """Return rendered text for every resume bullet in source order."""
+    return tuple(latex_to_text(value) for value in _command_arguments(latex_content, "resumeItem"))
 
 
 def _safe_path_component(value: str) -> str:

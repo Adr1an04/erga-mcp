@@ -61,7 +61,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 12)
+        self.assertEqual(TAILORING_VERSION, 13)
 
     def test_relevance_requires_term_boundaries_and_rejects_substring_collisions(self) -> None:
         for skill, unrelated in (
@@ -202,6 +202,114 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
             report = json.loads(result.proposal.claim_report_path.read_text(encoding="utf-8"))
             self.assertEqual(report["project_selection"]["selected_ids"], ["embedded-controller"])
             self.assertEqual(result.changed_sections, ("Projects",))
+
+    def test_selected_inventory_project_preserves_matching_master_block_formatting(self) -> None:
+        source_text = _TEMPLATE.replace(
+            r"\resumeProjectHeading{\textbf{Stream Engine}",
+            r"\resumeProjectHeading{\href{https://example.test/stream}{\textbf{Stream Engine}}",
+        ).replace(
+            "low-latency Python services.",
+            r"low-latency \textbf{Python} services.",
+        )
+        inventory = (
+            ProjectCandidate(
+                id="stream-engine",
+                title="Stream Engine",
+                latex=(
+                    r"\resumeProjectHeading{\textbf{Stream Engine} $|$ "
+                    r"\textit{Python, PyTorch, Docker}}{}\n"
+                    r"\resumeItemListStart\n"
+                    r"\resumeItem{Implemented a real-time inference engine with low-latency "
+                    r"Python services.}\n"
+                    r"\resumeItemListEnd\n"
+                ),
+                evidence_ids=("ev_stream",),
+                bullet_evidence_ids=(("ev_stream",),),
+                tags=("python", "pytorch", "inference"),
+            ),
+        )
+        evidence = [
+            Evidence(
+                "ev_stream",
+                "Career#Stream",
+                "Implemented a real-time inference engine with low-latency Python services.",
+                True,
+                datetime.now(UTC),
+            )
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text(source_text, encoding="utf-8")
+
+            result = create_automatic_resume_proposal(
+                resume_path=source,
+                output_dir=root / "artifacts",
+                job_description="Required: Python PyTorch inference",
+                evidence=evidence,
+                editable_sections=("projects",),
+                project_candidates=inventory,
+                project_count=1,
+            )
+
+            proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
+            self.assertIn(r"\href{https://example.test/stream}{\textbf{Stream Engine}}", proposed)
+            self.assertIn(r"low-latency \textbf{Python} services", proposed)
+
+    def test_duplicate_lead_rewrite_selects_an_alternative_that_fits_the_layout(self) -> None:
+        base = "Created a Python platform for deterministic project testing "
+        bullet = base + ("x" * (114 - len(base))) + "."
+        self.assertEqual(len(bullet), 115)
+        inventory = (
+            ProjectCandidate(
+                id="python-platform",
+                title="Python Platform",
+                latex=(
+                    r"\resumeProjectHeading{\textbf{Python Platform}}{}"
+                    "\n"
+                    r"\resumeItemListStart"
+                    "\n"
+                    rf"\resumeItem{{{bullet}}}"
+                    "\n"
+                    r"\resumeItemListEnd"
+                    "\n"
+                ),
+                evidence_ids=("ev_platform",),
+                bullet_evidence_ids=(("ev_platform",),),
+                tags=("python", "platform", "testing"),
+            ),
+        )
+        evidence = [
+            Evidence(
+                "ev_platform",
+                "Career#Platform",
+                bullet,
+                True,
+                datetime.now(UTC),
+            )
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text(_TEMPLATE, encoding="utf-8")
+
+            result = create_automatic_resume_proposal(
+                resume_path=source,
+                output_dir=root / "artifacts",
+                job_description="Required: Python platform testing",
+                evidence=evidence,
+                editable_sections=("projects",),
+                bullet_min_chars=1,
+                bullet_target_chars=105,
+                bullet_max_chars=116,
+                project_candidates=inventory,
+                project_count=1,
+                require_unique_lead_verbs=True,
+            )
+
+            proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
+            self.assertIn("Produced a Python platform", proposed)
+            self.assertEqual(result.constraint_violations, ())
 
     def test_uses_an_explicit_baseline_only_when_no_relevant_ordering_change_exists(self) -> None:
         with TemporaryDirectory() as directory:

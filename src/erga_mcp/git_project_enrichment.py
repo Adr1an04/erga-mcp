@@ -129,41 +129,6 @@ def _approved_bullet_evidence(
     return store.add_evidence(source_ref=source_ref, text=bullet.text, approved=True)
 
 
-def _candidate_with_git_bullets(
-    candidate: ProjectCandidate,
-    bullets: list[GitResearchBullet],
-    evidence: list[Evidence],
-) -> ProjectCandidate:
-    heading, separator, _ = candidate.latex.partition(r"\resumeItemListStart")
-    if not separator:
-        raise ValueError(f"project inventory entry has no item list: {candidate.id}")
-    latex = "\n".join(
-        [
-            heading.rstrip(),
-            r"\resumeItemListStart",
-            *(rf"\resumeItem{{{_latex_text(bullet.text)}}}" for bullet in bullets),
-            r"\resumeItemListEnd",
-            "",
-        ]
-    )
-    evidence_ids = tuple(item.id for item in evidence)
-    derived_tags = {
-        token
-        for bullet in bullets
-        for token in _TOKEN.findall(bullet.text.casefold())
-        if len(token) > 1
-    }
-    return ProjectCandidate(
-        id=candidate.id,
-        title=candidate.title,
-        latex=latex,
-        evidence_ids=evidence_ids,
-        bullet_evidence_ids=tuple((evidence_id,) for evidence_id in evidence_ids),
-        tags=tuple(sorted({*candidate.tags, *derived_tags})),
-        git_repositories=candidate.git_repositories,
-    )
-
-
 def enrich_ranked_projects_from_git(
     *,
     candidates: tuple[ProjectCandidate, ...],
@@ -176,10 +141,20 @@ def enrich_ranked_projects_from_git(
     store: ErgaStore,
     cache_root: Path,
 ) -> GitProjectEnrichment:
-    """Rank JSON projects first, then derive selected-project bullets from authenticated Git."""
-    ranked = select_projects(candidates, job_description, max_projects=max(1, len(candidates)))
+    """Rank approved JSON projects and collect Git provenance without rewriting résumé copy."""
+    resume_candidates = tuple(
+        candidate
+        for candidate in candidates
+        if candidate.evidence_ids and len(candidate.bullet_evidence_ids) >= bullets_per_project
+    )
+    ranked = select_projects(
+        resume_candidates,
+        job_description,
+        max_projects=max(1, len(resume_candidates)),
+        minimum_bullets=bullets_per_project,
+    )
     if not ranked:
-        return GitProjectEnrichment((), (), (), (), len(candidates))
+        return GitProjectEnrichment(resume_candidates, (), (), (), len(resume_candidates))
 
     login: str | None = None
     local_candidates = [
@@ -187,21 +162,20 @@ def enrich_ranked_projects_from_git(
         for draft in store.list_git_research_drafts()
         if draft.source == "git" and Path(draft.repo_path).is_dir()
     ]
-    enriched: list[ProjectCandidate] = []
+    researched = 0
     derived_evidence: list[Evidence] = []
     reports: list[dict[str, object]] = []
     warnings: list[str] = []
 
     for candidate in ranked:
-        if len(enriched) >= project_count:
+        if researched >= project_count:
             break
+        researched += 1
         if not candidate.git_repositories:
-            if candidate.evidence_ids:
-                enriched.append(candidate)
-                outcome = "retained approved catalogue bullets"
-            else:
-                outcome = "skipped the unverified project"
-            warnings.append(f"{candidate.title} has no git_repositories mapping; {outcome}.")
+            warnings.append(
+                f"{candidate.title} has no git_repositories mapping; retained approved "
+                "catalogue bullets."
+            )
             continue
         project_bullets: list[GitResearchBullet] = []
         project_commits: set[str] = set()
@@ -246,13 +220,9 @@ def enrich_ranked_projects_from_git(
                     }
                 )
         except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
-            if candidate.evidence_ids:
-                enriched.append(candidate)
-                outcome = "retained approved catalogue bullets"
-            else:
-                outcome = "skipped the unverified project"
             warnings.append(
-                f"Git research for {candidate.title} was unavailable; {outcome}: {error}"
+                f"Git research for {candidate.title} was unavailable; retained approved "
+                f"catalogue bullets: {error}"
             )
             continue
 
@@ -265,20 +235,15 @@ def enrich_ranked_projects_from_git(
             ),
         )[:bullets_per_project]
         if not ranked_bullets:
-            if candidate.evidence_ids:
-                enriched.append(candidate)
-                outcome = "retained approved catalogue bullets"
-            else:
-                outcome = "skipped the unverified project"
             warnings.append(
-                f"Git research found no attributable code changes for {candidate.title}; {outcome}."
+                f"Git research found no attributable code changes for {candidate.title}; "
+                "retained approved catalogue bullets."
             )
             continue
         bullet_evidence = [
             _approved_bullet_evidence(store=store, project_id=candidate.id, bullet=bullet)
             for bullet in ranked_bullets
         ]
-        enriched.append(_candidate_with_git_bullets(candidate, ranked_bullets, bullet_evidence))
         derived_evidence.extend(bullet_evidence)
         reports.append(
             {
@@ -288,14 +253,15 @@ def enrich_ranked_projects_from_git(
                 "authored_commits": len(project_commits),
                 "files": len(project_files),
                 "generated_bullets": len(ranked_bullets),
+                "resume_bullets_source": "approved_catalogue",
                 "evidence_ids": [item.id for item in bullet_evidence],
             }
         )
 
     return GitProjectEnrichment(
-        candidates=tuple(enriched),
+        candidates=resume_candidates,
         evidence=tuple(derived_evidence),
         reports=tuple(reports),
         warnings=tuple(warnings),
-        catalogue_candidate_count=len(candidates),
+        catalogue_candidate_count=len(resume_candidates),
     )

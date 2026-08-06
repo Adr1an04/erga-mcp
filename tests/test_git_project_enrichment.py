@@ -77,7 +77,7 @@ class GitProjectEnrichmentTests(unittest.TestCase):
         self.assertEqual(merged[1].evidence_ids, ())
         self.assertIn("distributed-systems", merged[1].tags)
 
-    def test_ranks_json_first_then_builds_selected_bullets_from_authored_diffs(self) -> None:
+    def test_ranks_json_but_keeps_git_research_out_of_resume_copy(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             repo = root / "api-platform"
@@ -149,7 +149,7 @@ class GitProjectEnrichmentTests(unittest.TestCase):
                     candidates=candidates,
                     job_description="Required: Python API testing",
                     project_count=1,
-                    bullets_per_project=2,
+                    bullets_per_project=1,
                     bullet_min_characters=99,
                     bullet_target_characters=105,
                     bullet_max_characters=116,
@@ -158,15 +158,17 @@ class GitProjectEnrichmentTests(unittest.TestCase):
                 )
 
         self.assertEqual(result.catalogue_candidate_count, 2)
-        self.assertEqual([item.id for item in result.candidates], ["api-platform"])
-        self.assertIn("1 commit", result.candidates[0].latex)
-        self.assertIn("2 files", result.candidates[0].latex)
-        self.assertIn("+120/-18 lines", result.candidates[0].latex)
+        self.assertEqual([item.id for item in result.candidates], ["frontend", "api-platform"])
+        selected = next(item for item in result.candidates if item.id == "api-platform")
+        self.assertIn("approved API Platform baseline", selected.latex)
+        self.assertNotIn("commit", selected.latex)
+        self.assertNotIn("+120/-18 lines", selected.latex)
         self.assertTrue(all(105 <= len(item.text) <= 116 for item in result.evidence))
         self.assertEqual(len(result.evidence), 1)
         self.assertTrue(result.evidence[0].approved)
         self.assertTrue(result.evidence[0].source_ref.startswith("git-derived:api-platform@"))
         self.assertEqual(result.reports[0]["authored_commits"], 1)
+        self.assertEqual(result.reports[0]["resume_bullets_source"], "approved_catalogue")
         self.assertEqual(result.warnings, ())
 
     def test_missing_repository_mapping_retains_approved_catalogue_bullet(self) -> None:
@@ -175,7 +177,7 @@ class GitProjectEnrichmentTests(unittest.TestCase):
                 candidates=(_candidate("offline-tool", "Offline Tool", ("python",), ()),),
                 job_description="Python",
                 project_count=1,
-                bullets_per_project=2,
+                bullets_per_project=1,
                 bullet_min_characters=0,
                 bullet_target_characters=0,
                 bullet_max_characters=0,

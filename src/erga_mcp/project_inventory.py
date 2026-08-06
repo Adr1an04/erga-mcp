@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import Evidence
-from .resume import latex_to_text
+from .resume import latex_to_text, resume_item_texts
 
 _TOKEN = re.compile(r"[a-z0-9+#.]+")
 _STOP_WORDS = frozenset(
@@ -16,18 +16,38 @@ _STOP_WORDS = frozenset(
         "a",
         "an",
         "and",
+        "across",
         "at",
         "by",
+        "change",
+        "changes",
+        "create",
+        "created",
+        "design",
+        "designed",
         "for",
         "from",
+        "full",
         "in",
         "into",
+        "job",
+        "jobs",
         "of",
         "on",
         "or",
+        "project",
+        "projects",
+        "recruiting",
+        "resume",
+        "role",
+        "roles",
+        "that",
         "the",
+        "through",
         "to",
         "with",
+        "work",
+        "working",
     }
 )
 _DISALLOWED_LATEX = ("\\input", "\\include", "\\write18", "\\immediate\\write")
@@ -58,6 +78,38 @@ _REQUIREMENT_MARKERS = (
     "must have",
     "must-have",
 )
+_INTERNAL_RESEARCH_PATTERNS = (
+    (
+        "raw Git churn statistics",
+        re.compile(
+            r"(?:\+\d[\d,]*\s*/\s*-\d[\d,]*\s+lines?|\+\d[\d,]*\s+and\s+-\d[\d,]*\s+lines?)", re.I
+        ),
+    ),
+    (
+        "generic Git research taxonomy",
+        re.compile(
+            r"\b(?:testing|implementation|api|ui|security|persistence)"
+            r"(?:/[a-z]+)+\s+work\b",
+            re.I,
+        ),
+    ),
+    (
+        "internal Git provenance wording",
+        re.compile(
+            r"\b(?:git-backed change set|git-reviewed lines|diff-backed validation|"
+            r"reviewed diffs|git diffs|git history)\b",
+            re.I,
+        ),
+    ),
+    (
+        "commit/file accounting instead of an outcome",
+        re.compile(r"\b\d+\s+(?:git\s+)?commits?\s+and\s+\d+\s+files?\b", re.I),
+    ),
+    (
+        "code-churn wording",
+        re.compile(r"\b(?:code|lines?)\s+(?:added|removed|changed)\b", re.I),
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -84,8 +136,20 @@ def _terms(value: str) -> frozenset[str]:
     return frozenset(
         term
         for term in _TOKEN.findall(value.casefold())
-        if len(term) > 1 and term not in _STOP_WORDS
+        if len(term) > 1
+        and term not in _STOP_WORDS
+        and any(character.isalpha() for character in term)
     )
+
+
+def project_quality_issues(candidate: ProjectCandidate) -> tuple[str, ...]:
+    """Identify internal research prose that must never become résumé copy."""
+    issues: list[str] = []
+    for bullet in resume_item_texts(candidate.latex):
+        for label, pattern in _INTERNAL_RESEARCH_PATTERNS:
+            if pattern.search(bullet) and label not in issues:
+                issues.append(label)
+    return tuple(issues)
 
 
 def _required_terms(job_description: str) -> frozenset[str]:
@@ -246,6 +310,7 @@ def select_projects(
             if len(candidate.bullet_evidence_ids) >= minimum_bullets
         )
     )
+    eligible = tuple(candidate for candidate in eligible if not project_quality_issues(candidate))
     ranked = sorted(
         ((candidate, _score(candidate, job_description)) for candidate in eligible),
         key=lambda item: (-item[1], item[0].id),

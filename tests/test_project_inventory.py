@@ -10,6 +10,7 @@ from erga_mcp.models import Evidence
 from erga_mcp.project_inventory import (
     ProjectCandidate,
     load_project_inventory,
+    project_quality_issues,
     select_project_rationales,
     select_projects,
 )
@@ -217,6 +218,41 @@ class ProjectInventoryTests(unittest.TestCase):
         )
 
         self.assertEqual([candidate.id for candidate in selected], ["two-bullets"])
+
+    def test_select_projects_rejects_internal_git_research_prose(self) -> None:
+        raw_research = ProjectCandidate(
+            id="raw-research",
+            title="Raw Research",
+            latex=(
+                r"\resumeProjectHeading{\textbf{Raw Research}}{}\n"
+                r"\resumeItemListStart\n"
+                r"\resumeItem{Implemented API/UI work across 2 commits and 16 files "
+                r"(+477/-136 lines), covering app and apps in Git diffs.}\n"
+                r"\resumeItemListEnd"
+            ),
+            evidence_ids=("ev_raw",),
+            bullet_evidence_ids=(("ev_raw",),),
+            tags=("python", "api"),
+        )
+        polished = ProjectCandidate(
+            id="polished",
+            title="Polished",
+            latex=(
+                r"\resumeProjectHeading{\textbf{Polished}}{}\n"
+                r"\resumeItemListStart\n"
+                r"\resumeItem{Built a Python API that processed 2,000+ verified submissions.}\n"
+                r"\resumeItemListEnd"
+            ),
+            evidence_ids=("ev_polished",),
+            bullet_evidence_ids=(("ev_polished",),),
+            tags=("python", "api"),
+        )
+
+        selected = select_projects((raw_research, polished), "Required: Python API", max_projects=2)
+
+        self.assertTrue(project_quality_issues(raw_research))
+        self.assertEqual(project_quality_issues(polished), ())
+        self.assertEqual([candidate.id for candidate in selected], ["polished"])
 
     def test_inventory_rejects_unapproved_or_missing_evidence(self) -> None:
         evidence = [

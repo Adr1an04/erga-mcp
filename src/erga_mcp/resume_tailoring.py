@@ -10,7 +10,12 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 from .models import Evidence
-from .project_inventory import ProjectCandidate, select_project_rationales, select_projects
+from .project_inventory import (
+    ProjectCandidate,
+    project_quality_issues,
+    select_project_rationales,
+    select_projects,
+)
 from .resume import ResumeProposal, latex_to_text, resolve_section_name
 
 _TOKEN = re.compile(r"[a-z0-9+#.]+")
@@ -96,6 +101,13 @@ _RELEVANCE_CLUSTERS = (
     frozenset({"test", "testing", "pytest", "quality", "reliability"}),
 )
 _LEAD_VERB_ALTERNATIVES = {
+    "automated": (
+        "Scripted",
+        "Streamlined",
+        "Orchestrated",
+        "Systematized",
+        "Programmed",
+    ),
     "architected": (
         "Designed",
         "Engineered",
@@ -197,9 +209,16 @@ _LEAD_VERB_ALTERNATIVES = {
         "Advanced",
     ),
     "shipped": ("Delivered", "Released", "Launched", "Published", "Deployed", "Produced"),
+    "standardized": (
+        "Unified",
+        "Codified",
+        "Harmonized",
+        "Consolidated",
+        "Normalized",
+    ),
     "won": ("Earned", "Secured", "Captured"),
 }
-TAILORING_VERSION = 12
+TAILORING_VERSION = 13
 
 
 @dataclass(frozen=True)
@@ -372,6 +391,94 @@ def _entry_ranges(section: str, heading_command: str) -> tuple[str, list[str], s
         for index, heading in enumerate(headings)
     ]
     return prefix, entries, section[suffix_start:]
+
+
+def _prefer_master_project_blocks(
+    section: str, candidates: tuple[ProjectCandidate, ...]
+) -> tuple[ProjectCandidate, ...]:
+    """Reuse exact master formatting when an inventory project carries the same claims."""
+    _, entries, _ = _entry_ranges(section, "resumeProjectHeading")
+    master_entries: dict[str, str] = {}
+    for entry in entries:
+        headings = _command_spans(entry, "resumeProjectHeading")
+        if not headings:
+            continue
+        heading_text = _normalized(headings[0].content)
+        emphasized_titles = {
+            _normalized(span.content) for span in _command_spans(headings[0].content, "textbf")
+        }
+        for candidate in candidates:
+            title = _normalized(candidate.title)
+            if (
+                title in emphasized_titles
+                or heading_text == title
+                or heading_text.startswith(f"{title} ")
+            ):
+                master_entries.setdefault(candidate.id, entry)
+
+    preferred: list[ProjectCandidate] = []
+    for candidate in candidates:
+        master_entry = master_entries.get(candidate.id)
+        if master_entry is None:
+            preferred.append(candidate)
+            continue
+        inventory_bullets = [
+            _normalized(span.content) for span in _command_spans(candidate.latex, "resumeItem")
+        ]
+        master_bullets = [
+            _normalized(span.content) for span in _command_spans(master_entry, "resumeItem")
+        ]
+        preferred.append(
+            replace(candidate, latex=master_entry)
+            if inventory_bullets == master_bullets
+            else candidate
+        )
+    return tuple(preferred)
+
+
+def _project_quality_rejections(
+    candidates: tuple[ProjectCandidate, ...],
+    original: str,
+    *,
+    maximum_characters: int,
+    require_unique_lead_verbs: bool,
+) -> list[dict[str, object]]:
+    original_bullets = {
+        _normalized(span.content) for span in _command_spans(original, "resumeItem")
+    }
+    original_leads = {
+        words[0].casefold()
+        for span in _command_spans(original, "resumeItem")
+        if (words := re.findall(r"[A-Za-z]+", latex_to_text(span.content)))
+    }
+    rejections: list[dict[str, object]] = []
+    for candidate in candidates:
+        issues = list(project_quality_issues(candidate))
+        for span in _command_spans(candidate.latex, "resumeItem"):
+            text = latex_to_text(span.content)
+            if _normalized(text) in original_bullets or not maximum_characters:
+                continue
+            if len(text) > maximum_characters:
+                reason = f"new bullet exceeds the {maximum_characters}-character layout maximum"
+                if reason not in issues:
+                    issues.append(reason)
+                continue
+            words = re.findall(r"[A-Za-z]+", text)
+            if require_unique_lead_verbs and words and words[0].casefold() in original_leads:
+                lead = words[0]
+                alternatives = _LEAD_VERB_ALTERNATIVES.get(lead.casefold(), ())
+                fits = any(
+                    alternative.casefold() not in original_leads
+                    and len(text) - len(lead) + len(alternative) <= maximum_characters
+                    for alternative in alternatives
+                )
+                if not fits:
+                    reason = "new bullet has no layout-safe lead-verb alternative"
+                    if reason not in issues:
+                        issues.append(reason)
+        if issues:
+            rejections.append({"id": candidate.id, "title": candidate.title, "reasons": issues})
+    return rejections
 
 
 def _reorder_bullets(
@@ -635,7 +742,11 @@ def _lead_verb_report(source: str, *, required: bool) -> tuple[dict[str, object]
 
 
 def _resolve_duplicate_lead_verbs(
-    source: str, *, required: bool, editable_sections: tuple[str, ...]
+    source: str,
+    *,
+    required: bool,
+    editable_sections: tuple[str, ...],
+    maximum_characters: int = 0,
 ) -> tuple[str, list[dict[str, object]]]:
     """Rewrite repeated bullet openers only when a semantics-preserving alternative exists."""
     if not required:
@@ -684,8 +795,18 @@ def _resolve_duplicate_lead_verbs(
         if section is None:
             continue
         candidates = _LEAD_VERB_ALTERNATIVES.get(normalized, ())
+        original_text = latex_to_text(span.content)
         replacement = next(
-            (candidate for candidate in candidates if candidate.casefold() not in used), None
+            (
+                candidate
+                for candidate in candidates
+                if candidate.casefold() not in used
+                and (
+                    not maximum_characters
+                    or len(original_text) - len(lead) + len(candidate) <= maximum_characters
+                )
+            ),
+            None,
         )
         if replacement is None:
             continue
@@ -778,9 +899,19 @@ def create_automatic_resume_proposal(
     claims: list[dict[str, object]] = []
     project_claims: list[dict[str, object]] = []
     skill_records: list[dict[str, object]] = []
+    quality_rejections = _project_quality_rejections(
+        project_candidates,
+        original,
+        maximum_characters=bullet_max_chars,
+        require_unique_lead_verbs=require_unique_lead_verbs,
+    )
+    rejected_project_ids = {
+        str(item["id"]) for item in quality_rejections if isinstance(item.get("id"), str)
+    }
     project_selection: dict[str, object] = {
         "candidate_count": len(project_candidates),
         "mode": "reorder_only",
+        "quality_rejections": quality_rejections,
         "selected_ids": [],
     }
 
@@ -793,16 +924,25 @@ def create_automatic_resume_proposal(
             continue
         start, end, canonical = _section_body(proposed, requested_name)
         if requested_name == "Projects" and project_candidates:
+            effective_candidates = _prefer_master_project_blocks(
+                proposed[start:end], project_candidates
+            )
+            effective_candidates = tuple(
+                candidate
+                for candidate in effective_candidates
+                if candidate.id not in rejected_project_ids
+            )
             selected_projects = select_projects(
-                project_candidates, job_description, max_projects=project_count
+                effective_candidates, job_description, max_projects=project_count
             )
             selected_rationales = select_project_rationales(
-                project_candidates, job_description, max_projects=project_count
+                effective_candidates, job_description, max_projects=project_count
             )
             if not selected_projects:
                 project_selection = {
                     "candidate_count": len(project_candidates),
                     "mode": "inventory_no_match",
+                    "quality_rejections": quality_rejections,
                     "selected_ids": [],
                     "selected_titles": [],
                 }
@@ -815,6 +955,7 @@ def create_automatic_resume_proposal(
             project_selection = {
                 "candidate_count": len(project_candidates),
                 "mode": "inventory",
+                "quality_rejections": quality_rejections,
                 "selected_ids": [item.id for item in selected_projects],
                 "selected_titles": [item.title for item in selected_projects],
                 "selected": [
@@ -842,10 +983,18 @@ def create_automatic_resume_proposal(
         if changed:
             changed_sections.append(canonical)
 
+    rewrite_sections = editable_sections
+    if project_selection["mode"] == "inventory_no_match":
+        rewrite_sections = tuple(
+            section
+            for section in editable_sections
+            if re.sub(r"[^a-z0-9]+", "", section.casefold()) != "projects"
+        )
     proposed, lead_verb_rewrites = _resolve_duplicate_lead_verbs(
         proposed,
         required=require_unique_lead_verbs,
-        editable_sections=editable_sections,
+        editable_sections=rewrite_sections,
+        maximum_characters=bullet_max_chars,
     )
     for rewrite in lead_verb_rewrites:
         section = rewrite.get("section")
@@ -886,6 +1035,7 @@ def create_automatic_resume_proposal(
             project_selection = {
                 "candidate_count": len(project_candidates),
                 "mode": "inventory_constraint_fallback",
+                "quality_rejections": quality_rejections,
                 "selected_ids": [],
                 "selected_titles": [],
             }
