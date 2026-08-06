@@ -9,7 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.cli import main
-from erga_mcp.git_evidence import GitCommit, analyze_commits
+from erga_mcp.git_evidence import GitCommit, analyze_commits, scan_authored_commits
 
 
 class GitEvidenceCliTests(unittest.TestCase):
@@ -224,6 +224,32 @@ class GitEvidenceCliTests(unittest.TestCase):
 
             self.assertNotIn(merge_sha, [candidate["commit_sha"] for candidate in candidates])
 
+    def test_authored_scan_excludes_collaborator_commits_across_all_refs(self) -> None:
+        with TemporaryDirectory() as directory:
+            repo = Path(directory)
+            self._git(repo, "init")
+            self._git(repo, "config", "user.email", "owner@example.test")
+            self._git(repo, "config", "user.name", "Owner")
+            owner_sha = self._commit(
+                repo,
+                "src/owner.py",
+                "def owner_feature(): pass\n",
+                "Implement owner feature",
+            )
+            self._git(repo, "config", "user.email", "collaborator@example.test")
+            self._git(repo, "config", "user.name", "Collaborator")
+            collaborator_sha = self._commit(
+                repo,
+                "src/collaborator.py",
+                "def collaborator_feature(): pass\n",
+                "Implement collaborator feature",
+            )
+
+            commits = scan_authored_commits(repo, {owner_sha})
+
+        self.assertIn(owner_sha, [commit.sha for commit in commits])
+        self.assertNotIn(collaborator_sha, [commit.sha for commit in commits])
+
     def test_research_all_scans_vague_commit_from_diff_and_persists_reviewable_draft(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -265,7 +291,8 @@ class GitEvidenceCliTests(unittest.TestCase):
             self.assertTrue(draft["generated_from_git_diffs"])
             self.assertTrue(draft["needs_review"])
             self.assertFalse(draft["auto_approved"])
-            self.assertIn("POST /jobs/research", draft["summary"])
+            self.assertIn("1 commit", draft["summary"])
+            self.assertIn("research and routes", draft["summary"])
             self.assertNotIn("updates", draft["summary"].casefold())
             self.assertEqual(draft["source_commit_shas"], [commit_sha])
             self.assertEqual(draft["source_files"], ["src/research/routes.py"])

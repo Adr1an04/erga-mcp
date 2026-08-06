@@ -10,7 +10,13 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 from .models import Evidence
-from .project_inventory import ProjectCandidate, select_projects
+from .project_inventory import (
+    ProjectCandidate,
+    ProjectSelection,
+    project_quality_issues,
+    select_project_rationales,
+    select_projects,
+)
 from .resume import ResumeProposal, latex_to_text, resolve_section_name
 
 _TOKEN = re.compile(r"[a-z0-9+#.]+")
@@ -95,7 +101,125 @@ _RELEVANCE_CLUSTERS = (
     frozenset({"pytorch", "tensorflow", "machine", "ml", "model", "inference"}),
     frozenset({"test", "testing", "pytest", "quality", "reliability"}),
 )
-TAILORING_VERSION = 5
+_LEAD_VERB_ALTERNATIVES = {
+    "automated": (
+        "Scripted",
+        "Streamlined",
+        "Orchestrated",
+        "Systematized",
+        "Programmed",
+    ),
+    "architected": (
+        "Designed",
+        "Engineered",
+        "Structured",
+        "Established",
+        "Created",
+        "Developed",
+    ),
+    "authored": ("Wrote", "Produced", "Created", "Documented", "Developed", "Delivered"),
+    "built": (
+        "Developed",
+        "Engineered",
+        "Constructed",
+        "Created",
+        "Delivered",
+        "Produced",
+        "Established",
+        "Implemented",
+        "Assembled",
+        "Introduced",
+    ),
+    "created": (
+        "Developed",
+        "Built",
+        "Produced",
+        "Designed",
+        "Established",
+        "Engineered",
+        "Delivered",
+        "Introduced",
+    ),
+    "designed": (
+        "Architected",
+        "Developed",
+        "Created",
+        "Engineered",
+        "Structured",
+        "Established",
+        "Produced",
+    ),
+    "developed": (
+        "Built",
+        "Engineered",
+        "Created",
+        "Constructed",
+        "Delivered",
+        "Produced",
+        "Established",
+        "Implemented",
+        "Introduced",
+    ),
+    "earned": ("Won", "Secured", "Captured"),
+    "engineered": (
+        "Developed",
+        "Built",
+        "Designed",
+        "Created",
+        "Delivered",
+        "Constructed",
+        "Produced",
+        "Established",
+    ),
+    "implemented": (
+        "Integrated",
+        "Delivered",
+        "Deployed",
+        "Developed",
+        "Engineered",
+        "Built",
+        "Created",
+        "Constructed",
+        "Produced",
+        "Executed",
+        "Completed",
+        "Advanced",
+        "Expanded",
+        "Extended",
+        "Established",
+        "Added",
+        "Introduced",
+    ),
+    "improved": (
+        "Enhanced",
+        "Strengthened",
+        "Advanced",
+        "Optimized",
+        "Refined",
+        "Accelerated",
+        "Streamlined",
+    ),
+    "optimized": (
+        "Improved",
+        "Accelerated",
+        "Streamlined",
+        "Tuned",
+        "Refined",
+        "Enhanced",
+        "Strengthened",
+        "Advanced",
+    ),
+    "shipped": ("Delivered", "Released", "Launched", "Published", "Deployed", "Produced"),
+    "standardized": (
+        "Unified",
+        "Codified",
+        "Harmonized",
+        "Consolidated",
+        "Normalized",
+    ),
+    "won": ("Earned", "Secured", "Captured"),
+}
+TAILORING_VERSION = 15
 
 
 @dataclass(frozen=True)
@@ -104,6 +228,16 @@ class AutomaticResumeProposal:
     meaningful_change: bool
     changed_sections: tuple[str, ...]
     constraint_violations: tuple[str, ...]
+    project_selection: dict[str, object]
+
+
+@dataclass(frozen=True)
+class ResumeProjectSelectionPlan:
+    """The one project plan shared by Git research and final résumé generation."""
+
+    selected: tuple[ProjectCandidate, ...]
+    rationales: tuple[ProjectSelection, ...]
+    quality_rejections: tuple[dict[str, object], ...]
 
 
 @dataclass(frozen=True)
@@ -213,6 +347,65 @@ def _command_spans(
         position = argument_end
 
 
+def classify_wrapped_resume_items(
+    source: str,
+    candidates: tuple[ProjectCandidate, ...],
+    wrapped_item_indices: tuple[int, ...],
+) -> tuple[tuple[str, ...], tuple[int, ...]]:
+    """Map wrapped document bullets to inventory projects or immutable baseline sections."""
+    document_start = source.find(r"\begin{document}")
+    if document_start < 0:
+        raise ValueError("resume proposal must contain \\begin{document}")
+    document = source[document_start:]
+    bullets = _command_spans(document, "resumeItem")
+    project_start, project_end, _ = _section_body(document, "Projects")
+    headings = _command_spans(
+        document,
+        "resumeProjectHeading",
+        start=project_start,
+        end=project_end,
+    )
+    project_ranges: list[tuple[int, int, str]] = []
+    for index, heading in enumerate(headings):
+        entry_end = headings[index + 1].start if index + 1 < len(headings) else project_end
+        emphasized_titles = {
+            _normalized(span.content) for span in _command_spans(heading.content, "textbf")
+        }
+        heading_text = _normalized(heading.content)
+        matches = [
+            candidate
+            for candidate in candidates
+            if (
+                _normalized(candidate.title) in emphasized_titles
+                or heading_text == _normalized(candidate.title)
+                or heading_text.startswith(f"{_normalized(candidate.title)} ")
+            )
+        ]
+        if len(matches) != 1:
+            raise ValueError("rendered project heading does not match one inventory project")
+        project_ranges.append((heading.start, entry_end, matches[0].id))
+
+    project_ids: list[str] = []
+    non_project_indices: list[int] = []
+    for item_index in wrapped_item_indices:
+        if item_index < 0 or item_index >= len(bullets):
+            raise ValueError("resume layout validator returned an invalid bullet index")
+        position = bullets[item_index].start
+        project_id = next(
+            (
+                candidate_id
+                for entry_start, entry_end, candidate_id in project_ranges
+                if entry_start <= position < entry_end
+            ),
+            None,
+        )
+        if project_id is None:
+            non_project_indices.append(item_index)
+        elif project_id not in project_ids:
+            project_ids.append(project_id)
+    return tuple(project_ids), tuple(non_project_indices)
+
+
 def _ranked_commands(
     source: str, command: str, job_description: str, *, group_index: int
 ) -> tuple[list[_RankedValue], list[_RankedValue]]:
@@ -267,6 +460,194 @@ def _entry_ranges(section: str, heading_command: str) -> tuple[str, list[str], s
         for index, heading in enumerate(headings)
     ]
     return prefix, entries, section[suffix_start:]
+
+
+def _prefer_master_project_blocks(
+    section: str, candidates: tuple[ProjectCandidate, ...]
+) -> tuple[ProjectCandidate, ...]:
+    """Reuse exact master formatting when an inventory project carries the same claims."""
+    _, entries, _ = _entry_ranges(section, "resumeProjectHeading")
+    master_entries: dict[str, str] = {}
+    for entry in entries:
+        headings = _command_spans(entry, "resumeProjectHeading")
+        if not headings:
+            continue
+        heading_text = _normalized(headings[0].content)
+        emphasized_titles = {
+            _normalized(span.content) for span in _command_spans(headings[0].content, "textbf")
+        }
+        for candidate in candidates:
+            title = _normalized(candidate.title)
+            if (
+                title in emphasized_titles
+                or heading_text == title
+                or heading_text.startswith(f"{title} ")
+            ):
+                master_entries.setdefault(candidate.id, entry)
+
+    preferred: list[ProjectCandidate] = []
+    for candidate in candidates:
+        master_entry = master_entries.get(candidate.id)
+        if master_entry is None:
+            preferred.append(candidate)
+            continue
+        inventory_bullets = [
+            _normalized(span.content) for span in _command_spans(candidate.latex, "resumeItem")
+        ]
+        master_bullets = [
+            _normalized(span.content) for span in _command_spans(master_entry, "resumeItem")
+        ]
+        preferred.append(
+            replace(candidate, latex=master_entry)
+            if inventory_bullets == master_bullets
+            else candidate
+        )
+    return tuple(preferred)
+
+
+def _projects_present_in_section(
+    section: str, candidates: tuple[ProjectCandidate, ...]
+) -> tuple[ProjectCandidate, ...]:
+    """Return inventory projects already present in the source, preserving source order."""
+    _, entries, _ = _entry_ranges(section, "resumeProjectHeading")
+    by_id = {candidate.id: candidate for candidate in candidates}
+    selected_ids: list[str] = []
+    for entry in entries:
+        headings = _command_spans(entry, "resumeProjectHeading")
+        if not headings:
+            continue
+        heading_text = _normalized(headings[0].content)
+        emphasized_titles = {
+            _normalized(span.content) for span in _command_spans(headings[0].content, "textbf")
+        }
+        match = next(
+            (
+                candidate
+                for candidate in candidates
+                if (
+                    _normalized(candidate.title) in emphasized_titles
+                    or heading_text == _normalized(candidate.title)
+                    or heading_text.startswith(f"{_normalized(candidate.title)} ")
+                )
+            ),
+            None,
+        )
+        if match is not None and match.id not in selected_ids:
+            selected_ids.append(match.id)
+    return tuple(by_id[project_id] for project_id in selected_ids)
+
+
+def _project_quality_rejections(
+    candidates: tuple[ProjectCandidate, ...],
+    original: str,
+    *,
+    maximum_characters: int,
+    require_unique_lead_verbs: bool,
+) -> list[dict[str, object]]:
+    original_bullets = {
+        _normalized(span.content) for span in _command_spans(original, "resumeItem")
+    }
+    projects_start, projects_end, _ = _section_body(original, "Projects")
+    retained_original = original[:projects_start] + original[projects_end:]
+    original_leads = {
+        words[0].casefold()
+        for span in _command_spans(retained_original, "resumeItem")
+        if (words := re.findall(r"[A-Za-z]+", latex_to_text(span.content)))
+    }
+    rejections: list[dict[str, object]] = []
+    for candidate in candidates:
+        issues = list(project_quality_issues(candidate))
+        for span in _command_spans(candidate.latex, "resumeItem"):
+            text = latex_to_text(span.content)
+            if _normalized(text) in original_bullets or not maximum_characters:
+                continue
+            if len(text) > maximum_characters:
+                reason = f"new bullet exceeds the {maximum_characters}-character layout maximum"
+                if reason not in issues:
+                    issues.append(reason)
+                continue
+            words = re.findall(r"[A-Za-z]+", text)
+            if require_unique_lead_verbs and words and words[0].casefold() in original_leads:
+                lead = words[0]
+                alternatives = _LEAD_VERB_ALTERNATIVES.get(lead.casefold(), ())
+                fits = any(
+                    alternative.casefold() not in original_leads
+                    and len(text) - len(lead) + len(alternative) <= maximum_characters
+                    for alternative in alternatives
+                )
+                if not fits:
+                    reason = "new bullet has no layout-safe lead-verb alternative"
+                    if reason not in issues:
+                        issues.append(reason)
+        if issues:
+            rejections.append({"id": candidate.id, "title": candidate.title, "reasons": issues})
+    return rejections
+
+
+def _resume_project_selection_plan(
+    original: str,
+    candidates: tuple[ProjectCandidate, ...],
+    job_description: str,
+    *,
+    project_count: int,
+    maximum_characters: int,
+    require_unique_lead_verbs: bool,
+    additional_quality_rejections: tuple[dict[str, object], ...] = (),
+) -> ResumeProjectSelectionPlan:
+    if not candidates:
+        return ResumeProjectSelectionPlan((), (), ())
+    start, end, _ = _section_body(original, "Projects")
+    effective_candidates = _prefer_master_project_blocks(original[start:end], candidates)
+    quality_rejections = (
+        *_project_quality_rejections(
+            effective_candidates,
+            original,
+            maximum_characters=maximum_characters,
+            require_unique_lead_verbs=require_unique_lead_verbs,
+        ),
+        *additional_quality_rejections,
+    )
+    rejected_ids = {
+        str(item["id"]) for item in quality_rejections if isinstance(item.get("id"), str)
+    }
+    eligible = tuple(
+        candidate for candidate in effective_candidates if candidate.id not in rejected_ids
+    )
+    return ResumeProjectSelectionPlan(
+        selected=select_projects(
+            eligible,
+            job_description,
+            max_projects=project_count,
+        ),
+        rationales=select_project_rationales(
+            eligible,
+            job_description,
+            max_projects=project_count,
+        ),
+        quality_rejections=quality_rejections,
+    )
+
+
+def plan_resume_project_selection(
+    *,
+    resume_path: Path,
+    candidates: tuple[ProjectCandidate, ...],
+    job_description: str,
+    project_count: int,
+    maximum_characters: int,
+    require_unique_lead_verbs: bool,
+) -> ResumeProjectSelectionPlan:
+    """Plan the exact projects before Git inspection and reuse that plan for output."""
+    if resume_path.suffix.casefold() != ".tex" or not resume_path.is_file():
+        raise ValueError("resume_path must point to an existing .tex file")
+    return _resume_project_selection_plan(
+        resume_path.read_text(encoding="utf-8"),
+        candidates,
+        job_description,
+        project_count=project_count,
+        maximum_characters=maximum_characters,
+        require_unique_lead_verbs=require_unique_lead_verbs,
+    )
 
 
 def _reorder_bullets(
@@ -384,7 +765,7 @@ def _project_claim_records(
 ) -> list[dict[str, object]]:
     """Record explicit approved-evidence provenance for every selected inventory bullet."""
     records: list[dict[str, object]] = []
-    for project in projects:
+    for project_index, project in enumerate(projects):
         bullets = _command_spans(project.latex, "resumeItem")
         if len(bullets) != len(project.bullet_evidence_ids) or any(
             not evidence_ids for evidence_ids in project.bullet_evidence_ids
@@ -396,11 +777,15 @@ def _project_claim_records(
             records.append(
                 {
                     "evidence_ids": list(evidence_ids),
+                    "output_group_index": project_index,
+                    "output_index": index - 1,
                     "project_id": project.id,
                     "project_title": project.title,
+                    "section": "Projects",
                     "source_kind": "project_inventory",
                     "source_ref": f"project_inventory/{project.id}/{index}",
                     "text": latex_to_text(span.content),
+                    "text_changed": False,
                 }
             )
     return records
@@ -449,6 +834,7 @@ def _bullet_constraint_report(
     minimum: int,
     target: int,
     maximum: int,
+    equivalent_originals: dict[str, str] | None = None,
 ) -> tuple[dict[str, object], tuple[str, ...]]:
     configured = bool(minimum or target or maximum)
     original_document = original[original.find("\\begin{document}") :]
@@ -464,16 +850,22 @@ def _bullet_constraint_report(
         original_counts[text] = original_counts.get(text, 0) + 1
     legacy: list[dict[str, object]] = []
     introduced: list[dict[str, object]] = []
+    soft_deviations: list[dict[str, object]] = []
     seen: dict[str, int] = {}
+    equivalents = equivalent_originals or {}
     if configured:
         for text in proposed_text:
             length = len(text)
             if minimum <= length <= maximum:
                 continue
-            occurrence = seen.get(text, 0)
-            seen[text] = occurrence + 1
+            if length < minimum:
+                soft_deviations.append({"length": length, "text": text})
+                continue
+            source_text = equivalents.get(text, text)
+            occurrence = seen.get(source_text, 0)
+            seen[source_text] = occurrence + 1
             item = {"length": length, "text": text}
-            if occurrence < original_counts.get(text, 0):
+            if occurrence < original_counts.get(source_text, 0):
                 legacy.append(item)
             else:
                 introduced.append(item)
@@ -489,10 +881,162 @@ def _bullet_constraint_report(
             "minimum": minimum,
             "new_violations": introduced,
             "passed": not introduced,
+            "soft_deviations": soft_deviations,
             "target": target,
         },
         violations,
     )
+
+
+def _lead_verb_report(source: str, *, required: bool) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Check lead-verb uniqueness mechanically across every résumé bullet."""
+    verbs: dict[str, list[str]] = {}
+    document = source[source.find("\\begin{document}") :]
+    for span in _command_spans(document, "resumeItem"):
+        words = re.findall(r"[A-Za-z]+", latex_to_text(span.content))
+        if words:
+            verbs.setdefault(words[0].casefold(), []).append(latex_to_text(span.content))
+    duplicates = {verb: bullets for verb, bullets in verbs.items() if len(bullets) > 1}
+    violations = (
+        tuple(f"duplicate lead verb '{verb}'" for verb in sorted(duplicates)) if required else ()
+    )
+    return (
+        {
+            "configured": required,
+            "duplicates": duplicates,
+            "passed": not required or not duplicates,
+        },
+        violations,
+    )
+
+
+def _resolve_duplicate_lead_verbs(
+    source: str,
+    *,
+    required: bool,
+    editable_sections: tuple[str, ...],
+    maximum_characters: int = 0,
+) -> tuple[str, list[dict[str, object]]]:
+    """Rewrite repeated bullet openers only when a semantics-preserving alternative exists."""
+    if not required:
+        return source, []
+
+    spans = _command_spans(source[source.find("\\begin{document}") :], "resumeItem")
+    document_start = source.find("\\begin{document}")
+    used = {
+        words[0].casefold()
+        for span in spans
+        if (words := re.findall(r"[A-Za-z]+", latex_to_text(span.content)))
+    }
+    requested = {re.sub(r"[^a-z0-9]+", "", item.casefold()) for item in editable_sections}
+    section_ranges: list[tuple[int, int, str]] = []
+    for name in ("Experience", "Projects"):
+        key = re.sub(r"[^a-z0-9]+", "", name.casefold())
+        if key not in requested:
+            continue
+        start, end, canonical = _section_body(source, name)
+        section_ranges.append((start, end, canonical))
+    section_counts: dict[str, int] = {}
+    seen: set[str] = set()
+    rewrites: list[dict[str, object]] = []
+    chunks: list[str] = []
+    cursor = 0
+    for relative_span in spans:
+        span = replace(
+            relative_span,
+            start=relative_span.start + document_start,
+            end=relative_span.end + document_start,
+        )
+        words = re.findall(r"[A-Za-z]+", latex_to_text(span.content))
+        if not words:
+            continue
+        lead = words[0]
+        normalized = lead.casefold()
+        section = next(
+            (name for start, end, name in section_ranges if start <= span.start < end), None
+        )
+        section_index = section_counts.get(section, 0) if section is not None else -1
+        if section is not None:
+            section_counts[section] = section_index + 1
+        if normalized not in seen:
+            seen.add(normalized)
+            continue
+        if section is None:
+            continue
+        candidates = _LEAD_VERB_ALTERNATIVES.get(normalized, ())
+        original_text = latex_to_text(span.content)
+        replacement = next(
+            (
+                candidate
+                for candidate in candidates
+                if candidate.casefold() not in used
+                and (
+                    not maximum_characters
+                    or len(original_text) - len(lead) + len(candidate) <= maximum_characters
+                )
+            ),
+            None,
+        )
+        if replacement is None:
+            continue
+        rewritten_content = re.sub(
+            rf"(?<![A-Za-z]){re.escape(lead)}(?![A-Za-z])",
+            replacement,
+            span.content,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        rewritten_latex = span.latex.replace(span.content, rewritten_content, 1)
+        chunks.extend((source[cursor : span.start], rewritten_latex))
+        cursor = span.end
+        rewritten_text = latex_to_text(rewritten_content)
+        rewrites.append(
+            {
+                "from": lead,
+                "original_text": latex_to_text(span.content),
+                "rewritten_text": rewritten_text,
+                "section": section,
+                "section_bullet_index": section_index,
+                "to": replacement,
+            }
+        )
+        used.add(replacement.casefold())
+    if not rewrites:
+        return source, []
+    chunks.append(source[cursor:])
+    return "".join(chunks), rewrites
+
+
+def _record_lead_verb_rewrites(
+    records: list[dict[str, object]], rewrites: list[dict[str, object]]
+) -> None:
+    """Bind each rewrite to the exact output-position provenance record."""
+    for rewrite in rewrites:
+        section = rewrite["section"]
+        if not isinstance(section, str):
+            continue
+
+        def position(item: dict[str, object], key: str) -> int:
+            value = item.get(key)
+            return value if isinstance(value, int) else 0
+
+        ordered = sorted(
+            (item for item in records if item.get("section") == section),
+            key=lambda item: (
+                position(item, "output_group_index"),
+                position(item, "output_index"),
+            ),
+        )
+        index_value = rewrite["section_bullet_index"]
+        if not isinstance(index_value, int):
+            continue
+        index = index_value
+        if index >= len(ordered):
+            continue
+        record = ordered[index]
+        record["original_text"] = rewrite["original_text"]
+        record["text"] = rewrite["rewritten_text"]
+        record["text_changed"] = True
 
 
 def create_automatic_resume_proposal(
@@ -507,6 +1051,8 @@ def create_automatic_resume_proposal(
     bullet_max_chars: int = 0,
     project_candidates: tuple[ProjectCandidate, ...] = (),
     project_count: int = 4,
+    require_unique_lead_verbs: bool = False,
+    additional_project_quality_rejections: tuple[dict[str, object], ...] = (),
 ) -> AutomaticResumeProposal:
     """Tailor a résumé using only user-provided claims and approved project blocks."""
     if resume_path.suffix.casefold() != ".tex" or not resume_path.is_file():
@@ -523,9 +1069,26 @@ def create_automatic_resume_proposal(
     claims: list[dict[str, object]] = []
     project_claims: list[dict[str, object]] = []
     skill_records: list[dict[str, object]] = []
+    projects_requested = "projects" in requested
+    selection_plan = (
+        _resume_project_selection_plan(
+            original,
+            project_candidates,
+            job_description,
+            project_count=project_count,
+            maximum_characters=bullet_max_chars,
+            require_unique_lead_verbs=require_unique_lead_verbs,
+            additional_quality_rejections=additional_project_quality_rejections,
+        )
+        if projects_requested
+        else ResumeProjectSelectionPlan((), (), ())
+    )
+    quality_rejections = list(selection_plan.quality_rejections)
     project_selection: dict[str, object] = {
         "candidate_count": len(project_candidates),
         "mode": "reorder_only",
+        "quality_rejections": quality_rejections,
+        "strategy": "weighted_role_signal_coverage",
         "selected_ids": [],
     }
 
@@ -538,13 +1101,14 @@ def create_automatic_resume_proposal(
             continue
         start, end, canonical = _section_body(proposed, requested_name)
         if requested_name == "Projects" and project_candidates:
-            selected_projects = select_projects(
-                project_candidates, job_description, max_projects=project_count
-            )
+            selected_projects = selection_plan.selected
+            selected_rationales = selection_plan.rationales
             if not selected_projects:
                 project_selection = {
                     "candidate_count": len(project_candidates),
                     "mode": "inventory_no_match",
+                    "quality_rejections": quality_rejections,
+                    "strategy": "weighted_role_signal_coverage",
                     "selected_ids": [],
                     "selected_titles": [],
                 }
@@ -557,8 +1121,20 @@ def create_automatic_resume_proposal(
             project_selection = {
                 "candidate_count": len(project_candidates),
                 "mode": "inventory",
+                "quality_rejections": quality_rejections,
+                "strategy": "weighted_role_signal_coverage",
                 "selected_ids": [item.id for item in selected_projects],
                 "selected_titles": [item.title for item in selected_projects],
+                "selected": [
+                    {
+                        "id": item.id,
+                        "title": item.title,
+                        "matched_terms": list(item.matched_terms),
+                        "matched_signals": list(item.matched_signals),
+                        "applied_to_resume": True,
+                    }
+                    for item in selected_rationales
+                ],
             }
             project_claims = _project_claim_records(selected_projects)
         tailored, section_claims, changed = tailorer(proposed[start:end], job_description)
@@ -575,25 +1151,76 @@ def create_automatic_resume_proposal(
         if changed:
             changed_sections.append(canonical)
 
+    rewrite_sections = editable_sections
+    if project_selection["mode"] == "inventory_no_match":
+        rewrite_sections = tuple(
+            section
+            for section in editable_sections
+            if re.sub(r"[^a-z0-9]+", "", section.casefold()) != "projects"
+        )
+    proposed, lead_verb_rewrites = _resolve_duplicate_lead_verbs(
+        proposed,
+        required=require_unique_lead_verbs,
+        editable_sections=rewrite_sections,
+        maximum_characters=bullet_max_chars,
+    )
+    for rewrite in lead_verb_rewrites:
+        section = rewrite.get("section")
+        if isinstance(section, str) and section not in changed_sections:
+            changed_sections.append(section)
+    _record_lead_verb_rewrites(claims, lead_verb_rewrites)
+    _record_lead_verb_rewrites(project_claims, lead_verb_rewrites)
+    equivalent_originals: dict[str, str] = {}
+    for rewrite in lead_verb_rewrites:
+        rewritten_text = rewrite.get("rewritten_text")
+        original_text = rewrite.get("original_text")
+        if isinstance(rewritten_text, str) and isinstance(original_text, str):
+            equivalent_originals[rewritten_text] = original_text
+
     length_report, violations = _bullet_constraint_report(
         original,
         proposed,
         minimum=bullet_min_chars,
         target=bullet_target_chars,
         maximum=bullet_max_chars,
+        equivalent_originals=equivalent_originals,
     )
+    lead_verb_report, lead_verb_violations = _lead_verb_report(
+        proposed, required=require_unique_lead_verbs
+    )
+    lead_verb_report["rewrites"] = lead_verb_rewrites
+    violations = (*violations, *lead_verb_violations)
     if violations:
         proposed = original
         changed_sections = []
         claims = []
         project_claims = []
         skill_records = []
+        lead_verb_rewrites = []
+        lead_verb_report, _ = _lead_verb_report(proposed, required=require_unique_lead_verbs)
+        lead_verb_report["rewrites"] = []
         if project_candidates:
+            project_start, project_end, _ = _section_body(original, "Projects")
+            retained_projects = _projects_present_in_section(
+                original[project_start:project_end], project_candidates
+            )
             project_selection = {
                 "candidate_count": len(project_candidates),
                 "mode": "inventory_constraint_fallback",
-                "selected_ids": [],
-                "selected_titles": [],
+                "quality_rejections": quality_rejections,
+                "strategy": "master_project_fallback",
+                "selected_ids": [item.id for item in retained_projects],
+                "selected_titles": [item.title for item in retained_projects],
+                "selected": [
+                    {
+                        "id": item.id,
+                        "title": item.title,
+                        "matched_terms": [],
+                        "matched_signals": [],
+                        "applied_to_resume": True,
+                    }
+                    for item in retained_projects
+                ],
             }
 
     meaningful_change = proposed != original
@@ -621,7 +1248,10 @@ def create_automatic_resume_proposal(
                     for item in evidence
                 ],
                 "claims": claims,
-                "constraints": {"bullet_characters": length_report},
+                "constraints": {
+                    "bullet_characters": length_report,
+                    "lead_verbs": lead_verb_report,
+                },
                 "external_sync": "not performed",
                 "project_claims": project_claims,
                 "project_selection": project_selection,
@@ -631,7 +1261,12 @@ def create_automatic_resume_proposal(
                     "baseline_fallback": not meaningful_change,
                     "changed_sections": changed_sections,
                     "meaningful_change": meaningful_change,
-                    "method": "deterministic relevance ordering; no claim text changed",
+                    "method": (
+                        "deterministic relevance ordering with semantics-preserving "
+                        "lead-verb rewrites"
+                        if lead_verb_rewrites
+                        else "deterministic relevance ordering; no claim text changed"
+                    ),
                     "reason": (
                         "No meaningful, constraint-valid ordering change was available."
                         if not meaningful_change
@@ -651,6 +1286,7 @@ def create_automatic_resume_proposal(
         meaningful_change=meaningful_change,
         changed_sections=tuple(changed_sections),
         constraint_violations=violations,
+        project_selection=project_selection,
     )
 
 

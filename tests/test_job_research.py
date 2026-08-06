@@ -142,6 +142,44 @@ class JobResearchTests(unittest.TestCase):
         self.assertGreaterEqual(len(research.highlights), 4)
         self.assertEqual(research.application_constraints, ("No more than two applications.",))
 
+    def test_extracts_cohort_prefixed_visible_role_heading_without_structured_data(self) -> None:
+        snapshot = (
+            "[Summer 2027] Software Engineer Intern San Mateo, CA, United States"
+            "Early Career ID: 37750 Apply Now "
+            "As a Software Engineer Intern at Roblox, you will build production systems. "
+            "You Will: Own a project from coding and testing through deployment. "
+            "You Are: Pursuing a computer science degree."
+        )
+
+        research = analyze_job_snapshot(snapshot, job_url="https://careers.roblox.com/jobs/8072713")
+
+        self.assertEqual(research.company, "Roblox")
+        self.assertEqual(research.role, "Software Engineer Intern")
+        self.assertEqual(research.cycles, ("Summer 2027",))
+
+    def test_extracts_inline_sections_and_role_signals_from_dense_visible_text(self) -> None:
+        snapshot = (
+            "[Summer 2027] Software Engineer Intern San Mateo, CA Apply Now. "
+            "Teams include distributed systems, real-time communication, 3D rendering, and "
+            "data processing at production scale. "
+            "You Will: Own a project from coding and testing through deployment to production. "
+            "Investigate machine learning frameworks and agentic coding tools. "
+            "You Are: Proficient in C++, Python, Java, or Lua. "
+            "A curious collaborator who solves hard technical challenges. "
+            "Please note that sponsorship restrictions may apply."
+        )
+
+        research = analyze_job_snapshot(snapshot, job_url="https://careers.example/jobs/8072713")
+
+        self.assertEqual(len(research.responsibilities), 2)
+        self.assertTrue(research.responsibilities[0].startswith("Own a project"))
+        self.assertEqual(len(research.qualifications), 2)
+        self.assertTrue(research.qualifications[0].startswith("Proficient in C++"))
+        self.assertTrue({"C++", "Python", "Java", "Lua"}.issubset(research.skills))
+        self.assertTrue(any("real-time" in item for item in research.highlights))
+        self.assertTrue(any("platform-scale" in item for item in research.highlights))
+        self.assertTrue(any("AI-assisted" in item for item in research.highlights))
+
     def test_renders_cited_research_and_writes_it_idempotently(self) -> None:
         snapshot = (
             'Role @ Example {"@type":"JobPosting","title":"Role",'
@@ -336,6 +374,13 @@ class JobResearchTests(unittest.TestCase):
         require_job_posting(
             "This page is rendered client-side.",
             job_url="https://jobs.lever.co/example/software-engineer",
+        )
+        require_job_posting(
+            "[Summer 2027] Software Engineer Intern\n"
+            "You Will:\nBuild reliable systems used by millions of players.\n"
+            "You Are:\nA curious engineer who writes quality code.\n"
+            "Apply Now",
+            job_url="https://careers.roblox.com/jobs/8072713",
         )
 
 

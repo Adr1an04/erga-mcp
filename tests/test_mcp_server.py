@@ -5,29 +5,331 @@ import json
 import subprocess
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Barrier
+from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from mcp.server.mcpserver.exceptions import ToolError
 from starlette.testclient import TestClient
 
-from erga_mcp.config import DEFAULT_CONFIG
+from erga_mcp.ai_resume_tailoring import AIProjectTailoring
+from erga_mcp.config import DEFAULT_CONFIG, load_config
+from erga_mcp.git_project_enrichment import GitProjectEnrichment
 from erga_mcp.mcp_server import (
     IntakeJobResult,
     IntakeValidationResult,
+    _ai_research_shortlist_ids,
+    _ai_tailored_project_enrichment,
     _compile_intake_proposal,
+    _layout_safe_project_selection,
     _metadata_from_url,
+    _require_constraint_valid_proposal,
+    _require_master_template_parity,
     build_server,
     build_streamable_http_app,
 )
-from erga_mcp.resume import LatexValidation
+from erga_mcp.models import Evidence
+from erga_mcp.project_inventory import ProjectCandidate
+from erga_mcp.resume import LatexValidation, ResumeItemLayoutValidation
 from erga_mcp.store import ErgaStore
 
 
 class McpServerTests(unittest.TestCase):
+    def test_application_tracker_returns_complete_paginated_cross_cycle_results(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            tracker_dir = root / "trackers"
+            tracker_dir.mkdir()
+            header = (
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            )
+            (tracker_dir / "Fall 2026 Application Tracker.md").write_text(
+                header + "| Alpha | Engineer | Remote | [Job](https://example.test/a) | "
+                "Applied | | Wait | Note |\n"
+                "| Beta | Engineer | Remote | [Job](https://example.test/b) | "
+                "OA | | Test | Note |\n",
+                encoding="utf-8",
+            )
+            (tracker_dir / "Summer 2027 Applications.md").write_text(
+                header + "| Gamma | Engineer | Remote | [Job](https://example.test/c) | "
+                "Draft | | Apply | Note |\n"
+                "| Delta | Engineer | Remote | [Job](https://example.test/d) | "
+                "Researching | | Review | Note |\n"
+                "| Epsilon | Engineer | Remote | [Job](https://example.test/e) | "
+                "Applied | | Wait | Note |\n",
+                encoding="utf-8",
+            )
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace(
+                    'enabled = false\ntracker_dir = ""',
+                    f"enabled = true\ntracker_dir = {json.dumps(str(tracker_dir))}",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            server = build_server(config_path)
+            tool = server._tool_manager.get_tool("application_tracker")
+
+            result = tool.fn(query="all", page=2, page_size=2)
+
+        self.assertEqual(result["total_entries"], 5)
+        self.assertEqual(result["page"], 2)
+        self.assertEqual(result["page_count"], 3)
+        self.assertTrue(result["has_previous"])
+        self.assertTrue(result["has_next"])
+        self.assertEqual(len(result["entries"]), 2)
+        self.assertEqual(result["summary"]["assessment"], 1)
+        self.assertIn("Page 2 of 3 · showing 3-4 of 5 roles.", result["message"])
+        self.assertNotIn("Search: all", result["message"])
+
+    def test_ai_shortlist_ranks_projects_without_rejecting_their_old_bullet_wording(self) -> None:
+        def candidate(project_id: str, tags: tuple[str, ...], bullet: str) -> ProjectCandidate:
+            return ProjectCandidate(
+                id=project_id,
+                title=project_id.replace("-", " ").title(),
+                latex=(
+                    rf"\resumeProjectHeading{{\textbf{{{project_id}}}}}{{}}"
+                    "\n"
+                    r"\resumeItemListStart"
+                    "\n"
+                    rf"\resumeItem{{{bullet}}}"
+                    "\n"
+                    r"\resumeItem{Approved second source bullet.}"
+                    "\n"
+                    r"\resumeItemListEnd"
+                ),
+                evidence_ids=(f"ev_{project_id}",),
+                bullet_evidence_ids=((f"ev_{project_id}",), (f"ev_{project_id}",)),
+                tags=tags,
+            )
+
+        candidates = (
+            candidate(
+                "api-runtime",
+                ("python", "fastapi", "api"),
+                "Analyzed 8 commits and 12 files from Git history.",
+            ),
+            candidate("frontend", ("react", "css"), "Built an approved interface."),
+            candidate("robotics", ("c++", "ros2"), "Created an approved controller."),
+        )
+
+        selected = _ai_research_shortlist_ids(
+            candidates,
+            job_description="Required: Python FastAPI API engineering",
+            project_count=1,
+            minimum_bullets=2,
+        )
+
+        self.assertEqual(selected[0], "api-runtime")
+        self.assertEqual(len(selected), 2)
+
+    def test_ai_layout_retry_lowers_the_hard_cap_and_disables_the_soft_minimum(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            resume = root / "resume.tex"
+            resume.write_text("synthetic resume", encoding="utf-8")
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace(
+                    'template_path = ""',
+                    f"template_path = {json.dumps(str(resume))}",
+                )
+                .replace("project_count = 4", "project_count = 1")
+                .replace("bullet_min_chars = 0", "bullet_min_chars = 99")
+                .replace("bullet_target_chars = 0", "bullet_target_chars = 105")
+                .replace("bullet_max_chars = 0", "bullet_max_chars = 116"),
+                encoding="utf-8",
+            )
+            config = load_config(config_path)
+            evidence = Evidence(
+                "ev_api",
+                "approved:api",
+                "Approved API evidence.",
+                True,
+                datetime.now(UTC),
+            )
+            candidate = ProjectCandidate(
+                id="api",
+                title="API",
+                latex="synthetic project",
+                evidence_ids=(evidence.id,),
+                bullet_evidence_ids=((evidence.id,), (evidence.id,)),
+                tags=("python", "api"),
+            )
+            enrichment = GitProjectEnrichment(
+                candidates=(candidate,),
+                evidence=(),
+                reports=({"project_id": "api", "title": "API", "evidence_ids": []},),
+                warnings=(),
+                catalogue_candidate_count=1,
+            )
+            drafted = AIProjectTailoring((candidate,), "synthetic-tailor", (evidence.id,))
+            plan = SimpleNamespace(selected=(candidate,), quality_rejections=())
+
+            with (
+                patch(
+                    "erga_mcp.mcp_server.draft_evidence_backed_projects",
+                    new=AsyncMock(return_value=drafted),
+                ) as draft,
+                patch("erga_mcp.mcp_server.plan_resume_project_selection", return_value=plan),
+                patch(
+                    "erga_mcp.mcp_server._layout_safe_project_selection",
+                    side_effect=[
+                        (("api",), ({"id": "api", "title": "API", "reasons": ["wrap"]},)),
+                        (("api",), ()),
+                    ],
+                ),
+            ):
+                result = asyncio.run(
+                    _ai_tailored_project_enrichment(
+                        ctx=SimpleNamespace(session=object(), request_id="request-1"),
+                        config=config,
+                        resume_path=resume,
+                        job_description="Required: Python API",
+                        evidence=[evidence],
+                        enrichment=enrichment,
+                    )
+                )
+
+            self.assertEqual(
+                result.reports[0]["resume_bullets_source"], "host_model_evidence_synthesis"
+            )
+            self.assertEqual(
+                [call.kwargs["bullet_max_chars"] for call in draft.await_args_list],
+                [116, 106],
+            )
+            self.assertEqual(
+                [call.kwargs["bullet_min_chars"] for call in draft.await_args_list],
+                [99, 0],
+            )
+
+    def test_layout_fallback_rejects_a_wrapped_project_and_selects_the_next_candidate(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            resume = root / "resume.tex"
+            resume.write_text(
+                r"\newcommand{\resumeSubHeadingListStart}{\begin{itemize}}"
+                "\n"
+                r"\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}"
+                "\n"
+                r"\newcommand{\resumeItemListStart}{\begin{itemize}}"
+                "\n"
+                r"\newcommand{\resumeItemListEnd}{\end{itemize}}"
+                "\n"
+                r"\newcommand{\resumeProjectHeading}[2]{\item #1}"
+                "\n"
+                r"\newcommand{\resumeItem}[1]{\item #1}"
+                "\n"
+                r"\begin{document}"
+                "\n"
+                r"\section{Projects}"
+                "\n"
+                r"\resumeSubHeadingListStart"
+                "\n"
+                r"\resumeProjectHeading{\textbf{Template}}{}"
+                "\n"
+                r"\resumeItemListStart"
+                "\n"
+                r"\resumeItem{Template project bullet.}"
+                "\n"
+                r"\resumeItemListEnd"
+                "\n"
+                r"\resumeSubHeadingListEnd"
+                "\n"
+                r"\end{document}"
+                "\n",
+                encoding="utf-8",
+            )
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace(
+                    'template_path = ""',
+                    f"template_path = {json.dumps(str(resume))}",
+                )
+                .replace("editable_sections = []", 'editable_sections = ["projects"]')
+                .replace("bullet_min_chars = 0", "bullet_min_chars = 1")
+                .replace("bullet_target_chars = 0", "bullet_target_chars = 60")
+                .replace("bullet_max_chars = 0", "bullet_max_chars = 116")
+                .replace("project_count = 4", "project_count = 1"),
+                encoding="utf-8",
+            )
+            config = load_config(config_path)
+            evidence = Evidence(
+                id="ev_project",
+                source_ref="synthetic:test",
+                text="Approved synthetic project evidence.",
+                approved=True,
+                created_at=datetime.now(UTC),
+            )
+
+            def candidate(project_id: str, title: str) -> ProjectCandidate:
+                return ProjectCandidate(
+                    id=project_id,
+                    title=title,
+                    latex=(
+                        rf"\resumeProjectHeading{{\textbf{{{title}}} $|$ \textit{{Python}}}}{{}}"
+                        "\n"
+                        r"\resumeItemListStart"
+                        "\n"
+                        r"\resumeItem{Built a Python service from approved synthetic evidence.}"
+                        "\n"
+                        r"\resumeItemListEnd"
+                        "\n"
+                    ),
+                    evidence_ids=(evidence.id,),
+                    bullet_evidence_ids=((evidence.id,),),
+                    tags=("python",),
+                )
+
+            layouts = (
+                ResumeItemLayoutValidation(("latexmk",), 0, 1, (0,), "", ""),
+                ResumeItemLayoutValidation(("latexmk",), 0, 1, (), "", ""),
+            )
+            with patch(
+                "erga_mcp.mcp_server.validate_single_line_resume_items",
+                side_effect=layouts,
+            ) as validate:
+                selected, rejections = _layout_safe_project_selection(
+                    resume_path=resume,
+                    output_dir=root / "output",
+                    job_description="Python service engineering",
+                    evidence=[evidence],
+                    project_candidates=(
+                        candidate("alpha-wrap", "Alpha Wrap"),
+                        candidate("beta-safe", "Beta Safe"),
+                    ),
+                    config=config,
+                )
+
+            self.assertEqual(selected, ("beta-safe",))
+            self.assertEqual(rejections[0]["id"], "alpha-wrap")
+            self.assertEqual(validate.call_count, 2)
+
+    def test_master_resume_must_match_the_template_when_a_master_is_configured(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master = root / "master.tex"
+            template = root / "template.tex"
+            master.write_text("Master résumé", encoding="utf-8")
+            template.write_text("Different résumé", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "does not match the configured master"):
+                _require_master_template_parity(master_path=master, template_path=template)
+
+    def test_constraint_fallback_proposals_are_rejected_before_a_resume_is_compiled(self) -> None:
+        automatic = SimpleNamespace(constraint_violations=("duplicate lead verb 'built'",))
+        with self.assertRaisesRegex(ValueError, "duplicate lead verb 'built'"):
+            _require_constraint_valid_proposal(automatic)
+
     def test_modern_streamable_http_discovery_is_stateless_and_origin_guarded(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
@@ -476,7 +778,7 @@ class McpServerTests(unittest.TestCase):
     def test_rejects_coerced_boolean_token_counts_at_the_mcp_boundary(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG)
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
             server = build_server(config_path)
             store = ErgaStore(Path(directory) / "state" / "erga.sqlite3")
             application = store.create_application(
@@ -502,7 +804,7 @@ class McpServerTests(unittest.TestCase):
     def test_exposes_read_and_explicit_local_workspace_tools(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG)
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
 
             server = build_server(config_path)
             tools = asyncio.run(server.list_tools())
@@ -591,7 +893,7 @@ class McpServerTests(unittest.TestCase):
                 )
             self.assertIn("inside configured resume output_root", str(error.exception))
 
-    def test_create_tailored_resume_enforces_configured_new_bullet_lengths(self) -> None:
+    def test_create_tailored_resume_softens_configured_minimum_bullet_length(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "config.toml"
@@ -615,21 +917,25 @@ class McpServerTests(unittest.TestCase):
             )
             server = build_server(config_path)
 
-            with self.assertRaises(Exception) as error:
-                asyncio.run(
-                    server.call_tool(
-                        "create_tailored_resume",
-                        {
-                            "package_dir": str(package),
-                            "section": "Experience",
-                            "latex_content": "\\resumeItem{Too short}",
-                            "evidence_ids": [evidence.id],
-                        },
-                    )
+            call: Any = asyncio.run(
+                server.call_tool(
+                    "create_tailored_resume",
+                    {
+                        "package_dir": str(package),
+                        "section": "Experience",
+                        "latex_content": "\\resumeItem{Too short}",
+                        "evidence_ids": [evidence.id],
+                    },
                 )
+            )
 
-            self.assertIn("between 90 and 120", str(error.exception))
-            self.assertFalse((package / "artifacts" / "proposal.tex").exists())
+            result = cast(dict[str, Any], call.structured_content)
+            report = json.loads(Path(result["claim_report"]).read_text(encoding="utf-8"))
+            lengths = report["constraints"]["bullet_characters"]
+            self.assertTrue(lengths["passed"])
+            self.assertEqual(lengths["violations"], [])
+            self.assertEqual(lengths["soft_deviations"][0]["length"], 9)
+            self.assertTrue((package / "artifacts" / "proposal.tex").exists())
 
     def test_scrape_tools_return_bounded_untrusted_content(self) -> None:
         from erga_mcp.web_scraping import ScrapedPage
@@ -730,7 +1036,7 @@ class McpServerTests(unittest.TestCase):
     def test_exposes_one_job_url_tool_for_end_to_end_intake(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG)
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
 
             tools = asyncio.run(build_server(config_path).list_tools())
 
@@ -828,7 +1134,7 @@ class McpServerTests(unittest.TestCase):
     def test_hermes_monitor_tool_prepares_scripts_without_creating_delivery_jobs(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG)
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
             hermes_home = Path(directory) / "hermes-profile"
             server = build_server(config_path)
             prepared = {
@@ -859,7 +1165,7 @@ class McpServerTests(unittest.TestCase):
     def test_export_tool_creates_a_private_attachable_zip(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG)
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
             result: Any = asyncio.run(build_server(config_path).call_tool("export_data", {}))
 
             exported = cast(dict[str, object], result.structured_content)
@@ -1047,7 +1353,8 @@ class McpServerTests(unittest.TestCase):
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
             self.assertTrue(result["tailoring_meaningful_change"])
             self.assertEqual(result["tailoring_changed_sections"], ["Experience"])
-            self.assertEqual(result["tailoring_version"], 5)
+            self.assertEqual(result["tailoring_version"], 15)
+            self.assertEqual(result["git_project_research"], [])
             output_pdf = Path(result["validation"]["pdf"])
             self.assertEqual(output_pdf.name, "Candidate_Resume.pdf")
             self.assertEqual(output_pdf.read_bytes(), b"exact tailored pdf")
@@ -1055,7 +1362,7 @@ class McpServerTests(unittest.TestCase):
                 (Path(result["package_dir"]) / "package.json").read_text(encoding="utf-8")
             )
             self.assertTrue(manifest["tailoring"]["meaningful_change"])
-            self.assertEqual(manifest["tailoring"]["version"], 5)
+            self.assertEqual(manifest["tailoring"]["version"], 15)
 
     def test_rebuilds_an_incomplete_legacy_package_and_preserves_its_files(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1124,7 +1431,7 @@ class McpServerTests(unittest.TestCase):
             )
             manifest = json.loads((repaired / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["legacy_backup"], "legacy-backup")
-            self.assertEqual(manifest["tailoring"]["version"], 5)
+            self.assertEqual(manifest["tailoring"]["version"], 15)
             self.assertIn("Legacy package preserved", result["integration_warnings"][-1])
 
     def test_compile_rejects_a_pdf_over_the_configured_page_cap(self) -> None:
@@ -1231,7 +1538,8 @@ class McpServerTests(unittest.TestCase):
                 )
             )
             self.assertEqual(first["tracker_cycles"], ["Fall 2026", "Summer 2027"])
-            self.assertEqual(first["integration_warnings"], [])
+            self.assertEqual(len(first["integration_warnings"]), 1)
+            self.assertIn("Project inventory is not configured", first["integration_warnings"][0])
             self.assertEqual(first["tracker_notes"], second["tracker_notes"])
             self.assertEqual(first["application_id"], second["application_id"])
             fetch.assert_called_once_with(job_url)
@@ -1431,7 +1739,7 @@ class McpServerTests(unittest.TestCase):
                 ),
                 ThreadPoolExecutor(max_workers=2) as pool,
             ):
-                results = list(pool.map(lambda _: tool.fn(job_url), range(2)))
+                results = list(pool.map(lambda _: asyncio.run(tool.fn(job_url)), range(2)))
 
             self.assertEqual(sorted(result.reused for result in results), [False, True])
             self.assertEqual(results[0].package_dir, results[1].package_dir)

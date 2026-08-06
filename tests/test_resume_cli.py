@@ -91,7 +91,7 @@ class ResumeCliTests(unittest.TestCase):
             self.assertEqual(result["returncode"], 0)
             self.assertEqual(result["stdout"], "compiled")
 
-    def test_tailor_rejects_new_bullets_outside_configured_character_limits(self) -> None:
+    def test_tailor_records_bullets_below_configured_minimum_without_failing(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             config = root / "config.toml"
@@ -131,25 +131,31 @@ class ResumeCliTests(unittest.TestCase):
                 ]
             )
 
-            with self.assertRaisesRegex(ValueError, "between 90 and 120"):
-                main(
-                    [
-                        "resume",
-                        "tailor",
-                        "--config",
-                        str(config),
-                        "--section",
-                        "Experience",
-                        "--latex-content",
-                        "\\resumeItem{Too short}",
-                        "--output-dir",
-                        str(root / "proposal"),
-                        "--evidence-id",
-                        str(evidence["id"]),
-                    ]
-                )
+            proposal = self._json_command(
+                [
+                    "resume",
+                    "tailor",
+                    "--config",
+                    str(config),
+                    "--section",
+                    "Experience",
+                    "--latex-content",
+                    "\\resumeItem{Too short}",
+                    "--output-dir",
+                    str(root / "proposal"),
+                    "--evidence-id",
+                    str(evidence["id"]),
+                ]
+            )
 
-            self.assertFalse((root / "proposal").exists())
+            report = json.loads(
+                Path(str(proposal["claim_report_path"])).read_text(encoding="utf-8")
+            )
+            lengths = report["constraints"]["bullet_characters"]
+            self.assertTrue(lengths["passed"])
+            self.assertEqual(lengths["violations"], [])
+            self.assertEqual(lengths["soft_deviations"][0]["length"], 9)
+            self.assertTrue((root / "proposal" / "proposal.tex").exists())
 
 
 if __name__ == "__main__":

@@ -84,8 +84,14 @@ _JOB_ROLE_SIGNAL = re.compile(
     re.IGNORECASE,
 )
 _JOB_CONTENT_SIGNALS = (
-    re.compile(r"\b(?:job description|responsibilities|what you(?:'|’)ll do)\b", re.IGNORECASE),
-    re.compile(r"\b(?:qualifications|requirements|what we(?:'|’)re looking for)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:job description|responsibilities|what you(?:'|’)ll do|you will\s*:)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:qualifications|requirements|what we(?:'|’)re looking for|you are\s*:)",
+        re.IGNORECASE,
+    ),
     re.compile(
         r"\b(?:apply now|apply for this (?:job|role|position)|submit application)\b", re.IGNORECASE
     ),
@@ -270,6 +276,17 @@ def _has_career_host_and_detail_path(job_url: str) -> bool:
     return bool(hostname_parts & _JOB_HOST_LABELS) and bool(path_parts & _JOB_PATH_SEGMENTS)
 
 
+def _is_shopify_career_detail_url(job_url: str) -> bool:
+    parsed = urlsplit(job_url)
+    hostname = (parsed.hostname or "").casefold()
+    path_parts = [part for part in parsed.path.split("/") if part]
+    return (
+        (hostname == "shopify.com" or hostname.endswith(".shopify.com"))
+        and len(path_parts) >= 2
+        and path_parts[0].casefold() == "careers"
+    )
+
+
 def _credible_structured_job_posting(snapshot: str) -> bool:
     posting = _structured_job_posting(snapshot)
     if posting is None:
@@ -299,6 +316,15 @@ def require_job_posting(snapshot: str, *, job_url: str) -> None:
         return
     content = official_job_text(snapshot)
     has_role = _JOB_ROLE_SIGNAL.search(content) is not None
+    if (
+        _is_shopify_career_detail_url(job_url)
+        and has_role
+        and all(
+            marker in content
+            for marker in ("Being a Shopify Intern", "Qualifications:", "Compensation:")
+        )
+    ):
+        return
     has_all_posting_sections = all(
         signal.search(content) is not None for signal in _JOB_CONTENT_SIGNALS
     )
@@ -385,6 +411,14 @@ def _fallback_title_and_company(snapshot: str) -> tuple[str, str]:
     )
     if match is not None:
         return _clean_text(match.group(1)), _clean_text(match.group(2))
+    cohort_heading = re.match(
+        r"\s*(\[(?:Spring|Summer|Fall|Winter)\s+20\d{2}\]\s+"
+        r".{1,100}?\b(?:Intern(?:ship)?|Co-?op))\b",
+        snapshot,
+        re.IGNORECASE,
+    )
+    if cohort_heading is not None:
+        return _clean_text(cohort_heading.group(1)), ""
     prefix = snapshot.split(" {", 1)[0].strip()
     if " @ " in prefix:
         title, company = prefix.rsplit(" @ ", 1)
@@ -394,9 +428,15 @@ def _fallback_title_and_company(snapshot: str) -> tuple[str, str]:
 
 def _display_role(title: str) -> str:
     without_cohorts = re.sub(
-        r"\s*\([^)]*(?:Spring|Summer|Fall|Winter)\s+20\d{2}[^)]*\)",
+        r"^\s*\[(?:Spring|Summer|Fall|Winter)\s+20\d{2}\]\s*",
         "",
         title,
+        flags=re.IGNORECASE,
+    )
+    without_cohorts = re.sub(
+        r"\s*\([^)]*(?:Spring|Summer|Fall|Winter)\s+20\d{2}[^)]*\)",
+        "",
+        without_cohorts,
         flags=re.IGNORECASE,
     )
     return _SPACE.sub(" ", without_cohorts).strip(" -–—") or "Job Opportunity"
@@ -488,7 +528,8 @@ _HIGHLIGHT_RULES = (
         "The role expects ownership of visible work from implementation through delivery.",
     ),
     (
-        r"\bproduction (?:codebase|code)\b|\blanding merged pr|\bmanage deployments\b",
+        r"\bproduction(?:-scale| (?:codebase|code|projects?|systems?))\b|"
+        r"\blanding merged pr|\bmanage deployments\b|\bdeploy(?:ing|ed)?\b.{0,40}\bproduction\b",
         "Production delivery, deployment, and operational reliability are part of the work.",
     ),
     (
@@ -496,12 +537,18 @@ _HIGHLIGHT_RULES = (
         "The work touches voice/audio AI, including speech systems such as ASR or TTS.",
     ),
     (
-        r"\breal[- ]time systems?\b|\blow latency\b",
+        r"\breal[- ]time (?:communication|systems?)\b|\blow latency\b|\blatency-sensitive\b",
         "The posting emphasizes real-time or latency-sensitive systems.",
     ),
     (
-        r"\b(?:agentic tooling|claude code|codex)\b|\bai-assisted workflow\b|\bai tools daily\b",
+        r"\b(?:agentic (?:coding )?tools?|claude code|codex)\b|"
+        r"\bai-assisted workflow\b|\bai tools daily\b",
         "AI-assisted tools are expected in the normal development or content workflow.",
+    ),
+    (
+        r"\bdistributed systems?\b|\bdata processing\b|\brendering\b|\b3d\b",
+        "The technical scope includes platform-scale systems such as distributed computing, "
+        "data processing, rendering, or 3D experiences.",
     ),
     (
         r"\bfirst principles\b|\bdig into why\b",
@@ -530,6 +577,41 @@ _HIGHLIGHT_RULES = (
     ),
 )
 
+_SECTION_HEADINGS = (
+    "Core Responsibilities",
+    "Responsibilities",
+    "What You Will Do",
+    "What You'll Do",
+    "What You’ll Do",
+    "You Will",
+    "Requirements",
+    "Qualifications",
+    "What We Are Looking For",
+    "What We're Looking For",
+    "What We’re Looking For",
+    "You Are",
+    "Who You Are",
+    "What You Will Gain",
+    "Benefits",
+    "Details",
+    "Logistics",
+    "About Us",
+)
+_INLINE_SECTION_HEADING = re.compile(
+    r"\b(?P<label>" + "|".join(re.escape(item) for item in _SECTION_HEADINGS) + r")\s*:\s*",
+    re.IGNORECASE,
+)
+_SECTION_ITEM_TERMINATORS = (
+    "benefits include",
+    "compensation",
+    "equal employment",
+    "for roles that",
+    "hourly pay range",
+    "please note",
+    "salary range",
+    "to support you through",
+)
+
 
 def _highlights(description: str) -> tuple[str, ...]:
     return tuple(
@@ -546,7 +628,16 @@ def _content_lines(content: str) -> list[str]:
         flags=re.IGNORECASE,
     )
     rendered = unescape(_TAG.sub(" ", rendered))
+    rendered = _INLINE_SECTION_HEADING.sub(lambda match: f"\n{match.group('label')}\n", rendered)
     return [_SPACE.sub(" ", line).strip() for line in rendered.splitlines() if line.strip()]
+
+
+def _sentence_items(value: str) -> tuple[str, ...]:
+    return tuple(
+        item
+        for part in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", value)
+        if (item := part.strip().lstrip("-• "))
+    )
 
 
 def _section_items(
@@ -557,35 +648,45 @@ def _section_items(
 ) -> tuple[str, ...]:
     active = False
     items: list[str] = []
+    known_headings = {heading.casefold() for heading in _SECTION_HEADINGS}
     for line in lines:
         is_item = line.startswith("- ")
-        label = line.lstrip("- ").strip().casefold()
+        label = line.lstrip("- ").strip().rstrip(":").casefold()
         if not active and any(label == start.casefold() for start in starts):
             active = True
             continue
         if active and (
             any(label == end.casefold() for end in ends)
+            or label in known_headings
             or (not is_item and label.startswith("about "))
         ):
             break
-        if active and is_item:
-            item = line[2:].strip()
-            if item and item not in items:
-                items.append(item)
+        if active:
+            value = line[2:].strip() if is_item else line
+            for item in _sentence_items(value):
+                if item.casefold().startswith(_SECTION_ITEM_TERMINATORS):
+                    return tuple(items)
+                if item not in items:
+                    items.append(item)
     return tuple(items)
 
 
 _SKILL_PATTERNS = (
     (r"(?<!\w)c\+\+(?!\w)|\bcpp\b", "C++"),
-    (r"\bgolang\b|\bgo programming\b|\bgo language\b", "Go"),
+    (r"(?-i:\bGo\b)|\bgolang\b|\bgo programming\b|\bgo language\b", "Go"),
     (r"\bpython\b", "Python"),
     (r"\bjava\b", "Java"),
+    (r"(?<!\w)c#(?!\w)|\bc sharp\b", "C#"),
+    (r"\blua\b", "Lua"),
+    (r"\bruby\b", "Ruby"),
+    (r"\bswift\b", "Swift"),
     (r"\btypescript\b", "TypeScript"),
     (r"\bhtml\b", "HTML"),
     (r"\bcss\b", "CSS"),
     (r"\bjavascript\b", "JavaScript"),
     (r"\breact\b", "React"),
     (r"\bnext\.js\b", "Next.js"),
+    (r"\bnode\.js\b|\bnodejs\b", "Node.js"),
     (r"\bwordpress\b", "WordPress"),
     (r"\bwebflow\b", "Webflow"),
     (r"\bseo\b", "SEO"),
@@ -690,12 +791,36 @@ def analyze_job_snapshot(snapshot: str, *, job_url: str) -> JobResearch:
     content_lines = _content_lines(raw_description)
     responsibilities = _section_items(
         content_lines,
-        starts=("Core Responsibilities", "Responsibilities", "What You Will Do"),
-        ends=("About Us", "Requirements", "Qualifications"),
+        starts=(
+            "Core Responsibilities",
+            "Responsibilities",
+            "What You Will Do",
+            "What You'll Do",
+            "What You’ll Do",
+            "You Will",
+        ),
+        ends=(
+            "About Us",
+            "Requirements",
+            "Qualifications",
+            "What We Are Looking For",
+            "What We're Looking For",
+            "What We’re Looking For",
+            "You Are",
+            "Who You Are",
+        ),
     )
     qualifications = _section_items(
         content_lines,
-        starts=("Requirements", "Qualifications", "What We Are Looking For"),
+        starts=(
+            "Requirements",
+            "Qualifications",
+            "What We Are Looking For",
+            "What We're Looking For",
+            "What We’re Looking For",
+            "You Are",
+            "Who You Are",
+        ),
         ends=("What You Will Gain", "Benefits", "Details", "Logistics"),
     )
     details = _section_items(

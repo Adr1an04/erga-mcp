@@ -19,10 +19,9 @@ mcp_servers:
       ERGA_MCP_CONFIG: /absolute/path/to/erga-mcp-config.toml
       # Keep host-visible tools at the least-privilege career boundary.
       ERGA_MCP_TOOL_PROFILE: career
-    # Intake may fetch a job page and run a local LaTeX build.
-    # Worst case is a 30 s page fetch plus a 120 s LaTeX validation. Leave
-    # enough outer headroom for startup, artifact writes, and result transfer.
-    timeout: 210
+    # Intake may fetch a job page, inspect selected Git projects, request one bounded
+    # host-model tailoring pass, and run local LaTeX validation.
+    timeout: 300
     connect_timeout: 30
     # Keep the default model-visible surface focused. The advanced
     # prepare_job_workspace tool can be added deliberately when needed.
@@ -37,4 +36,10 @@ mcp_servers:
       prompts: false
       resources: false
     sampling:
-      enabled: false
+      # Explicit opt-in: the same connected reasoning host receives only bounded job/project
+      # evidence and returns structured, evidence-cited bullets. Erga remains model-neutral.
+      enabled: true
+      max_tokens_cap: 4096
+      timeout: 90
+      max_rpm: 6
+      max_tool_rounds: 100

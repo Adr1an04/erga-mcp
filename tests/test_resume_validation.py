@@ -8,10 +8,54 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from erga_mcp.resume import resolve_latexmk_executable, validate_latex_proposal
+from erga_mcp.resume import (
+    resolve_latexmk_executable,
+    validate_latex_proposal,
+    validate_single_line_resume_items,
+)
 
 
 class ResumeValidationTests(unittest.TestCase):
+    def test_measures_exact_resume_item_width_without_modifying_the_proposal(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            proposal = root / "proposal.tex"
+            source = (
+                r"\newcommand{\resumeItem}[1]{\item #1}"
+                "\n"
+                r"\begin{document}"
+                "\n"
+                r"\begin{itemize}"
+                "\n"
+                r"\resumeItem{Fits on one line.}"
+                "\n"
+                r"\resumeItem{Needs another rendered line.}"
+                "\n"
+                r"\end{itemize}"
+                "\n"
+                r"\end{document}"
+                "\n"
+            )
+            proposal.write_text(source, encoding="utf-8")
+            completed = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="ERGA-RESUME-ITEM-FIT:1\nERGA-RESUME-ITEM-WRAP:2\n",
+                stderr="",
+            )
+
+            result = validate_single_line_resume_items(
+                proposal,
+                latexmk=Path(sys.executable),
+                runner=lambda *args, **kwargs: completed,
+            )
+
+            self.assertEqual(result.item_count, 2)
+            self.assertEqual(result.wrapped_item_indices, (1,))
+            self.assertIn("-no-shell-escape", result.command)
+            self.assertEqual(proposal.read_text(encoding="utf-8"), source)
+            self.assertEqual(tuple(root.glob("erga-layout-*")), ())
+
     def test_compiles_only_a_proposed_tex_file_with_a_user_selected_latexmk(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

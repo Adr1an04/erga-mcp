@@ -42,7 +42,8 @@ records and generated files stay on your computer.
 - Keep your applications and status history in one local database.
 - Save job postings before they disappear.
 - Create a separate folder and tailored résumé for each role.
-- Reorder existing résumé bullets, projects, and skills to better match a job description.
+- Rank the approved project catalogue and, with a sampling-capable host, synthesize new
+  evidence-cited project bullets from approved claims plus authenticated authored-Git changes.
 - Compile the result to a PDF and show exactly what changed.
 - Read limited Gmail or Zoho metadata to spot interviews, assessments, offers, and rejections.
 - Use the same tools from the CLI or an MCP client.
@@ -111,6 +112,30 @@ The configuration contains paths and feature settings, never credentials. Use
 `--config /absolute/path/to/config.toml` to select another location.
 `erga init` remains available as a low-level non-interactive initializer for advanced and scripted
 installations.
+
+### Git-backed project tailoring
+
+Project inventory entries may declare one or more GitHub repositories without embedding local
+paths or credentials:
+
+```json
+{
+  "id": "api-platform",
+  "title": "API Platform",
+  "git_repositories": ["example/api-platform"]
+}
+```
+
+When at least one inventory entry has this mapping and GitHub CLI is already authenticated, job
+intake refreshes a private JSON index of owned and direct-collaborator repositories. It ranks the
+full approved catalogue before reading source code, then researches a broader role-relevant
+shortlist instead of filtering projects by their existing résumé wording. Erga attributes commits
+to the connected GitHub identity and inspects all fetched refs. When the MCP client enables
+sampling, its connected model receives bounded approved bullets plus authenticated diff evidence
+and returns structured, role-specific project bullets with evidence IDs. Server-side validation
+rejects unsupported numbers, cross-project citations, raw commit/file/line accounting, duplicate
+lead verbs, unsafe LaTeX, and rendered overflow. The deterministic approved-copy path remains the
+fallback when sampling, GitHub, or a selected repository is unavailable.
 
 After core setup, optionally connect any number of coding assistants:
 
@@ -215,7 +240,14 @@ included because it reads only the explicitly supplied worktree, requires an aut
 writes evidence or a résumé. Select another documented profile only when the connected host should
 receive additional capability.
 
-With the optional `erga-mcp-router` Hermes plugin enabled, `/erga-tracker` renders that same local Obsidian tracker directly in the current chat, and `/erga-mail-sync` runs a bounded configured-mail sync. Both return compact Markdown that remains readable across Discord, Signal, Telegram, Slack, and other Hermes platforms. The tracker does not write to the vault; the mail command stores metadata-only events and does not expose message bodies, previews, or credentials.
+With the optional `erga-mcp-router` Hermes plugin enabled, `/erga-tracker` renders every configured
+cycle from that same local Obsidian tracker directly in the current chat. Discord receives compact
+Previous/Next pagination; `/erga-tracker all page 2` and searches such as
+`/erga-tracker applied page 2` work on text-only platforms too. Each available company links to its
+saved posting. `/erga-mail-sync` runs a bounded configured-mail sync. Both commands return compact
+Markdown that remains readable across Discord, Signal, Telegram, Slack, and other Hermes platforms.
+The tracker does not write to the vault; the mail command stores metadata-only events and does not
+expose message bodies, previews, or credentials.
 
 The full list of permissions and safety limits is in [`docs/security.md`](docs/security.md).
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import socket
 import time
 import unittest
@@ -14,6 +15,7 @@ from erga_mcp.job_intake import (
     fetch_job_snapshot,
     select_relevant_evidence,
 )
+from erga_mcp.job_research import require_job_posting
 from erga_mcp.models import Evidence
 
 
@@ -44,6 +46,24 @@ class JobIntakeTests(unittest.TestCase):
                 socket_address,
             )
         ]
+
+    def test_recovers_shopify_hydration_job_text_from_a_careers_detail_page(self) -> None:
+        description = (
+            "Being a Shopify Intern\\n\\nAbout the role\\n\\n"
+            "Applied Machine Learning Interns build models at scale.\\n\\n"
+            "Qualifications:\\n\\n - You love solving tough problems with code.\\n\\n"
+            "Compensation:\\n\\nPaid internship.\\n\\nApply Now"
+        )
+        page = (
+            f"<html><body><main>Back</main><script>{json.dumps(description)}</script></body></html>"
+        )
+        url = "https://www.shopify.com/careers/applied-machine-learning-internships-winter-2027_example"
+
+        with patch("erga_mcp.job_intake.fetch_public_page", return_value=page):
+            snapshot = fetch_job_snapshot(url)
+
+        self.assertIn("Applied Machine Learning Interns", snapshot)
+        require_job_posting(snapshot, job_url=url)
 
     def test_rejects_credentials_and_private_network_destinations(self) -> None:
         with self.assertRaisesRegex(ValueError, "embedded credentials"):

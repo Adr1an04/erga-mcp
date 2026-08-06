@@ -15,6 +15,22 @@ DEFAULT_COMMIT_LIMIT = 200
 MAX_DIFF_CHARACTERS = 40_000
 _LOW_SIGNAL_SUFFIXES = (".lock", ".md", ".rst", ".txt")
 _LOW_SIGNAL_NAMES = {"package-lock.json", "poetry.lock", "pdm.lock", "yarn.lock"}
+_GENERIC_PATH_TERMS = frozenset(
+    {
+        "common",
+        "docs",
+        "include",
+        "index",
+        "init",
+        "lib",
+        "main",
+        "readme",
+        "scripts",
+        "src",
+        "test",
+        "tests",
+    }
+)
 _SYMBOL_PATTERNS = (
     re.compile(r"^\+\s*(?:async\s+)?def\s+([A-Za-z_]\w*)", re.MULTILINE),
     re.compile(r"^\+\s*(?:class|function)\s+([A-Za-z_$]\w*)", re.MULTILINE),
@@ -75,6 +91,51 @@ def scan_commits(repo: Path, checkpoint: str | None) -> tuple[list[GitCommit], s
         _parse_commit(resolved, item) for item in result.stdout.split("\x1e") if item.strip()
     ]
     return [commit for commit in commits if _is_high_signal(commit)], head_sha
+
+
+def scan_authored_commits(repo: Path, github_commit_shas: set[str]) -> list[GitCommit]:
+    """Return all high-signal commits attributable to the connected GitHub user.
+
+    GitHub's author-filtered default-branch results seed trusted author email identities. The
+    local all-ref scan then recovers that user's commits on every fetched branch without claiming
+    commits authored by collaborators.
+    """
+    resolved = validate_worktree(repo)
+    emails: set[str] = set()
+    for sha in github_commit_shas:
+        if re.fullmatch(r"[0-9a-fA-F]{7,64}", sha) is None:
+            continue
+        identity = _run_git(resolved, "show", "-s", "--format=%ae", sha)
+        if identity.returncode == 0 and identity.stdout.strip():
+            emails.add(identity.stdout.strip().casefold())
+    if not emails:
+        configured_email = _run_git(resolved, "config", "user.email")
+        if configured_email.returncode == 0 and configured_email.stdout.strip():
+            emails.add(configured_email.stdout.strip().casefold())
+    if not emails:
+        return []
+
+    history = _run_git(
+        resolved,
+        "log",
+        "--all",
+        "--format=%H%x1f%P%x1f%s%x1f%ae%x1e",
+    )
+    if history.returncode != 0:
+        raise ValueError("could not inspect authored Git history")
+    commits: list[GitCommit] = []
+    seen: set[str] = set()
+    for record in history.stdout.split("\x1e"):
+        if not record.strip():
+            continue
+        sha, parents, subject, email = record.strip().split("\x1f", maxsplit=3)
+        if email.casefold() not in emails or sha in seen:
+            continue
+        commit = _parse_commit(resolved, "\x1f".join((sha, parents, subject)))
+        if _is_high_signal(commit):
+            commits.append(commit)
+            seen.add(sha)
+    return commits
 
 
 def commits_missing_observations(
@@ -143,6 +204,10 @@ def synthesize_diff_research(
     repo_path: str,
     observations: list[GitChangeObservation],
     candidates: list[GitEvidenceCandidate],
+    *,
+    minimum_characters: int = 0,
+    target_characters: int = 0,
+    maximum_characters: int = 0,
 ) -> tuple[str, list[GitResearchBullet]]:
     """Create factual, review-only workstreams from stored diff observations, never subjects."""
     candidate_ids = {candidate.commit_sha: candidate.id for candidate in candidates}
@@ -154,11 +219,18 @@ def synthesize_diff_research(
 
     bullets: list[GitResearchBullet] = []
     for group in groups.values():
-        group = group[:4]
         files = sorted({path for item in group for path in item.files})
         symbols = _unique(item for observation in group for item in observation.symbols)
         kinds = _unique(item for observation in group for item in observation.change_kinds)
-        description = _describe_change(symbols, kinds, files)
+        description = _describe_change(
+            symbols,
+            kinds,
+            files,
+            group,
+            minimum_characters=minimum_characters,
+            target_characters=target_characters,
+            maximum_characters=maximum_characters,
+        )
         if description is None:
             continue
         bullets.append(
@@ -279,11 +351,93 @@ def _workstream_key(observation: GitChangeObservation) -> str:
     return "/".join(parts[:2]) if len(parts) > 1 else parts[0]
 
 
-def _describe_change(symbols: list[str], kinds: list[str], files: list[str]) -> str | None:
+def _describe_change(
+    symbols: list[str],
+    kinds: list[str],
+    files: list[str],
+    observations: list[GitChangeObservation],
+    *,
+    minimum_characters: int = 0,
+    target_characters: int = 0,
+    maximum_characters: int = 0,
+) -> str | None:
     if not files:
         return None
-    focus = ", ".join(symbols[:2]) if symbols else ", ".join(files[:2])
-    return f"Implemented {' and '.join(kinds[:2])} changes for {focus}"
+    focus = _workstream_focus(files, symbols)
+    additions = sum(item.additions for item in observations)
+    deletions = sum(item.deletions for item in observations)
+    commit_word = "commit" if len(observations) == 1 else "commits"
+    file_word = "file" if len(files) == 1 else "files"
+    prefix = (
+        f"Implemented {'/'.join(kinds[:2])} work across {len(observations)} {commit_word} and "
+        f"{len(files)} {file_word} (+{additions}/-{deletions} lines), covering "
+    )
+    if maximum_characters and len(prefix + focus) > maximum_characters:
+        available = max(8, maximum_characters - len(prefix))
+        shortened = focus[:available].rstrip(" ,/.-")
+        if " " in shortened and len(focus) > available:
+            shortened = shortened.rsplit(" ", maxsplit=1)[0]
+        focus = re.sub(r"\s+(?:and|or)$", "", shortened)
+    description = prefix + focus
+    # Leave enough room for the longest configured lead-verb shortening. For example,
+    # replacing "Implemented" with "Added" removes six characters. Generating at the hard
+    # minimum made a valid 99-character bullet become an invalid 93-98-character bullet during
+    # the subsequent uniqueness repair.
+    preferred_minimum = max(minimum_characters, target_characters)
+    if minimum_characters:
+        preferred_minimum = max(preferred_minimum, minimum_characters + 6)
+    if maximum_characters:
+        preferred_minimum = min(preferred_minimum, maximum_characters)
+
+    if len(description) < preferred_minimum:
+        suffixes = (
+            " via Git",
+            " from Git",
+            " in Git diffs",
+            " via Git diffs",
+            " from Git diffs",
+            " from Git history",
+            " through Git diffs",
+            " via reviewed diffs",
+            " with reviewed diffs",
+            " through reviewed diffs",
+            " with diff-backed validation",
+        )
+        candidates = [
+            description + suffix
+            for suffix in suffixes
+            if len(description + suffix) >= preferred_minimum
+            and (not maximum_characters or len(description + suffix) <= maximum_characters)
+        ]
+        if candidates:
+            description = min(candidates, key=lambda value: (len(value), value))
+
+    # The lower bound is a presentation preference, not a validity boundary. Preserve a
+    # complete Git-backed statement when padding cannot reach the target; downstream
+    # validation records the underflow as a soft deviation instead of aborting intake.
+    if maximum_characters and len(description) > maximum_characters:
+        return None
+    return description
+
+
+def _workstream_focus(files: list[str], symbols: list[str]) -> str:
+    counts: dict[str, int] = {}
+    for source_file in files:
+        for raw_part in Path(source_file).with_suffix("").parts:
+            words = [
+                word
+                for word in re.findall(r"[a-z0-9]+", raw_part.casefold())
+                if len(word) > 2 and word not in _GENERIC_PATH_TERMS
+            ]
+            if not words or words[0] == "test":
+                continue
+            label = " ".join(words[:3])
+            counts[label] = counts.get(label, 0) + 1
+    ranked = sorted(counts, key=lambda label: (-counts[label], label))
+    if ranked:
+        return " and ".join(ranked[:2])
+    humanized = [re.sub(r"[_-]+", " ", symbol).strip() for symbol in symbols if symbol.strip()]
+    return " and ".join(humanized[:2]) or "reviewed implementation areas"
 
 
 def _unique(values: Iterable[str]) -> list[str]:

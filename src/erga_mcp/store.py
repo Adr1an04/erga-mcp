@@ -610,7 +610,9 @@ class ErgaStore:
                 raise ValueError("no review drafts are available")
             identifiers = [str(row["id"]) for row in rows]
             if action == "show":
-                index = 0
+                if draft_id is not None and draft_id not in identifiers:
+                    raise ValueError("review draft does not exist")
+                index = identifiers.index(draft_id) if draft_id is not None else 0
             else:
                 if draft_id not in identifiers:
                     raise ValueError("review draft does not exist")

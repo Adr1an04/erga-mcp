@@ -25,10 +25,15 @@ bullet_target_chars = 0
 bullet_max_chars = 0
 max_pages = 0
 output_root = "output"
-# Optional local JSON arsenal of approved LaTeX project blocks. When configured,
-# intake selects role-relevant projects from it instead of only reordering the template.
+# Local JSON arsenal of approved LaTeX project blocks. Onboarding creates and requires one
+# so intake cannot silently fall back to reordering only the template's existing projects.
 project_inventory_path = ""
+project_selection_mode = "inventory_optional"
 project_count = 4
+# Require enough evidence-backed bullets for a project to be considered during selection.
+project_min_bullets = 1
+# Reject a generated proposal when any résumé bullets share the same leading verb.
+require_unique_lead_verbs = false
 # The filename of every generated local PDF. Configure a real candidate name locally.
 output_pdf_name = "Firstname_Lastname_Resume.pdf"
 latexmk = "latexmk"
@@ -84,7 +89,10 @@ class ResumeSettings:
     max_pages: int
     output_root: Path
     project_inventory_path: Path | None
+    project_selection_mode: str
     project_count: int
+    project_min_bullets: int
+    require_unique_lead_verbs: bool
     output_pdf_name: str
     latexmk: str
 
@@ -187,9 +195,24 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
         raise ValueError("resume max_pages must be zero or positive")
     inventory_value = str(resume.get("project_inventory_path", "")).strip()
     project_inventory_path = _path(inventory_value, base_dir) if inventory_value else None
+    project_selection_mode = str(resume.get("project_selection_mode", "inventory_optional")).strip()
+    if project_selection_mode not in {"inventory_optional", "inventory_required", "template_only"}:
+        raise ValueError(
+            "resume project_selection_mode must be inventory_optional, inventory_required, "
+            "or template_only"
+        )
+    if project_selection_mode == "inventory_required" and project_inventory_path is None:
+        raise ValueError(
+            "resume project_inventory_path must be configured when project_selection_mode "
+            "is inventory_required"
+        )
     project_count = int(resume.get("project_count", 4))
     if project_count < 1:
         raise ValueError("resume project_count must be positive")
+    project_min_bullets = int(resume.get("project_min_bullets", 1))
+    if project_min_bullets < 1:
+        raise ValueError("resume project_min_bullets must be positive")
+    require_unique_lead_verbs = bool(resume.get("require_unique_lead_verbs", False))
     latexmk = str(resume.get("latexmk", "latexmk")).strip()
     if not latexmk:
         raise ValueError("resume latexmk must be non-empty")
@@ -207,7 +230,10 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
         max_pages=max_pages,
         output_root=_path(str(resume.get("output_root", "output")), base_dir),
         project_inventory_path=project_inventory_path,
+        project_selection_mode=project_selection_mode,
         project_count=project_count,
+        project_min_bullets=project_min_bullets,
+        require_unique_lead_verbs=require_unique_lead_verbs,
         output_pdf_name=output_pdf_name,
         latexmk=latexmk,
     )

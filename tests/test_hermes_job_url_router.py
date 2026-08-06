@@ -192,7 +192,9 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertIn('"package_dir":"/tmp/example"', injected["context"])
         self.assertIn('"package_dir":"/tmp/example"', repeated["context"])
         self.assertIn("Do not call a browser", injected["context"])
-        self.assertIn("whether deterministic tailoring made", injected["context"])
+        self.assertIn("whether tailoring made", injected["context"])
+        self.assertIn("host-model evidence synthesis", injected["context"])
+        self.assertIn("selected projects and their matched role terms", injected["context"])
 
     def test_records_provider_usage_for_the_application_intaked_in_the_same_turn(self) -> None:
         context = _FakePluginContext(
@@ -631,6 +633,7 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertEqual(
             set(context.discord_button_handlers),
             {
+                "erga.tracker.page",
                 "erga.review.back",
                 "erga.review.skip",
                 "erga.review.save",
@@ -1010,13 +1013,94 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         result = context.commands["erga-tracker"]("")
 
         self.assertEqual(result, message)
-        self.assertEqual(context.calls, [("mcp__erga_mcp__application_tracker", {"query": ""})])
+        self.assertEqual(
+            context.calls,
+            [
+                (
+                    "mcp__erga_mcp__application_tracker",
+                    {"query": "", "page": 1, "page_size": 6},
+                )
+            ],
+        )
         self.assertEqual(context.commands["erga-tracker"]("all"), message)
         self.assertEqual(
             context.calls,
             [
-                ("mcp__erga_mcp__application_tracker", {"query": ""}),
-                ("mcp__erga_mcp__application_tracker", {"query": "all"}),
+                (
+                    "mcp__erga_mcp__application_tracker",
+                    {"query": "", "page": 1, "page_size": 6},
+                ),
+                (
+                    "mcp__erga_mcp__application_tracker",
+                    {"query": "", "page": 1, "page_size": 6},
+                ),
+            ],
+        )
+
+    def test_tracker_command_paginates_with_discord_buttons(self) -> None:
+        class Button:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        class Response:
+            def __init__(self, *, text: str, buttons: tuple[Any, ...]) -> None:
+                self.text = text
+                self.buttons = buttons
+
+        def result(page: int) -> str:
+            return json.dumps(
+                {
+                    "structuredContent": {
+                        "enabled": True,
+                        "summary": {"applied": 13},
+                        "page": page,
+                        "page_count": 3,
+                        "message": f"Page {page} of 3",
+                    }
+                }
+            )
+
+        context = _FakePluginContext(results=[result(1), result(2)])
+        plugins = ModuleType("hermes_cli.plugins")
+        plugins.DiscordButton = Button
+        plugins.DiscordCommandResponse = Response
+        hermes_cli = ModuleType("hermes_cli")
+        hermes_cli.__version__ = "0.18.2"
+        hermes_cli.plugins = plugins
+
+        with patch.dict(
+            sys.modules,
+            {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins},
+        ):
+            self.router.register(context)
+            first = context.commands["erga-tracker"]("all")
+            interaction = type(
+                "Interaction",
+                (),
+                {"payload": json.dumps({"query": "", "page": 2})},
+            )()
+            second = context.discord_button_handlers["erga.tracker.page"](interaction)
+
+        self.assertIsInstance(first, Response)
+        self.assertEqual(first.text, "Page 1 of 3")
+        self.assertEqual([button.label for button in first.buttons], ["Page 1/3", "Next"])
+        self.assertIsInstance(second, Response)
+        self.assertEqual(second.text, "Page 2 of 3")
+        self.assertEqual(
+            [button.label for button in second.buttons],
+            ["Previous", "Page 2/3", "Next"],
+        )
+        self.assertEqual(
+            context.calls,
+            [
+                (
+                    "mcp__erga_mcp__application_tracker",
+                    {"query": "", "page": 1, "page_size": 6},
+                ),
+                (
+                    "mcp__erga_mcp__application_tracker",
+                    {"query": "", "page": 2, "page_size": 6},
+                ),
             ],
         )
 

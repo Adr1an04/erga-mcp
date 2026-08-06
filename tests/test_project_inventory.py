@@ -7,10 +7,146 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.models import Evidence
-from erga_mcp.project_inventory import ProjectCandidate, load_project_inventory, select_projects
+from erga_mcp.project_inventory import (
+    ProjectCandidate,
+    load_project_inventory,
+    project_quality_issues,
+    select_project_rationales,
+    select_projects,
+    sync_project_inventory_from_master,
+)
 
 
 class ProjectInventoryTests(unittest.TestCase):
+    def test_sync_appends_missing_master_projects_without_replacing_catalogue_entries(self) -> None:
+        existing = {
+            "id": "custom-platform",
+            "title": "Custom Platform",
+            "latex": "custom latex remains byte-for-byte",
+            "evidence_ids": ["ev_custom"],
+            "bullet_evidence_ids": [["ev_custom"]],
+            "tags": ["custom"],
+        }
+        master = r"""\section{Projects}
+\resumeSubHeadingListStart
+\resumeProjectHeading{\textbf{Realtime Controller} $|$ \textit{C++, Python}}{}
+\resumeItemListStart
+\resumeItem{Built a real-time controller with measured latency.}
+\resumeItemListEnd
+\resumeSubHeadingListEnd
+"""
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "projects.json"
+            path.write_text(json.dumps([existing], indent=2) + "\n", encoding="utf-8")
+
+            created, added, total = sync_project_inventory_from_master(
+                path, master_latex=master, evidence_id="ev_master"
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertFalse(created)
+        self.assertEqual((added, total), (1, 2))
+        self.assertEqual(payload[0], existing)
+        self.assertEqual(payload[1]["id"], "realtime-controller")
+        self.assertEqual(payload[1]["bullet_evidence_ids"], [["ev_master"]])
+
+    def test_inventory_loads_explicit_github_repository_mappings(self) -> None:
+        evidence = [
+            Evidence("ev_ok", "Career#Project", "Verified project", True, datetime.now(UTC)),
+        ]
+        payload = [
+            {
+                "id": "api-platform",
+                "title": "API Platform",
+                "latex": (
+                    r"\resumeProjectHeading{\textbf{API Platform}}{}"
+                    "\n"
+                    r"\resumeItemListStart"
+                    "\n"
+                    r"\resumeItem{Built a verified API platform.}"
+                    "\n"
+                    r"\resumeItemListEnd"
+                ),
+                "evidence_ids": ["ev_ok"],
+                "bullet_evidence_ids": [["ev_ok"]],
+                "tags": ["python", "api"],
+                "git_repositories": ["example/api-platform"],
+            }
+        ]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "projects.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            projects = load_project_inventory(path, evidence)
+
+        self.assertEqual(projects[0].git_repositories, ("example/api-platform",))
+        self.assertIn(
+            r"\href{https://github.com/example/api-platform}{\textbf{API Platform}}",
+            projects[0].latex,
+        )
+
+    def test_inventory_preserves_an_existing_custom_project_heading_link(self) -> None:
+        evidence = [
+            Evidence("ev_ok", "Career#Project", "Verified project", True, datetime.now(UTC)),
+        ]
+        payload = [
+            {
+                "id": "api-platform",
+                "title": "API Platform",
+                "latex": (
+                    r"\resumeProjectHeading{\href{https://example.com/api-platform}"
+                    r"{\textbf{API Platform}}}{}"
+                    "\n"
+                    r"\resumeItemListStart"
+                    "\n"
+                    r"\resumeItem{Built a verified API platform.}"
+                    "\n"
+                    r"\resumeItemListEnd"
+                ),
+                "evidence_ids": ["ev_ok"],
+                "bullet_evidence_ids": [["ev_ok"]],
+                "tags": ["python", "api"],
+                "git_repositories": ["example/api-platform"],
+            }
+        ]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "projects.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            projects = load_project_inventory(path, evidence)
+
+        self.assertIn(r"\href{https://example.com/api-platform}", projects[0].latex)
+        self.assertNotIn(r"\href{https://github.com/example/api-platform}", projects[0].latex)
+
+    def test_inventory_rejects_non_github_repository_mappings(self) -> None:
+        evidence = [
+            Evidence("ev_ok", "Career#Project", "Verified project", True, datetime.now(UTC)),
+        ]
+        payload = [
+            {
+                "id": "api-platform",
+                "title": "API Platform",
+                "latex": (
+                    r"\resumeProjectHeading{\textbf{API Platform}}{}"
+                    "\n"
+                    r"\resumeItemListStart"
+                    "\n"
+                    r"\resumeItem{Built a verified API platform.}"
+                    "\n"
+                    r"\resumeItemListEnd"
+                ),
+                "evidence_ids": ["ev_ok"],
+                "bullet_evidence_ids": [["ev_ok"]],
+                "tags": ["python", "api"],
+                "git_repositories": ["/private/local/path"],
+            }
+        ]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "projects.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "GitHub owner/repo"):
+                load_project_inventory(path, evidence)
+
     def test_select_projects_prefers_role_specific_arsenal_entries_over_template_order(
         self,
     ) -> None:
@@ -113,6 +249,81 @@ class ProjectInventoryTests(unittest.TestCase):
 
         self.assertEqual([candidate.id for candidate in selected], ["kubernetes-platform"])
 
+    def test_select_projects_excludes_candidates_below_configured_bullet_minimum(self) -> None:
+        candidates = (
+            ProjectCandidate(
+                id="one-bullet",
+                title="One Bullet",
+                latex=(
+                    r"\resumeProjectHeading{\textbf{One Bullet}}{}\n"
+                    r"\resumeItemListStart\n"
+                    r"\resumeItem{Built a Python system for testing.}\n"
+                    r"\resumeItemListEnd"
+                ),
+                evidence_ids=("ev_one",),
+                bullet_evidence_ids=(("ev_one",),),
+                tags=("python", "testing"),
+            ),
+            ProjectCandidate(
+                id="two-bullets",
+                title="Two Bullets",
+                latex=(
+                    r"\resumeProjectHeading{\textbf{Two Bullets}}{}\n"
+                    r"\resumeItemListStart\n"
+                    r"\resumeItem{Built a Python system for testing.}\n"
+                    r"\resumeItem{Validated deterministic project selection behavior.}\n"
+                    r"\resumeItemListEnd"
+                ),
+                evidence_ids=("ev_two",),
+                bullet_evidence_ids=(("ev_two",), ("ev_two",)),
+                tags=("python", "testing"),
+            ),
+        )
+
+        selected = select_projects(
+            candidates,
+            "Python testing systems",
+            max_projects=2,
+            minimum_bullets=2,
+        )
+
+        self.assertEqual([candidate.id for candidate in selected], ["two-bullets"])
+
+    def test_select_projects_rejects_internal_git_research_prose(self) -> None:
+        raw_research = ProjectCandidate(
+            id="raw-research",
+            title="Raw Research",
+            latex=(
+                r"\resumeProjectHeading{\textbf{Raw Research}}{}\n"
+                r"\resumeItemListStart\n"
+                r"\resumeItem{Implemented API/UI work across 2 commits and 16 files "
+                r"(+477/-136 lines), covering app and apps in Git diffs.}\n"
+                r"\resumeItemListEnd"
+            ),
+            evidence_ids=("ev_raw",),
+            bullet_evidence_ids=(("ev_raw",),),
+            tags=("python", "api"),
+        )
+        polished = ProjectCandidate(
+            id="polished",
+            title="Polished",
+            latex=(
+                r"\resumeProjectHeading{\textbf{Polished}}{}\n"
+                r"\resumeItemListStart\n"
+                r"\resumeItem{Built a Python API that processed 2,000+ verified submissions.}\n"
+                r"\resumeItemListEnd"
+            ),
+            evidence_ids=("ev_polished",),
+            bullet_evidence_ids=(("ev_polished",),),
+            tags=("python", "api"),
+        )
+
+        selected = select_projects((raw_research, polished), "Required: Python API", max_projects=2)
+
+        self.assertTrue(project_quality_issues(raw_research))
+        self.assertEqual(project_quality_issues(polished), ())
+        self.assertEqual([candidate.id for candidate in selected], ["polished"])
+
     def test_inventory_rejects_unapproved_or_missing_evidence(self) -> None:
         evidence = [
             Evidence("ev_ok", "Career#Project", "Verified project", True, datetime.now(UTC)),
@@ -188,6 +399,77 @@ class ProjectInventoryTests(unittest.TestCase):
             path.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "bullet_evidence_ids"):
                 load_project_inventory(path, evidence)
+
+    def test_selection_rationales_expose_the_matched_job_terms(self) -> None:
+        candidate = ProjectCandidate(
+            id="realtime-platform",
+            title="Realtime Platform",
+            latex=(
+                r"\resumeProjectHeading{\textbf{Realtime Platform} $|$ \textit{Python, Redis}}{}\n"
+                r"\resumeItemListStart\n"
+                r"\resumeItem{Built Python services with Redis for real-time messaging.}\n"
+                r"\resumeItemListEnd"
+            ),
+            evidence_ids=("ev_realtime",),
+            tags=("python", "redis", "real-time"),
+        )
+
+        selections = select_project_rationales(
+            (candidate,),
+            "Responsibilities: build Python services for real-time communication with Redis.",
+            max_projects=1,
+        )
+
+        self.assertEqual(len(selections), 1)
+        self.assertEqual(selections[0].id, "realtime-platform")
+        self.assertEqual(selections[0].title, "Realtime Platform")
+        self.assertEqual(
+            selections[0].matched_terms,
+            ("python", "real", "services", "time"),
+        )
+        self.assertIn("real-time / interactive systems", selections[0].matched_signals)
+
+    def test_role_signal_coverage_prefers_complementary_projects_over_redundant_overlap(
+        self,
+    ) -> None:
+        def candidate(project_id: str, title: str, tags: tuple[str, ...]) -> ProjectCandidate:
+            return ProjectCandidate(
+                id=project_id,
+                title=title,
+                latex=(
+                    rf"\resumeProjectHeading{{\textbf{{{title}}}}}{{}}\n"
+                    r"\resumeItemListStart\n"
+                    rf"\resumeItem{{Built the verified {title} project.}}\n"
+                    r"\resumeItemListEnd"
+                ),
+                evidence_ids=(f"ev_{project_id}",),
+                bullet_evidence_ids=((f"ev_{project_id}",),),
+                tags=tags,
+            )
+
+        candidates = (
+            candidate("ctrl-arm", "Ctrl-ARM", ("c++", "python", "ml", "real-time", "latency")),
+            candidate(
+                "spec-kit",
+                "Spec Kit",
+                ("python", "testing", "agentic-coding-tools", "developer-tools", "open-source"),
+            ),
+            candidate(
+                "forge",
+                "Forge",
+                ("platform", "scale", "data-processing", "production", "typescript"),
+            ),
+            candidate("guido", "Guido", ("python", "systems", "testing", "robotics")),
+        )
+        posting = (
+            "Build production-scale distributed systems, real-time communication, data "
+            "processing, and rendering. Use C++ or Python, machine learning frameworks, "
+            "and agentic coding tools. Own coding, testing, and deployment to production."
+        )
+
+        selected = select_projects(candidates, posting, max_projects=3)
+
+        self.assertEqual({item.id for item in selected}, {"ctrl-arm", "spec-kit", "forge"})
 
 
 if __name__ == "__main__":

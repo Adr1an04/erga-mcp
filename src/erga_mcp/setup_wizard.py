@@ -17,6 +17,7 @@ from questionary import Choice
 
 from .config import DEFAULT_CONFIG, load_config, validate_output_pdf_name
 from .private_files import restrict_private_directory, restrict_private_file
+from .project_inventory import load_project_inventory, sync_project_inventory_from_master
 from .resume_settings import update_settings
 from .resume_sources import (
     SUPPORTED_RESUME_SUFFIXES,
@@ -603,6 +604,28 @@ def _atomic_write_private(path: Path, text: str) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
+def _project_inventory_path(
+    config_path: Path, erga_vault_dir: Path | None, vault_path: Path | None
+) -> Path:
+    """Prefer the conventional existing Obsidian catalogue before creating Erga's own inventory."""
+    if vault_path is not None:
+        existing_catalogue = vault_path / "02 Projects" / "Project Inventory.json"
+        if existing_catalogue.is_file():
+            return existing_catalogue
+    if erga_vault_dir is not None:
+        return erga_vault_dir / "Project Inventory.json"
+    return config_path.expanduser().absolute().parent / "project-inventory.json"
+
+
+def _write_project_inventory(
+    path: Path, *, master_latex: str, evidence_id: str
+) -> tuple[bool, int, int]:
+    """Create or reconcile the reviewable catalogue with all current master projects."""
+    return sync_project_inventory_from_master(
+        path, master_latex=master_latex, evidence_id=evidence_id
+    )
+
+
 def _configure_core_paths(
     *,
     config_path: Path,
@@ -704,6 +727,13 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         managed_master,
         source_name=master.path.name,
     )
+    inventory_path = _project_inventory_path(selections.config_path, erga_vault_dir, vault_path)
+    inventory_created, inventory_added, inventory_count = _write_project_inventory(
+        inventory_path,
+        master_latex=master.text if master.format == "tex" else "",
+        evidence_id=evidence.id,
+    )
+    load_project_inventory(inventory_path, store.list_evidence())
     current_resume = config.resume
     resolved_max_pages = (
         selections.max_pages
@@ -721,6 +751,8 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
             "master_path": str(managed_master.path),
             "reference_path": str(managed_style.path) if managed_style is not None else "",
             "output_root": str(output_root),
+            "project_inventory_path": str(inventory_path),
+            "project_selection_mode": "inventory_required",
             "output_pdf_name": normalize_output_pdf_name(selections.output_pdf_name),
             "bullet_min_chars": selections.bullet_min_chars,
             "bullet_target_chars": selections.bullet_target_chars,
@@ -736,14 +768,27 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         "Private Erga configuration and database",
         "Private local application tracking",
         "Managed master resume knowledge",
+        "Required project inventory with approved per-bullet evidence",
         "Client-neutral local MCP profile",
     ]
     if managed_style is not None:
         completed.append("Managed resume style preference")
     if vault_path is not None:
         completed.append("Optional Obsidian workspace and tracker view")
+    if inventory_created:
+        inventory_origin = "created from your master resume"
+    elif inventory_added:
+        inventory_origin = (
+            f"preserved existing entries and added {inventory_added} master project(s)"
+        )
+    else:
+        inventory_origin = "existing catalogue already matched the master resume"
     next_steps = [
         "Run `erga status` to confirm your local setup.",
+        (
+            f"Review {inventory_path} ({inventory_count} project entries; {inventory_origin}) "
+            "before your first intake."
+        ),
         "Optionally connect any MCP-capable coding assistant you already use.",
         "Optionally add Obsidian, communication, or mail integrations later.",
         f"Approved master evidence is ready as {evidence.id}.",

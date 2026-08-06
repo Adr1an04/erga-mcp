@@ -11,7 +11,10 @@ from tempfile import TemporaryDirectory
 from erga_mcp.models import Evidence
 from erga_mcp.project_inventory import ProjectCandidate
 from erga_mcp.resume_tailoring import (
+    TAILORING_VERSION,
+    _record_lead_verb_rewrites,
     _relevance,
+    classify_wrapped_resume_items,
     create_automatic_resume_proposal,
     pdf_page_count,
 )
@@ -56,6 +59,38 @@ _TEMPLATE = r"""
 
 
 class AutomaticResumeTailoringTests(unittest.TestCase):
+    def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
+        self,
+    ) -> None:
+        self.assertEqual(TAILORING_VERSION, 15)
+
+    def test_classifies_wrapped_bullets_as_project_or_baseline_content(self) -> None:
+        candidates = (
+            ProjectCandidate(
+                id="design-site",
+                title="Design Site",
+                latex="",
+                evidence_ids=(),
+                bullet_evidence_ids=(),
+            ),
+            ProjectCandidate(
+                id="stream-engine",
+                title="Stream Engine",
+                latex="",
+                evidence_ids=(),
+                bullet_evidence_ids=(),
+            ),
+        )
+
+        project_ids, baseline_indices = classify_wrapped_resume_items(
+            _TEMPLATE,
+            candidates,
+            (0, 2, 3),
+        )
+
+        self.assertEqual(project_ids, ("design-site", "stream-engine"))
+        self.assertEqual(baseline_indices, (0,))
+
     def test_relevance_requires_term_boundaries_and_rejects_substring_collisions(self) -> None:
         for skill, unrelated in (
             ("Java", "JavaScript"),
@@ -196,6 +231,114 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
             self.assertEqual(report["project_selection"]["selected_ids"], ["embedded-controller"])
             self.assertEqual(result.changed_sections, ("Projects",))
 
+    def test_selected_inventory_project_preserves_matching_master_block_formatting(self) -> None:
+        source_text = _TEMPLATE.replace(
+            r"\resumeProjectHeading{\textbf{Stream Engine}",
+            r"\resumeProjectHeading{\href{https://example.test/stream}{\textbf{Stream Engine}}",
+        ).replace(
+            "low-latency Python services.",
+            r"low-latency \textbf{Python} services.",
+        )
+        inventory = (
+            ProjectCandidate(
+                id="stream-engine",
+                title="Stream Engine",
+                latex=(
+                    r"\resumeProjectHeading{\textbf{Stream Engine} $|$ "
+                    r"\textit{Python, PyTorch, Docker}}{}\n"
+                    r"\resumeItemListStart\n"
+                    r"\resumeItem{Implemented a real-time inference engine with low-latency "
+                    r"Python services.}\n"
+                    r"\resumeItemListEnd\n"
+                ),
+                evidence_ids=("ev_stream",),
+                bullet_evidence_ids=(("ev_stream",),),
+                tags=("python", "pytorch", "inference"),
+            ),
+        )
+        evidence = [
+            Evidence(
+                "ev_stream",
+                "Career#Stream",
+                "Implemented a real-time inference engine with low-latency Python services.",
+                True,
+                datetime.now(UTC),
+            )
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text(source_text, encoding="utf-8")
+
+            result = create_automatic_resume_proposal(
+                resume_path=source,
+                output_dir=root / "artifacts",
+                job_description="Required: Python PyTorch inference",
+                evidence=evidence,
+                editable_sections=("projects",),
+                project_candidates=inventory,
+                project_count=1,
+            )
+
+            proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
+            self.assertIn(r"\href{https://example.test/stream}{\textbf{Stream Engine}}", proposed)
+            self.assertIn(r"low-latency \textbf{Python} services", proposed)
+
+    def test_duplicate_lead_rewrite_selects_an_alternative_that_fits_the_layout(self) -> None:
+        base = "Created a Python platform for deterministic project testing "
+        bullet = base + ("x" * (114 - len(base))) + "."
+        self.assertEqual(len(bullet), 115)
+        inventory = (
+            ProjectCandidate(
+                id="python-platform",
+                title="Python Platform",
+                latex=(
+                    r"\resumeProjectHeading{\textbf{Python Platform}}{}"
+                    "\n"
+                    r"\resumeItemListStart"
+                    "\n"
+                    rf"\resumeItem{{{bullet}}}"
+                    "\n"
+                    r"\resumeItemListEnd"
+                    "\n"
+                ),
+                evidence_ids=("ev_platform",),
+                bullet_evidence_ids=(("ev_platform",),),
+                tags=("python", "platform", "testing"),
+            ),
+        )
+        evidence = [
+            Evidence(
+                "ev_platform",
+                "Career#Platform",
+                bullet,
+                True,
+                datetime.now(UTC),
+            )
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text(_TEMPLATE, encoding="utf-8")
+
+            result = create_automatic_resume_proposal(
+                resume_path=source,
+                output_dir=root / "artifacts",
+                job_description="Required: Python platform testing",
+                evidence=evidence,
+                editable_sections=("projects",),
+                bullet_min_chars=1,
+                bullet_target_chars=105,
+                bullet_max_chars=116,
+                project_candidates=inventory,
+                project_count=1,
+                require_unique_lead_verbs=True,
+            )
+
+            proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
+            self.assertIn("Produced a Python platform", proposed)
+            self.assertEqual(result.constraint_violations, ())
+
     def test_uses_an_explicit_baseline_only_when_no_relevant_ordering_change_exists(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -216,7 +359,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
             self.assertTrue(report["tailoring"]["baseline_fallback"])
             self.assertIn("No meaningful", report["tailoring"]["reason"])
 
-    def test_length_constraints_report_legacy_outliers_without_blocking_safe_reordering(
+    def test_length_constraints_report_legacy_underflows_as_soft_deviations(
         self,
     ) -> None:
         with TemporaryDirectory() as directory:
@@ -238,9 +381,339 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
             report = json.loads(result.proposal.claim_report_path.read_text(encoding="utf-8"))
             lengths = report["constraints"]["bullet_characters"]
             self.assertTrue(lengths["passed"])
-            self.assertGreater(len(lengths["legacy_violations"]), 0)
+            self.assertEqual(lengths["legacy_violations"], [])
             self.assertEqual(lengths["new_violations"], [])
+            self.assertGreater(len(lengths["soft_deviations"]), 0)
             self.assertEqual(result.constraint_violations, ())
+
+    def test_under_minimum_length_is_a_soft_deviation(self) -> None:
+        bullet = "Built a Python API with deterministic tests and reviewed Git provenance."
+        self.assertLess(len(bullet), 98)
+        evidence = Evidence(
+            "ev_soft_length",
+            "git-derived:soft-length",
+            bullet,
+            True,
+            datetime.now(UTC),
+        )
+        project = ProjectCandidate(
+            id="soft-length",
+            title="Soft Length",
+            latex=(
+                r"\resumeProjectHeading{\textbf{Soft Length} $|$ \textit{Python}}{}"
+                "\n"
+                r"\resumeItemListStart"
+                "\n"
+                rf"\resumeItem{{{bullet}}}"
+                "\n"
+                r"\resumeItemListEnd"
+                "\n"
+            ),
+            evidence_ids=(evidence.id,),
+            bullet_evidence_ids=((evidence.id,),),
+            tags=("python", "api"),
+        )
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text(_TEMPLATE, encoding="utf-8")
+            result = create_automatic_resume_proposal(
+                resume_path=source,
+                output_dir=root / "artifacts",
+                job_description="Required Python API",
+                evidence=[evidence],
+                editable_sections=("projects",),
+                bullet_min_chars=99,
+                bullet_target_chars=105,
+                bullet_max_chars=116,
+                project_candidates=(project,),
+                project_count=1,
+            )
+
+            report = json.loads(result.proposal.claim_report_path.read_text(encoding="utf-8"))
+            lengths = report["constraints"]["bullet_characters"]
+            self.assertTrue(result.meaningful_change)
+            self.assertEqual(result.constraint_violations, ())
+            self.assertEqual(lengths["new_violations"], [])
+            self.assertIn({"length": len(bullet), "text": bullet}, lengths["soft_deviations"])
+
+    def test_duplicate_lead_verbs_are_resolved_before_constraint_validation(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text(
+                _TEMPLATE.replace(
+                    "Implemented a real-time inference engine", "Built a real-time inference engine"
+                ),
+                encoding="utf-8",
+            )
+
+            result = create_automatic_resume_proposal(
+                resume_path=source,
+                output_dir=root / "artifacts",
+                job_description="Python FastAPI Docker",
+                evidence=[],
+                editable_sections=("experience", "projects"),
+                bullet_min_chars=99,
+                bullet_target_chars=105,
+                bullet_max_chars=116,
+                require_unique_lead_verbs=True,
+            )
+
+            proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
+            report = json.loads(result.proposal.claim_report_path.read_text(encoding="utf-8"))
+            self.assertTrue(result.meaningful_change)
+            self.assertEqual(result.constraint_violations, ())
+            self.assertTrue(report["constraints"]["lead_verbs"]["passed"])
+            self.assertNotEqual(proposed.count(r"\resumeItem{Built "), 2)
+            self.assertEqual(
+                report["constraints"]["lead_verbs"]["rewrites"],
+                [
+                    {
+                        "from": "Built",
+                        "original_text": (
+                            "Built a real-time inference engine with low-latency Python services."
+                        ),
+                        "rewritten_text": (
+                            "Developed a real-time inference engine with low-latency "
+                            "Python services."
+                        ),
+                        "section": "Projects",
+                        "section_bullet_index": 0,
+                        "to": "Developed",
+                    }
+                ],
+            )
+            rewritten_claim = next(
+                claim for claim in report["claims"] if claim["text"].startswith("Developed ")
+            )
+            self.assertTrue(rewritten_claim["text_changed"])
+            self.assertEqual(
+                rewritten_claim["original_text"],
+                "Built a real-time inference engine with low-latency Python services.",
+            )
+
+    def test_replacement_projects_can_reuse_a_lead_from_the_removed_project_section(self) -> None:
+        project = ProjectCandidate(
+            id="api-platform",
+            title="API Platform",
+            latex=(
+                r"\resumeProjectHeading{\textbf{API Platform} $|$ \textit{Python, API}}{}"
+                "\n"
+                r"\resumeItemListStart"
+                "\n"
+                r"\resumeItem{Engineered a Python API platform with authenticated requests.}"
+                "\n"
+                r"\resumeItem{Validated API failures through approved integration tests.}"
+                "\n"
+                r"\resumeItemListEnd"
+            ),
+            evidence_ids=("ev_api",),
+            bullet_evidence_ids=(("ev_api",), ("ev_api",)),
+            tags=("python", "api", "testing"),
+        )
+        evidence = Evidence(
+            "ev_api",
+            "approved:api-platform",
+            "Approved API Platform evidence.",
+            True,
+            datetime.now(UTC),
+        )
+        source_text = _TEMPLATE.replace(
+            "Designed a responsive website", "Engineered a responsive website"
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text(source_text, encoding="utf-8")
+
+            result = create_automatic_resume_proposal(
+                resume_path=source,
+                output_dir=root / "artifacts",
+                job_description="Required: Python API testing",
+                evidence=[evidence],
+                editable_sections=("projects",),
+                bullet_max_chars=116,
+                project_candidates=(project,),
+                project_count=1,
+                require_unique_lead_verbs=True,
+            )
+
+            proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
+            self.assertEqual(result.constraint_violations, ())
+            self.assertEqual(result.project_selection["selected_ids"], ["api-platform"])
+            self.assertIn("Engineered a Python API platform", proposed)
+            self.assertNotIn("Engineered a responsive website", proposed)
+
+    def test_duplicate_award_lead_verbs_use_an_award_specific_replacement(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text(
+                _TEMPLATE.replace(
+                    "Designed a responsive website", "Won a responsive website"
+                ).replace(
+                    "Implemented a real-time inference engine",
+                    "Won a real-time inference engine",
+                ),
+                encoding="utf-8",
+            )
+
+            result = create_automatic_resume_proposal(
+                resume_path=source,
+                output_dir=root / "artifacts",
+                job_description="Python FastAPI Docker",
+                evidence=[],
+                editable_sections=("projects",),
+                require_unique_lead_verbs=True,
+            )
+
+            proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
+            self.assertIn("Earned a responsive website", proposed)
+            self.assertEqual(result.constraint_violations, ())
+
+    def test_git_enrichment_can_resolve_six_implemented_project_bullets(self) -> None:
+        evidence = [
+            Evidence(
+                id=f"ev_{index}",
+                source_ref=f"git-derived:project-{index}",
+                text=f"Implemented verified workstream {index} from Git history.",
+                approved=True,
+                created_at=datetime.now(UTC),
+            )
+            for index in range(6)
+        ]
+        projects = tuple(
+            ProjectCandidate(
+                id=f"project-{project}",
+                title=f"Project {project}",
+                latex=(
+                    rf"\resumeProjectHeading{{\textbf{{Project {project}}}}}{{}}"
+                    "\n"
+                    r"\resumeItemListStart"
+                    "\n"
+                    rf"\resumeItem{{Implemented Python API workstream {project * 2} across "
+                    "reviewed commits and files with deterministic Git provenance.}"
+                    "\n"
+                    rf"\resumeItem{{Implemented Python API workstream {project * 2 + 1} across "
+                    "reviewed commits and files with deterministic Git provenance.}"
+                    "\n"
+                    r"\resumeItemListEnd"
+                    "\n"
+                ),
+                evidence_ids=(f"ev_{project * 2}", f"ev_{project * 2 + 1}"),
+                bullet_evidence_ids=((f"ev_{project * 2}",), (f"ev_{project * 2 + 1}",)),
+                tags=("python", "api", "testing"),
+            )
+            for project in range(3)
+        )
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text(_TEMPLATE, encoding="utf-8")
+
+            result = create_automatic_resume_proposal(
+                resume_path=source,
+                output_dir=root / "artifacts",
+                job_description="Required Python API testing",
+                evidence=evidence,
+                editable_sections=("projects",),
+                project_candidates=projects,
+                project_count=3,
+                bullet_min_chars=99,
+                bullet_target_chars=105,
+                bullet_max_chars=116,
+                require_unique_lead_verbs=True,
+            )
+
+            report = json.loads(result.proposal.claim_report_path.read_text(encoding="utf-8"))
+            self.assertEqual(result.constraint_violations, ())
+            self.assertTrue(result.meaningful_change)
+            self.assertTrue(report["constraints"]["lead_verbs"]["passed"])
+            self.assertEqual(len(report["constraints"]["lead_verbs"]["rewrites"]), 5)
+            self.assertEqual(report["constraints"]["lead_verbs"]["duplicates"], {})
+
+    def test_unknown_duplicate_verbs_remain_a_hard_constraint_violation(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text(
+                _TEMPLATE.replace("Created visual", "Mentored visual").replace(
+                    "Implemented a real-time", "Mentored a real-time"
+                ),
+                encoding="utf-8",
+            )
+
+            result = create_automatic_resume_proposal(
+                resume_path=source,
+                output_dir=root / "artifacts",
+                job_description="Python FastAPI Docker",
+                evidence=[],
+                editable_sections=("experience", "projects"),
+                require_unique_lead_verbs=True,
+            )
+
+            proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
+            report = json.loads(result.proposal.claim_report_path.read_text(encoding="utf-8"))
+            self.assertEqual(proposed.count("Mentored "), 2)
+            self.assertEqual(result.constraint_violations, ("duplicate lead verb 'mentored'",))
+            self.assertFalse(result.meaningful_change)
+            self.assertFalse(report["constraints"]["lead_verbs"]["passed"])
+            self.assertEqual(report["constraints"]["lead_verbs"]["rewrites"], [])
+
+    def test_duplicate_verbs_in_uneditable_sections_are_not_rewritten(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            original = _TEMPLATE.replace(
+                "Implemented a real-time inference engine", "Built a real-time inference engine"
+            )
+            source.write_text(original, encoding="utf-8")
+
+            result = create_automatic_resume_proposal(
+                resume_path=source,
+                output_dir=root / "artifacts",
+                job_description="Python FastAPI Docker",
+                evidence=[],
+                editable_sections=("experience",),
+                require_unique_lead_verbs=True,
+            )
+
+            proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
+            self.assertIn("Built a real-time inference engine", proposed)
+            self.assertNotIn("Developed a real-time inference engine", proposed)
+            self.assertEqual(result.constraint_violations, ("duplicate lead verb 'built'",))
+            self.assertFalse(result.meaningful_change)
+
+    def test_rewrite_provenance_uses_output_position_for_identical_claims(self) -> None:
+        records: list[dict[str, object]] = [
+            {
+                "output_group_index": index,
+                "output_index": 0,
+                "section": "Projects",
+                "source_ref": f"project/{index}",
+                "text": "Built the same system.",
+                "text_changed": False,
+            }
+            for index in range(2)
+        ]
+        rewrites: list[dict[str, object]] = [
+            {
+                "original_text": "Built the same system.",
+                "rewritten_text": "Developed the same system.",
+                "section": "Projects",
+                "section_bullet_index": 1,
+            }
+        ]
+
+        _record_lead_verb_rewrites(records, rewrites)
+
+        self.assertFalse(records[0]["text_changed"])
+        self.assertEqual(records[0]["text"], "Built the same system.")
+        self.assertTrue(records[1]["text_changed"])
+        self.assertEqual(records[1]["text"], "Developed the same system.")
 
     def test_inventory_constraint_fallback_resets_selection_and_provenance(self) -> None:
         inventory = (
@@ -265,7 +738,10 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "resume.tex"
-            source.write_text(_TEMPLATE, encoding="utf-8")
+            duplicate_template = _TEMPLATE.replace(
+                "Implemented a real-time inference engine", "Built a real-time inference engine"
+            )
+            source.write_text(duplicate_template, encoding="utf-8")
             result = create_automatic_resume_proposal(
                 resume_path=source,
                 output_dir=root / "artifacts",
@@ -277,16 +753,19 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
                 bullet_max_chars=50,
                 project_candidates=inventory,
                 project_count=1,
+                require_unique_lead_verbs=True,
             )
 
             report = json.loads(result.proposal.claim_report_path.read_text(encoding="utf-8"))
             self.assertFalse(result.meaningful_change)
             self.assertEqual(
-                result.proposal.proposed_tex_path.read_text(encoding="utf-8"), _TEMPLATE
+                result.proposal.proposed_tex_path.read_text(encoding="utf-8"), duplicate_template
             )
             self.assertEqual(report["project_selection"]["mode"], "inventory_constraint_fallback")
             self.assertEqual(report["project_selection"]["selected_ids"], [])
             self.assertEqual(report["project_claims"], [])
+            self.assertFalse(report["constraints"]["lead_verbs"]["passed"])
+            self.assertEqual(report["constraints"]["lead_verbs"]["rewrites"], [])
 
     def test_inventory_project_bullets_record_explicit_approved_provenance(self) -> None:
         inventory = (
@@ -331,19 +810,27 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
                 [
                     {
                         "evidence_ids": ["ev_api"],
+                        "output_group_index": 0,
+                        "output_index": 0,
                         "project_id": "api-platform",
                         "project_title": "API Platform",
+                        "section": "Projects",
                         "source_kind": "project_inventory",
                         "source_ref": "project_inventory/api-platform/1",
                         "text": "Built a Python FastAPI platform for service integration.",
+                        "text_changed": False,
                     },
                     {
                         "evidence_ids": ["ev_tests"],
+                        "output_group_index": 0,
+                        "output_index": 1,
                         "project_id": "api-platform",
                         "project_title": "API Platform",
+                        "section": "Projects",
                         "source_kind": "project_inventory",
                         "source_ref": "project_inventory/api-platform/2",
                         "text": "Validated API contracts with deterministic integration tests.",
+                        "text_changed": False,
                     },
                 ],
             )
