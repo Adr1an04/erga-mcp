@@ -142,6 +142,21 @@ class JobResearchTests(unittest.TestCase):
         self.assertGreaterEqual(len(research.highlights), 4)
         self.assertEqual(research.application_constraints, ("No more than two applications.",))
 
+    def test_extracts_cohort_prefixed_visible_role_heading_without_structured_data(self) -> None:
+        snapshot = (
+            "[Summer 2027] Software Engineer Intern San Mateo, CA, United States"
+            "Early Career ID: 37750 Apply Now "
+            "As a Software Engineer Intern at Roblox, you will build production systems. "
+            "You Will: Own a project from coding and testing through deployment. "
+            "You Are: Pursuing a computer science degree."
+        )
+
+        research = analyze_job_snapshot(snapshot, job_url="https://careers.roblox.com/jobs/8072713")
+
+        self.assertEqual(research.company, "Roblox")
+        self.assertEqual(research.role, "Software Engineer Intern")
+        self.assertEqual(research.cycles, ("Summer 2027",))
+
     def test_renders_cited_research_and_writes_it_idempotently(self) -> None:
         snapshot = (
             'Role @ Example {"@type":"JobPosting","title":"Role",'

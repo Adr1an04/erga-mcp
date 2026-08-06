@@ -411,6 +411,14 @@ def _fallback_title_and_company(snapshot: str) -> tuple[str, str]:
     )
     if match is not None:
         return _clean_text(match.group(1)), _clean_text(match.group(2))
+    cohort_heading = re.match(
+        r"\s*(\[(?:Spring|Summer|Fall|Winter)\s+20\d{2}\]\s+"
+        r".{1,100}?\b(?:Intern(?:ship)?|Co-?op))\b",
+        snapshot,
+        re.IGNORECASE,
+    )
+    if cohort_heading is not None:
+        return _clean_text(cohort_heading.group(1)), ""
     prefix = snapshot.split(" {", 1)[0].strip()
     if " @ " in prefix:
         title, company = prefix.rsplit(" @ ", 1)
@@ -420,9 +428,15 @@ def _fallback_title_and_company(snapshot: str) -> tuple[str, str]:
 
 def _display_role(title: str) -> str:
     without_cohorts = re.sub(
-        r"\s*\([^)]*(?:Spring|Summer|Fall|Winter)\s+20\d{2}[^)]*\)",
+        r"^\s*\[(?:Spring|Summer|Fall|Winter)\s+20\d{2}\]\s*",
         "",
         title,
+        flags=re.IGNORECASE,
+    )
+    without_cohorts = re.sub(
+        r"\s*\([^)]*(?:Spring|Summer|Fall|Winter)\s+20\d{2}[^)]*\)",
+        "",
+        without_cohorts,
         flags=re.IGNORECASE,
     )
     return _SPACE.sub(" ", without_cohorts).strip(" -–—") or "Job Opportunity"
