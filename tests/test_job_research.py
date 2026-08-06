@@ -157,6 +157,29 @@ class JobResearchTests(unittest.TestCase):
         self.assertEqual(research.role, "Software Engineer Intern")
         self.assertEqual(research.cycles, ("Summer 2027",))
 
+    def test_extracts_inline_sections_and_role_signals_from_dense_visible_text(self) -> None:
+        snapshot = (
+            "[Summer 2027] Software Engineer Intern San Mateo, CA Apply Now. "
+            "Teams include distributed systems, real-time communication, 3D rendering, and "
+            "data processing at production scale. "
+            "You Will: Own a project from coding and testing through deployment to production. "
+            "Investigate machine learning frameworks and agentic coding tools. "
+            "You Are: Proficient in C++, Python, Java, or Lua. "
+            "A curious collaborator who solves hard technical challenges. "
+            "Please note that sponsorship restrictions may apply."
+        )
+
+        research = analyze_job_snapshot(snapshot, job_url="https://careers.example/jobs/8072713")
+
+        self.assertEqual(len(research.responsibilities), 2)
+        self.assertTrue(research.responsibilities[0].startswith("Own a project"))
+        self.assertEqual(len(research.qualifications), 2)
+        self.assertTrue(research.qualifications[0].startswith("Proficient in C++"))
+        self.assertTrue({"C++", "Python", "Java", "Lua"}.issubset(research.skills))
+        self.assertTrue(any("real-time" in item for item in research.highlights))
+        self.assertTrue(any("platform-scale" in item for item in research.highlights))
+        self.assertTrue(any("AI-assisted" in item for item in research.highlights))
+
     def test_renders_cited_research_and_writes_it_idempotently(self) -> None:
         snapshot = (
             'Role @ Example {"@type":"JobPosting","title":"Role",'

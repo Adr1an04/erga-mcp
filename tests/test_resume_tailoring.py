@@ -61,7 +61,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 13)
+        self.assertEqual(TAILORING_VERSION, 14)
 
     def test_relevance_requires_term_boundaries_and_rejects_substring_collisions(self) -> None:
         for skill, unrelated in (

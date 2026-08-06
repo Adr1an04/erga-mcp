@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from .models import Evidence
@@ -78,6 +80,104 @@ _REQUIREMENT_MARKERS = (
     "must have",
     "must-have",
 )
+_ROLE_SIGNAL_CLUSTERS: tuple[tuple[str, frozenset[str], frozenset[str]], ...] = (
+    (
+        "real-time / interactive systems",
+        frozenset(
+            {"3d", "communication", "interactive", "latency", "real", "realtime", "rendering"}
+        ),
+        frozenset(
+            {
+                "3d",
+                "emg",
+                "imu",
+                "latency",
+                "real",
+                "realtime",
+                "rendering",
+                "sensor",
+            }
+        ),
+    ),
+    (
+        "production scale",
+        frozenset({"billion", "distributed", "global", "million", "production", "scale"}),
+        frozenset(
+            {
+                "deployed",
+                "distributed",
+                "infrastructure",
+                "members",
+                "production",
+                "scale",
+                "users",
+            }
+        ),
+    ),
+    (
+        "machine learning / AI",
+        frozenset({"agentic", "ai", "learning", "llm", "machine", "ml", "model", "models"}),
+        frozenset(
+            {
+                "ai",
+                "inference",
+                "learning",
+                "llm",
+                "machine",
+                "ml",
+                "model",
+                "pytorch",
+                "tensorflow",
+            }
+        ),
+    ),
+    (
+        "agentic developer tooling",
+        frozenset({"agentic", "coding", "developer", "tools"}),
+        frozenset(
+            {
+                "agentic",
+                "coding",
+                "llm",
+            }
+        ),
+    ),
+    (
+        "delivery / quality ownership",
+        frozenset(
+            {"coding", "deploying", "deployment", "end", "ownership", "production", "testing"}
+        ),
+        frozenset(
+            {
+                "ci",
+                "deploy",
+                "deployed",
+                "deployment",
+                "open-source",
+                "pytest",
+                "quality",
+                "reliability",
+                "shipped",
+                "testing",
+                "tests",
+            }
+        ),
+    ),
+    (
+        "data / platform systems",
+        frozenset({"data", "distributed", "platform", "processing", "systems"}),
+        frozenset(
+            {
+                "data",
+                "distributed",
+                "etl",
+                "processing",
+                "sqlite",
+                "systems",
+            }
+        ),
+    ),
+)
 _INTERNAL_RESEARCH_PATTERNS = (
     (
         "raw Git churn statistics",
@@ -119,6 +219,7 @@ class ProjectSelection:
     id: str
     title: str
     matched_terms: tuple[str, ...]
+    matched_signals: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -282,11 +383,136 @@ def load_project_inventory(
     return candidates
 
 
+def project_inventory_entries_from_master(
+    master_latex: str, evidence_id: str
+) -> list[dict[str, object]]:
+    """Project the master resume's existing project blocks into strict inventory entries."""
+    section = re.search(r"(?ms)^\\section\{Projects\}\s*$.*?(?=^\\section\{|\Z)", master_latex)
+    if section is None:
+        return []
+    body = section.group(0)
+    headings = list(re.finditer(r"(?m)^\\resumeProjectHeading\b", body))
+    entries: list[dict[str, object]] = []
+    used_ids: set[str] = set()
+    for index, heading in enumerate(headings):
+        next_heading = headings[index + 1].start() if index + 1 < len(headings) else len(body)
+        closing = body.find(r"\resumeSubHeadingListEnd", heading.start(), next_heading)
+        end = closing if closing >= 0 else next_heading
+        latex = body[heading.start() : end].strip() + "\n"
+        bullets = latex.count(r"\resumeItem{")
+        title_match = re.search(r"\\textbf\{(?P<title>[^{}]+)\}", latex)
+        title = title_match.group("title").strip() if title_match else ""
+        if not title or not bullets:
+            continue
+        base_id = re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-") or "project"
+        candidate_id = base_id
+        suffix = 2
+        while candidate_id in used_ids:
+            candidate_id = f"{base_id}-{suffix}"
+            suffix += 1
+        used_ids.add(candidate_id)
+        tags = sorted(
+            {
+                term
+                for term in re.findall(r"[a-z0-9+#.]+", latex_to_text(latex).casefold())
+                if len(term) > 1
+            }
+        )
+        entries.append(
+            {
+                "id": candidate_id,
+                "title": title,
+                "latex": latex,
+                "evidence_ids": [evidence_id],
+                "bullet_evidence_ids": [[evidence_id] for _ in range(bullets)],
+                "tags": tags or [candidate_id],
+            }
+        )
+    return entries
+
+
+def sync_project_inventory_from_master(
+    path: Path, *, master_latex: str, evidence_id: str
+) -> tuple[bool, int, int]:
+    """Append missing master projects while preserving every existing catalogue entry."""
+    if path.is_symlink():
+        raise ValueError("project inventory must not be a symlink")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    created = not path.exists()
+    if path.exists():
+        try:
+            payload: Any = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise ValueError(f"project inventory is not valid JSON: {path}") from error
+        if not isinstance(payload, list):
+            raise ValueError(f"project inventory must be a JSON array: {path}")
+    else:
+        payload = []
+
+    master_entries = project_inventory_entries_from_master(master_latex, evidence_id)
+    existing_ids = {
+        item.get("id", "").casefold()
+        for item in payload
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    existing_titles = {
+        re.sub(r"[^a-z0-9]+", "", item.get("title", "").casefold())
+        for item in payload
+        if isinstance(item, dict) and isinstance(item.get("title"), str)
+    }
+    additions: list[dict[str, object]] = []
+    for item in master_entries:
+        normalized_title = re.sub(r"[^a-z0-9]+", "", str(item["title"]).casefold())
+        if normalized_title in existing_titles:
+            continue
+        addition = dict(item)
+        base_id = str(addition["id"]).casefold()
+        candidate_id = base_id
+        suffix = 2
+        while candidate_id in existing_ids:
+            candidate_id = f"{base_id}-{suffix}"
+            suffix += 1
+        addition["id"] = candidate_id
+        additions.append(addition)
+        existing_ids.add(candidate_id)
+        existing_titles.add(normalized_title)
+    if created or additions:
+        updated = [*payload, *additions]
+        with NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}-", delete=False
+        ) as temporary:
+            json.dump(updated, temporary, indent=2, sort_keys=True)
+            temporary.write("\n")
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            temporary_path = Path(temporary.name)
+        try:
+            temporary_path.replace(path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+    return created, len(additions), len(payload) + len(additions)
+
+
+def _candidate_terms(candidate: ProjectCandidate) -> frozenset[str]:
+    return _terms(latex_to_text(candidate.latex)) | _terms(" ".join(candidate.tags))
+
+
+def _role_signal_matches(candidate: ProjectCandidate, job_description: str) -> frozenset[str]:
+    candidate_terms = _candidate_terms(candidate)
+    job_terms = _terms(job_description)
+    return frozenset(
+        label
+        for label, job_cluster, candidate_cluster in _ROLE_SIGNAL_CLUSTERS
+        if job_terms & job_cluster and candidate_terms & candidate_cluster
+    )
+
+
 def _score(candidate: ProjectCandidate, job_description: str) -> int:
-    candidate_terms = _terms(latex_to_text(candidate.latex)) | _terms(" ".join(candidate.tags))
+    candidate_terms = _candidate_terms(candidate)
     matched_terms = candidate_terms & _terms(job_description)
     required_matches = candidate_terms & _required_terms(job_description)
-    return len(matched_terms) + 4 * len(required_matches)
+    role_signals = _role_signal_matches(candidate, job_description)
+    return len(matched_terms) + 8 * len(required_matches) + 3 * len(role_signals)
 
 
 def select_projects(
@@ -311,11 +537,31 @@ def select_projects(
         )
     )
     eligible = tuple(candidate for candidate in eligible if not project_quality_issues(candidate))
-    ranked = sorted(
-        ((candidate, _score(candidate, job_description)) for candidate in eligible),
-        key=lambda item: (-item[1], item[0].id),
-    )
-    return tuple(candidate for candidate, score in ranked if score > 0)[:max_projects]
+    remaining = {
+        candidate.id: (
+            candidate,
+            _score(candidate, job_description),
+            _role_signal_matches(candidate, job_description),
+        )
+        for candidate in eligible
+    }
+    selected: list[ProjectCandidate] = []
+    covered_signals: set[str] = set()
+    while remaining and len(selected) < max_projects:
+        candidate, base_score, signals = min(
+            remaining.values(),
+            key=lambda item: (
+                -(item[1] + 2 * len(item[2] - covered_signals) - len(item[2] & covered_signals)),
+                -item[1],
+                item[0].id,
+            ),
+        )
+        del remaining[candidate.id]
+        if base_score <= 0:
+            break
+        selected.append(candidate)
+        covered_signals.update(signals)
+    return tuple(selected)
 
 
 def select_project_rationales(
@@ -331,12 +577,8 @@ def select_project_rationales(
         ProjectSelection(
             id=candidate.id,
             title=candidate.title,
-            matched_terms=tuple(
-                sorted(
-                    (_terms(latex_to_text(candidate.latex)) | _terms(" ".join(candidate.tags)))
-                    & job_terms
-                )
-            ),
+            matched_terms=tuple(sorted(_candidate_terms(candidate) & job_terms)),
+            matched_signals=tuple(sorted(_role_signal_matches(candidate, job_description))),
         )
         for candidate in select_projects(
             candidates,

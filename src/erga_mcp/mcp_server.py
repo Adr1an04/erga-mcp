@@ -70,7 +70,11 @@ from .job_research import (
 )
 from .job_workspace import create_job_workspace
 from .models import Evidence
-from .project_inventory import ProjectCandidate, load_project_inventory, select_projects
+from .project_inventory import (
+    ProjectCandidate,
+    load_project_inventory,
+    sync_project_inventory_from_master,
+)
 from .resume import (
     create_section_resume_proposal,
     normalize_cycle,
@@ -81,6 +85,7 @@ from .resume_tailoring import (
     TAILORING_VERSION,
     create_automatic_resume_proposal,
     pdf_page_count,
+    plan_resume_project_selection,
 )
 from .store import ErgaStore, SQLiteStoreFactory, StoreFactory
 from .tracker_view import (
@@ -256,6 +261,7 @@ class IntakeProjectSelection(BaseModel):
     id: str
     title: str
     matched_terms: list[str] = Field(default_factory=list)
+    matched_signals: list[str] = Field(default_factory=list)
 
 
 class IntakeJobResult(BaseModel):
@@ -308,7 +314,29 @@ def _inventory_candidates(
 ) -> tuple[ProjectCandidate, ...]:
     """Load the optional local project arsenal; an absent setting preserves legacy behavior."""
     path = config.resume.project_inventory_path
-    return load_project_inventory(path, evidence) if path is not None else ()
+    if path is None:
+        return ()
+    master_path = config.resume.master_path
+    master_evidence = next(
+        (
+            item
+            for item in evidence
+            if item.approved and item.source_ref.startswith("master-resume:")
+        ),
+        None,
+    )
+    if (
+        master_path is not None
+        and master_path.suffix.casefold() == ".tex"
+        and master_path.is_file()
+        and master_evidence is not None
+    ):
+        sync_project_inventory_from_master(
+            path,
+            master_latex=master_path.read_text(encoding="utf-8"),
+            evidence_id=master_evidence.id,
+        )
+    return load_project_inventory(path, evidence)
 
 
 def _git_enriched_inventory_candidates(
@@ -317,23 +345,12 @@ def _git_enriched_inventory_candidates(
     store: ErgaStore,
     evidence: list[Evidence],
     job_description: str,
+    resume_path: Path,
 ) -> GitProjectEnrichment:
-    """Rank the complete JSON catalogue, then research only the selected Git projects."""
+    """Plan once, then Git-research the exact projects eligible for the final résumé."""
     curated = _inventory_candidates(config, evidence)
     if not curated:
         return GitProjectEnrichment((), (), (), (), 0)
-    if not any(candidate.git_repositories for candidate in curated):
-        return enrich_ranked_projects_from_git(
-            candidates=curated,
-            job_description=job_description,
-            project_count=config.resume.project_count,
-            bullets_per_project=config.resume.project_min_bullets,
-            bullet_min_characters=config.resume.bullet_min_chars,
-            bullet_target_characters=config.resume.bullet_target_chars,
-            bullet_max_characters=config.resume.bullet_max_chars,
-            store=store,
-            cache_root=config.data_dir / "git-project-cache",
-        )
     discovery_warning: str | None = None
     try:
         discovered = discover_github_projects(
@@ -347,6 +364,27 @@ def _git_enriched_inventory_candidates(
         )
     else:
         candidates = merge_github_project_catalogue(curated, discovered)
+    eligible_candidates = tuple(
+        candidate
+        for candidate in candidates
+        if candidate.evidence_ids
+        and len(candidate.bullet_evidence_ids) >= config.resume.project_min_bullets
+    )
+    projects_editable = any(
+        re.sub(r"[^a-z0-9]+", "", section.casefold()) == "projects"
+        for section in config.resume.editable_sections
+    )
+    selected_project_ids: tuple[str, ...] = ()
+    if projects_editable:
+        selection_plan = plan_resume_project_selection(
+            resume_path=resume_path,
+            candidates=eligible_candidates,
+            job_description=job_description,
+            project_count=config.resume.project_count,
+            maximum_characters=config.resume.bullet_max_chars,
+            require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+        )
+        selected_project_ids = tuple(candidate.id for candidate in selection_plan.selected)
     enrichment = enrich_ranked_projects_from_git(
         candidates=candidates,
         job_description=job_description,
@@ -357,6 +395,7 @@ def _git_enriched_inventory_candidates(
         bullet_max_characters=config.resume.bullet_max_chars,
         store=store,
         cache_root=config.data_dir / "git-project-cache",
+        selected_project_ids=selected_project_ids,
     )
     if discovery_warning is None:
         return enrichment
@@ -373,20 +412,86 @@ def _include_selected_project_evidence(
     selected_evidence: list[Evidence],
     all_approved: list[Evidence],
     candidates: tuple[ProjectCandidate, ...],
-    job_description: str,
     *,
-    project_count: int,
+    selected_project_ids: tuple[str, ...],
 ) -> list[Evidence]:
-    """Keep provenance for every inventory block that can enter the tailored proposal."""
+    """Keep provenance for the exact inventory blocks planned for the tailored proposal."""
+    planned_ids = set(selected_project_ids)
     selected_ids = {
         evidence_id
-        for candidate in select_projects(candidates, job_description, max_projects=project_count)
+        for candidate in candidates
+        if candidate.id in planned_ids
         for evidence_id in candidate.evidence_ids
     }
     by_id = {item.id: item for item in [*selected_evidence, *all_approved]}
     retained_ids = list(dict.fromkeys(item.id for item in selected_evidence))
     retained_ids.extend(sorted(selected_ids - set(retained_ids)))
     return [by_id[evidence_id] for evidence_id in retained_ids]
+
+
+def _git_researched_project_ids(enrichment: GitProjectEnrichment) -> tuple[str, ...]:
+    return tuple(
+        project_id
+        for report in enrichment.reports
+        if isinstance((project_id := report.get("project_id")), str)
+    )
+
+
+def _selected_project_ids(project_selection: dict[str, object]) -> tuple[str, ...]:
+    selected = project_selection.get("selected_ids")
+    if not isinstance(selected, list):
+        return ()
+    return tuple(item for item in selected if isinstance(item, str))
+
+
+def _require_git_research_alignment(
+    project_selection: dict[str, object], enrichment: GitProjectEnrichment
+) -> None:
+    selected_ids = _selected_project_ids(project_selection)
+    researched_ids = _git_researched_project_ids(enrichment)
+    if selected_ids != researched_ids:
+        raise RuntimeError(
+            "selected résumé projects and Git research diverged; no package was published "
+            f"(selected={list(selected_ids)}, researched={list(researched_ids)})"
+        )
+
+
+def _realign_git_project_research(
+    *,
+    project_selection: dict[str, object],
+    enrichment: GitProjectEnrichment,
+    config: ErgaConfig,
+    store: ErgaStore,
+    job_description: str,
+) -> GitProjectEnrichment:
+    """Repair rare proposal fallbacks by researching the projects actually left in output."""
+    selected_ids = _selected_project_ids(project_selection)
+    if selected_ids == _git_researched_project_ids(enrichment):
+        return enrichment
+    refreshed = enrich_ranked_projects_from_git(
+        candidates=enrichment.candidates,
+        job_description=job_description,
+        project_count=max(1, len(selected_ids)),
+        bullets_per_project=config.resume.project_min_bullets,
+        bullet_min_characters=config.resume.bullet_min_chars,
+        bullet_target_characters=config.resume.bullet_target_chars,
+        bullet_max_characters=config.resume.bullet_max_chars,
+        store=store,
+        cache_root=config.data_dir / "git-project-cache",
+        selected_project_ids=selected_ids,
+    )
+    discovery_warnings = tuple(
+        warning
+        for warning in enrichment.warnings
+        if warning.startswith("GitHub project catalogue refresh was unavailable")
+    )
+    return GitProjectEnrichment(
+        candidates=refreshed.candidates,
+        evidence=refreshed.evidence,
+        reports=refreshed.reports,
+        warnings=(*discovery_warnings, *refreshed.warnings),
+        catalogue_candidate_count=enrichment.catalogue_candidate_count,
+    )
 
 
 def _merge_evidence(*groups: Iterable[Evidence]) -> list[Evidence]:
@@ -847,6 +952,7 @@ def _upgrade_existing_tailoring(
             store=store,
             evidence=all_approved,
             job_description=tailoring_context,
+            resume_path=source_resume,
         )
     )
     project_candidates = enrichment.candidates
@@ -856,8 +962,7 @@ def _upgrade_existing_tailoring(
         evidence,
         all_approved,
         project_candidates,
-        tailoring_context,
-        project_count=config.resume.project_count,
+        selected_project_ids=_git_researched_project_ids(enrichment),
     )
     automatic = create_automatic_resume_proposal(
         resume_path=source_resume,
@@ -873,6 +978,14 @@ def _upgrade_existing_tailoring(
         require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
     )
     automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
+    enrichment = _realign_git_project_research(
+        project_selection=automatic.project_selection,
+        enrichment=enrichment,
+        config=config,
+        store=store,
+        job_description=tailoring_context,
+    )
+    _require_git_research_alignment(automatic.project_selection, enrichment)
     _require_constraint_valid_proposal(automatic)
     validation = _compile_intake_proposal(
         automatic.proposal.proposed_tex_path,
@@ -882,6 +995,9 @@ def _upgrade_existing_tailoring(
     )
     manifest_value.update(
         {
+            "selection_strategy": str(
+                automatic.project_selection.get("strategy", "weighted_role_signal_coverage")
+            ),
             "project_selections": automatic.project_selection.get("selected", []),
             "git_project_research": list(enrichment.reports),
             "integration_warnings": list(enrichment.warnings),
@@ -1048,12 +1164,16 @@ def _result_from_manifest(
             id=item["id"],
             title=item["title"],
             matched_terms=[term for term in item.get("matched_terms", []) if isinstance(term, str)],
+            matched_signals=[
+                signal for signal in item.get("matched_signals", []) if isinstance(signal, str)
+            ],
         )
         for item in cast(list[object], manifest.get("project_selections", []))
         if isinstance(item, dict)
         and isinstance(item.get("id"), str)
         and isinstance(item.get("title"), str)
         and isinstance(item.get("matched_terms", []), list)
+        and isinstance(item.get("matched_signals", []), list)
     ]
     raw_tailoring = manifest.get("tailoring")
     tailoring_meaningful_change = False
@@ -1734,6 +1854,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 store=store,
                 evidence=all_approved,
                 job_description=tailoring_context,
+                resume_path=config.resume.template_path,
             )
         )
         project_candidates = enrichment.candidates
@@ -1743,8 +1864,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             evidence,
             all_approved,
             project_candidates,
-            tailoring_context,
-            project_count=config.resume.project_count,
+            selected_project_ids=_git_researched_project_ids(enrichment),
         )
         final_package_dir = _package_dir(config.resume.output_root, resolved_cycle, resolved_slug)
         config.resume.output_root.mkdir(parents=True, exist_ok=True)
@@ -1781,6 +1901,14 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
             )
             automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
+            enrichment = _realign_git_project_research(
+                project_selection=automatic.project_selection,
+                enrichment=enrichment,
+                config=config,
+                store=store,
+                job_description=tailoring_context,
+            )
+            _require_git_research_alignment(automatic.project_selection, enrichment)
             _require_constraint_valid_proposal(automatic)
             proposal = automatic.proposal
             validation = _compile_intake_proposal(
@@ -1794,7 +1922,9 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             manifest.update(
                 {
                     "job_identity": _job_identity(job_url),
-                    "selection_strategy": selection_strategy,
+                    "selection_strategy": str(
+                        automatic.project_selection.get("strategy", selection_strategy)
+                    ),
                     "project_selections": automatic.project_selection.get("selected", []),
                     "git_project_research": list(enrichment.reports),
                     "integration_warnings": list(enrichment.warnings),
@@ -2076,6 +2206,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 store=store,
                 evidence=all_approved,
                 job_description=tailoring_context,
+                resume_path=config.resume.template_path,
             )
         )
         project_candidates = enrichment.candidates
@@ -2085,8 +2216,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             evidence,
             all_approved,
             project_candidates,
-            tailoring_context,
-            project_count=config.resume.project_count,
+            selected_project_ids=_git_researched_project_ids(enrichment),
         )
         workspace = create_job_workspace(
             output_root=config.resume.output_root,
@@ -2111,6 +2241,14 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
         )
         automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
+        enrichment = _realign_git_project_research(
+            project_selection=automatic.project_selection,
+            enrichment=enrichment,
+            config=config,
+            store=store,
+            job_description=tailoring_context,
+        )
+        _require_git_research_alignment(automatic.project_selection, enrichment)
         _require_constraint_valid_proposal(automatic)
         proposal = automatic.proposal
         validation = _compile_intake_proposal(

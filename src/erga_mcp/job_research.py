@@ -528,7 +528,8 @@ _HIGHLIGHT_RULES = (
         "The role expects ownership of visible work from implementation through delivery.",
     ),
     (
-        r"\bproduction (?:codebase|code)\b|\blanding merged pr|\bmanage deployments\b",
+        r"\bproduction(?:-scale| (?:codebase|code|projects?|systems?))\b|"
+        r"\blanding merged pr|\bmanage deployments\b|\bdeploy(?:ing|ed)?\b.{0,40}\bproduction\b",
         "Production delivery, deployment, and operational reliability are part of the work.",
     ),
     (
@@ -536,12 +537,18 @@ _HIGHLIGHT_RULES = (
         "The work touches voice/audio AI, including speech systems such as ASR or TTS.",
     ),
     (
-        r"\breal[- ]time systems?\b|\blow latency\b",
+        r"\breal[- ]time (?:communication|systems?)\b|\blow latency\b|\blatency-sensitive\b",
         "The posting emphasizes real-time or latency-sensitive systems.",
     ),
     (
-        r"\b(?:agentic tooling|claude code|codex)\b|\bai-assisted workflow\b|\bai tools daily\b",
+        r"\b(?:agentic (?:coding )?tools?|claude code|codex)\b|"
+        r"\bai-assisted workflow\b|\bai tools daily\b",
         "AI-assisted tools are expected in the normal development or content workflow.",
+    ),
+    (
+        r"\bdistributed systems?\b|\bdata processing\b|\brendering\b|\b3d\b",
+        "The technical scope includes platform-scale systems such as distributed computing, "
+        "data processing, rendering, or 3D experiences.",
     ),
     (
         r"\bfirst principles\b|\bdig into why\b",
@@ -570,6 +577,41 @@ _HIGHLIGHT_RULES = (
     ),
 )
 
+_SECTION_HEADINGS = (
+    "Core Responsibilities",
+    "Responsibilities",
+    "What You Will Do",
+    "What You'll Do",
+    "What You’ll Do",
+    "You Will",
+    "Requirements",
+    "Qualifications",
+    "What We Are Looking For",
+    "What We're Looking For",
+    "What We’re Looking For",
+    "You Are",
+    "Who You Are",
+    "What You Will Gain",
+    "Benefits",
+    "Details",
+    "Logistics",
+    "About Us",
+)
+_INLINE_SECTION_HEADING = re.compile(
+    r"\b(?P<label>" + "|".join(re.escape(item) for item in _SECTION_HEADINGS) + r")\s*:\s*",
+    re.IGNORECASE,
+)
+_SECTION_ITEM_TERMINATORS = (
+    "benefits include",
+    "compensation",
+    "equal employment",
+    "for roles that",
+    "hourly pay range",
+    "please note",
+    "salary range",
+    "to support you through",
+)
+
 
 def _highlights(description: str) -> tuple[str, ...]:
     return tuple(
@@ -586,7 +628,16 @@ def _content_lines(content: str) -> list[str]:
         flags=re.IGNORECASE,
     )
     rendered = unescape(_TAG.sub(" ", rendered))
+    rendered = _INLINE_SECTION_HEADING.sub(lambda match: f"\n{match.group('label')}\n", rendered)
     return [_SPACE.sub(" ", line).strip() for line in rendered.splitlines() if line.strip()]
+
+
+def _sentence_items(value: str) -> tuple[str, ...]:
+    return tuple(
+        item
+        for part in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", value)
+        if (item := part.strip().lstrip("-• "))
+    )
 
 
 def _section_items(
@@ -597,35 +648,45 @@ def _section_items(
 ) -> tuple[str, ...]:
     active = False
     items: list[str] = []
+    known_headings = {heading.casefold() for heading in _SECTION_HEADINGS}
     for line in lines:
         is_item = line.startswith("- ")
-        label = line.lstrip("- ").strip().casefold()
+        label = line.lstrip("- ").strip().rstrip(":").casefold()
         if not active and any(label == start.casefold() for start in starts):
             active = True
             continue
         if active and (
             any(label == end.casefold() for end in ends)
+            or label in known_headings
             or (not is_item and label.startswith("about "))
         ):
             break
-        if active and is_item:
-            item = line[2:].strip()
-            if item and item not in items:
-                items.append(item)
+        if active:
+            value = line[2:].strip() if is_item else line
+            for item in _sentence_items(value):
+                if item.casefold().startswith(_SECTION_ITEM_TERMINATORS):
+                    return tuple(items)
+                if item not in items:
+                    items.append(item)
     return tuple(items)
 
 
 _SKILL_PATTERNS = (
     (r"(?<!\w)c\+\+(?!\w)|\bcpp\b", "C++"),
-    (r"\bgolang\b|\bgo programming\b|\bgo language\b", "Go"),
+    (r"(?-i:\bGo\b)|\bgolang\b|\bgo programming\b|\bgo language\b", "Go"),
     (r"\bpython\b", "Python"),
     (r"\bjava\b", "Java"),
+    (r"(?<!\w)c#(?!\w)|\bc sharp\b", "C#"),
+    (r"\blua\b", "Lua"),
+    (r"\bruby\b", "Ruby"),
+    (r"\bswift\b", "Swift"),
     (r"\btypescript\b", "TypeScript"),
     (r"\bhtml\b", "HTML"),
     (r"\bcss\b", "CSS"),
     (r"\bjavascript\b", "JavaScript"),
     (r"\breact\b", "React"),
     (r"\bnext\.js\b", "Next.js"),
+    (r"\bnode\.js\b|\bnodejs\b", "Node.js"),
     (r"\bwordpress\b", "WordPress"),
     (r"\bwebflow\b", "Webflow"),
     (r"\bseo\b", "SEO"),
@@ -730,12 +791,36 @@ def analyze_job_snapshot(snapshot: str, *, job_url: str) -> JobResearch:
     content_lines = _content_lines(raw_description)
     responsibilities = _section_items(
         content_lines,
-        starts=("Core Responsibilities", "Responsibilities", "What You Will Do"),
-        ends=("About Us", "Requirements", "Qualifications"),
+        starts=(
+            "Core Responsibilities",
+            "Responsibilities",
+            "What You Will Do",
+            "What You'll Do",
+            "What You’ll Do",
+            "You Will",
+        ),
+        ends=(
+            "About Us",
+            "Requirements",
+            "Qualifications",
+            "What We Are Looking For",
+            "What We're Looking For",
+            "What We’re Looking For",
+            "You Are",
+            "Who You Are",
+        ),
     )
     qualifications = _section_items(
         content_lines,
-        starts=("Requirements", "Qualifications", "What We Are Looking For"),
+        starts=(
+            "Requirements",
+            "Qualifications",
+            "What We Are Looking For",
+            "What We're Looking For",
+            "What We’re Looking For",
+            "You Are",
+            "Who You Are",
+        ),
         ends=("What You Will Gain", "Benefits", "Details", "Logistics"),
     )
     details = _section_items(

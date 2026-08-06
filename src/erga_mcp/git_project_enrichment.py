@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .git_evidence import (
@@ -35,7 +35,8 @@ class GitProjectEnrichment:
 def merge_github_project_catalogue(
     curated: tuple[ProjectCandidate, ...], discovered: tuple[GitHubProject, ...]
 ) -> tuple[ProjectCandidate, ...]:
-    """Add lightweight GitHub-index candidates without replacing curated résumé metadata."""
+    """Attach Git repositories by identity and add otherwise unknown GitHub candidates."""
+    enriched = list(curated)
     mapped = {
         repository.casefold() for candidate in curated for repository in candidate.git_repositories
     }
@@ -43,6 +44,39 @@ def merge_github_project_catalogue(
     generated: list[ProjectCandidate] = []
     for project in discovered:
         if project.repository.casefold() in mapped:
+            continue
+        project_keys = {
+            re.sub(r"[^a-z0-9]+", "", value.casefold())
+            for value in (project.name, project.repository.rsplit("/", 1)[-1])
+        }
+        identity_matches = [
+            index
+            for index, candidate in enumerate(enriched)
+            if project_keys
+            & {
+                re.sub(r"[^a-z0-9]+", "", candidate.id.casefold()),
+                re.sub(r"[^a-z0-9]+", "", candidate.title.casefold()),
+            }
+        ]
+        if len(identity_matches) == 1:
+            index = identity_matches[0]
+            candidate = enriched[index]
+            discovered_tags = {
+                *project.topics,
+                *(
+                    token
+                    for token in _TOKEN.findall(
+                        f"{project.name} {project.description} {project.language}".casefold()
+                    )
+                    if len(token) > 1
+                ),
+            }
+            enriched[index] = replace(
+                candidate,
+                git_repositories=(*candidate.git_repositories, project.repository),
+                tags=tuple(sorted({*candidate.tags, *discovered_tags})),
+            )
+            mapped.add(project.repository.casefold())
             continue
         base_id = re.sub(r"[^a-z0-9]+", "-", project.repository.casefold()).strip("-")
         project_id = f"github-{base_id}"
@@ -82,7 +116,7 @@ def merge_github_project_catalogue(
                 git_repositories=(project.repository,),
             )
         )
-    return (*curated, *generated)
+    return (*enriched, *generated)
 
 
 def _latex_text(value: str) -> str:
@@ -140,19 +174,32 @@ def enrich_ranked_projects_from_git(
     bullet_max_characters: int,
     store: ErgaStore,
     cache_root: Path,
+    selected_project_ids: tuple[str, ...] | None = None,
 ) -> GitProjectEnrichment:
-    """Rank approved JSON projects and collect Git provenance without rewriting résumé copy."""
+    """Collect Git provenance for the exact résumé selection without rewriting its copy."""
     resume_candidates = tuple(
         candidate
         for candidate in candidates
         if candidate.evidence_ids and len(candidate.bullet_evidence_ids) >= bullets_per_project
     )
-    ranked = select_projects(
-        resume_candidates,
-        job_description,
-        max_projects=max(1, len(resume_candidates)),
-        minimum_bullets=bullets_per_project,
-    )
+    if selected_project_ids is None:
+        ranked = select_projects(
+            resume_candidates,
+            job_description,
+            max_projects=max(1, len(resume_candidates)),
+            minimum_bullets=bullets_per_project,
+        )
+    else:
+        candidates_by_id = {candidate.id: candidate for candidate in resume_candidates}
+        unknown_ids = [
+            project_id for project_id in selected_project_ids if project_id not in candidates_by_id
+        ]
+        if unknown_ids:
+            raise ValueError(
+                "selected résumé projects are missing from the approved inventory: "
+                + ", ".join(unknown_ids)
+            )
+        ranked = tuple(candidates_by_id[project_id] for project_id in selected_project_ids)
     if not ranked:
         return GitProjectEnrichment(resume_candidates, (), (), (), len(resume_candidates))
 
@@ -166,15 +213,29 @@ def enrich_ranked_projects_from_git(
     derived_evidence: list[Evidence] = []
     reports: list[dict[str, object]] = []
     warnings: list[str] = []
+    research_limit = len(ranked) if selected_project_ids is not None else project_count
 
     for candidate in ranked:
-        if researched >= project_count:
+        if researched >= research_limit:
             break
         researched += 1
         if not candidate.git_repositories:
             warnings.append(
                 f"{candidate.title} has no git_repositories mapping; retained approved "
                 "catalogue bullets."
+            )
+            reports.append(
+                {
+                    "project_id": candidate.id,
+                    "title": candidate.title,
+                    "status": "unmapped",
+                    "repositories": [],
+                    "authored_commits": 0,
+                    "files": 0,
+                    "generated_bullets": 0,
+                    "resume_bullets_source": "approved_catalogue",
+                    "evidence_ids": [],
+                }
             )
             continue
         project_bullets: list[GitResearchBullet] = []
@@ -224,6 +285,19 @@ def enrich_ranked_projects_from_git(
                 f"Git research for {candidate.title} was unavailable; retained approved "
                 f"catalogue bullets: {error}"
             )
+            reports.append(
+                {
+                    "project_id": candidate.id,
+                    "title": candidate.title,
+                    "status": "unavailable",
+                    "repositories": repository_reports,
+                    "authored_commits": len(project_commits),
+                    "files": len(project_files),
+                    "generated_bullets": 0,
+                    "resume_bullets_source": "approved_catalogue",
+                    "evidence_ids": [],
+                }
+            )
             continue
 
         ranked_bullets = sorted(
@@ -239,6 +313,19 @@ def enrich_ranked_projects_from_git(
                 f"Git research found no attributable code changes for {candidate.title}; "
                 "retained approved catalogue bullets."
             )
+            reports.append(
+                {
+                    "project_id": candidate.id,
+                    "title": candidate.title,
+                    "status": "no_attributable_changes",
+                    "repositories": repository_reports,
+                    "authored_commits": len(project_commits),
+                    "files": len(project_files),
+                    "generated_bullets": 0,
+                    "resume_bullets_source": "approved_catalogue",
+                    "evidence_ids": [],
+                }
+            )
             continue
         bullet_evidence = [
             _approved_bullet_evidence(store=store, project_id=candidate.id, bullet=bullet)
@@ -249,6 +336,7 @@ def enrich_ranked_projects_from_git(
             {
                 "project_id": candidate.id,
                 "title": candidate.title,
+                "status": "verified",
                 "repositories": repository_reports,
                 "authored_commits": len(project_commits),
                 "files": len(project_files),

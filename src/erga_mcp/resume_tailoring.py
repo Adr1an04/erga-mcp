@@ -12,6 +12,7 @@ from pypdf.errors import PdfReadError
 from .models import Evidence
 from .project_inventory import (
     ProjectCandidate,
+    ProjectSelection,
     project_quality_issues,
     select_project_rationales,
     select_projects,
@@ -218,7 +219,7 @@ _LEAD_VERB_ALTERNATIVES = {
     ),
     "won": ("Earned", "Secured", "Captured"),
 }
-TAILORING_VERSION = 13
+TAILORING_VERSION = 14
 
 
 @dataclass(frozen=True)
@@ -228,6 +229,15 @@ class AutomaticResumeProposal:
     changed_sections: tuple[str, ...]
     constraint_violations: tuple[str, ...]
     project_selection: dict[str, object]
+
+
+@dataclass(frozen=True)
+class ResumeProjectSelectionPlan:
+    """The one project plan shared by Git research and final résumé generation."""
+
+    selected: tuple[ProjectCandidate, ...]
+    rationales: tuple[ProjectSelection, ...]
+    quality_rejections: tuple[dict[str, object], ...]
 
 
 @dataclass(frozen=True)
@@ -436,6 +446,38 @@ def _prefer_master_project_blocks(
     return tuple(preferred)
 
 
+def _projects_present_in_section(
+    section: str, candidates: tuple[ProjectCandidate, ...]
+) -> tuple[ProjectCandidate, ...]:
+    """Return inventory projects already present in the source, preserving source order."""
+    _, entries, _ = _entry_ranges(section, "resumeProjectHeading")
+    by_id = {candidate.id: candidate for candidate in candidates}
+    selected_ids: list[str] = []
+    for entry in entries:
+        headings = _command_spans(entry, "resumeProjectHeading")
+        if not headings:
+            continue
+        heading_text = _normalized(headings[0].content)
+        emphasized_titles = {
+            _normalized(span.content) for span in _command_spans(headings[0].content, "textbf")
+        }
+        match = next(
+            (
+                candidate
+                for candidate in candidates
+                if (
+                    _normalized(candidate.title) in emphasized_titles
+                    or heading_text == _normalized(candidate.title)
+                    or heading_text.startswith(f"{_normalized(candidate.title)} ")
+                )
+            ),
+            None,
+        )
+        if match is not None and match.id not in selected_ids:
+            selected_ids.append(match.id)
+    return tuple(by_id[project_id] for project_id in selected_ids)
+
+
 def _project_quality_rejections(
     candidates: tuple[ProjectCandidate, ...],
     original: str,
@@ -479,6 +521,70 @@ def _project_quality_rejections(
         if issues:
             rejections.append({"id": candidate.id, "title": candidate.title, "reasons": issues})
     return rejections
+
+
+def _resume_project_selection_plan(
+    original: str,
+    candidates: tuple[ProjectCandidate, ...],
+    job_description: str,
+    *,
+    project_count: int,
+    maximum_characters: int,
+    require_unique_lead_verbs: bool,
+) -> ResumeProjectSelectionPlan:
+    if not candidates:
+        return ResumeProjectSelectionPlan((), (), ())
+    start, end, _ = _section_body(original, "Projects")
+    effective_candidates = _prefer_master_project_blocks(original[start:end], candidates)
+    quality_rejections = tuple(
+        _project_quality_rejections(
+            effective_candidates,
+            original,
+            maximum_characters=maximum_characters,
+            require_unique_lead_verbs=require_unique_lead_verbs,
+        )
+    )
+    rejected_ids = {
+        str(item["id"]) for item in quality_rejections if isinstance(item.get("id"), str)
+    }
+    eligible = tuple(
+        candidate for candidate in effective_candidates if candidate.id not in rejected_ids
+    )
+    return ResumeProjectSelectionPlan(
+        selected=select_projects(
+            eligible,
+            job_description,
+            max_projects=project_count,
+        ),
+        rationales=select_project_rationales(
+            eligible,
+            job_description,
+            max_projects=project_count,
+        ),
+        quality_rejections=quality_rejections,
+    )
+
+
+def plan_resume_project_selection(
+    *,
+    resume_path: Path,
+    candidates: tuple[ProjectCandidate, ...],
+    job_description: str,
+    project_count: int,
+    maximum_characters: int,
+    require_unique_lead_verbs: bool,
+) -> ResumeProjectSelectionPlan:
+    """Plan the exact projects before Git inspection and reuse that plan for output."""
+    if resume_path.suffix.casefold() != ".tex" or not resume_path.is_file():
+        raise ValueError("resume_path must point to an existing .tex file")
+    return _resume_project_selection_plan(
+        resume_path.read_text(encoding="utf-8"),
+        candidates,
+        job_description,
+        project_count=project_count,
+        maximum_characters=maximum_characters,
+        require_unique_lead_verbs=require_unique_lead_verbs,
+    )
 
 
 def _reorder_bullets(
@@ -899,19 +1005,25 @@ def create_automatic_resume_proposal(
     claims: list[dict[str, object]] = []
     project_claims: list[dict[str, object]] = []
     skill_records: list[dict[str, object]] = []
-    quality_rejections = _project_quality_rejections(
-        project_candidates,
-        original,
-        maximum_characters=bullet_max_chars,
-        require_unique_lead_verbs=require_unique_lead_verbs,
+    projects_requested = "projects" in requested
+    selection_plan = (
+        _resume_project_selection_plan(
+            original,
+            project_candidates,
+            job_description,
+            project_count=project_count,
+            maximum_characters=bullet_max_chars,
+            require_unique_lead_verbs=require_unique_lead_verbs,
+        )
+        if projects_requested
+        else ResumeProjectSelectionPlan((), (), ())
     )
-    rejected_project_ids = {
-        str(item["id"]) for item in quality_rejections if isinstance(item.get("id"), str)
-    }
+    quality_rejections = list(selection_plan.quality_rejections)
     project_selection: dict[str, object] = {
         "candidate_count": len(project_candidates),
         "mode": "reorder_only",
         "quality_rejections": quality_rejections,
+        "strategy": "weighted_role_signal_coverage",
         "selected_ids": [],
     }
 
@@ -924,25 +1036,14 @@ def create_automatic_resume_proposal(
             continue
         start, end, canonical = _section_body(proposed, requested_name)
         if requested_name == "Projects" and project_candidates:
-            effective_candidates = _prefer_master_project_blocks(
-                proposed[start:end], project_candidates
-            )
-            effective_candidates = tuple(
-                candidate
-                for candidate in effective_candidates
-                if candidate.id not in rejected_project_ids
-            )
-            selected_projects = select_projects(
-                effective_candidates, job_description, max_projects=project_count
-            )
-            selected_rationales = select_project_rationales(
-                effective_candidates, job_description, max_projects=project_count
-            )
+            selected_projects = selection_plan.selected
+            selected_rationales = selection_plan.rationales
             if not selected_projects:
                 project_selection = {
                     "candidate_count": len(project_candidates),
                     "mode": "inventory_no_match",
                     "quality_rejections": quality_rejections,
+                    "strategy": "weighted_role_signal_coverage",
                     "selected_ids": [],
                     "selected_titles": [],
                 }
@@ -956,6 +1057,7 @@ def create_automatic_resume_proposal(
                 "candidate_count": len(project_candidates),
                 "mode": "inventory",
                 "quality_rejections": quality_rejections,
+                "strategy": "weighted_role_signal_coverage",
                 "selected_ids": [item.id for item in selected_projects],
                 "selected_titles": [item.title for item in selected_projects],
                 "selected": [
@@ -963,6 +1065,7 @@ def create_automatic_resume_proposal(
                         "id": item.id,
                         "title": item.title,
                         "matched_terms": list(item.matched_terms),
+                        "matched_signals": list(item.matched_signals),
                         "applied_to_resume": True,
                     }
                     for item in selected_rationales
@@ -1032,12 +1135,27 @@ def create_automatic_resume_proposal(
         lead_verb_report, _ = _lead_verb_report(proposed, required=require_unique_lead_verbs)
         lead_verb_report["rewrites"] = []
         if project_candidates:
+            project_start, project_end, _ = _section_body(original, "Projects")
+            retained_projects = _projects_present_in_section(
+                original[project_start:project_end], project_candidates
+            )
             project_selection = {
                 "candidate_count": len(project_candidates),
                 "mode": "inventory_constraint_fallback",
                 "quality_rejections": quality_rejections,
-                "selected_ids": [],
-                "selected_titles": [],
+                "strategy": "master_project_fallback",
+                "selected_ids": [item.id for item in retained_projects],
+                "selected_titles": [item.title for item in retained_projects],
+                "selected": [
+                    {
+                        "id": item.id,
+                        "title": item.title,
+                        "matched_terms": [],
+                        "matched_signals": [],
+                        "applied_to_resume": True,
+                    }
+                    for item in retained_projects
+                ],
             }
 
     meaningful_change = proposed != original

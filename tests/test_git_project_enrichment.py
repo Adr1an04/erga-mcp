@@ -77,6 +77,24 @@ class GitProjectEnrichmentTests(unittest.TestCase):
         self.assertEqual(merged[1].evidence_ids, ())
         self.assertIn("distributed-systems", merged[1].tags)
 
+    def test_matches_a_discovered_repository_to_a_curated_project_by_stable_identity(self) -> None:
+        curated = (_candidate("ctrl-arm", "Ctrl-ARM", ("c++", "python"), ()),)
+        discovered = (
+            GitHubProject(
+                "example/ctrl-arm",
+                "ctrl-arm",
+                "Real-time controller",
+                "C++",
+                ("real-time",),
+            ),
+        )
+
+        merged = merge_github_project_catalogue(curated, discovered)
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0].git_repositories, ("example/ctrl-arm",))
+        self.assertIn("real-time", merged[0].tags)
+
     def test_ranks_json_but_keeps_git_research_out_of_resume_copy(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -188,6 +206,29 @@ class GitProjectEnrichmentTests(unittest.TestCase):
         self.assertEqual(result.candidates[0].id, "offline-tool")
         self.assertIn("approved Offline Tool baseline", result.candidates[0].latex)
         self.assertIn("no git_repositories mapping", result.warnings[0])
+        self.assertEqual(result.reports[0]["project_id"], "offline-tool")
+        self.assertEqual(result.reports[0]["status"], "unmapped")
+
+    def test_exact_resume_selection_overrides_an_independent_git_rerank(self) -> None:
+        candidates = (
+            _candidate("frontend", "Frontend", ("react",), ()),
+            _candidate("python-api", "Python API", ("python", "api"), ()),
+        )
+        with TemporaryDirectory() as directory:
+            result = enrich_ranked_projects_from_git(
+                candidates=candidates,
+                job_description="Required: Python API",
+                project_count=1,
+                bullets_per_project=1,
+                bullet_min_characters=0,
+                bullet_target_characters=0,
+                bullet_max_characters=0,
+                store=ErgaStore(Path(directory) / "state.sqlite3"),
+                cache_root=Path(directory) / "cache",
+                selected_project_ids=("frontend",),
+            )
+
+        self.assertEqual([report["project_id"] for report in result.reports], ["frontend"])
 
 
 if __name__ == "__main__":

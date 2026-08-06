@@ -17,8 +17,7 @@ from questionary import Choice
 
 from .config import DEFAULT_CONFIG, load_config, validate_output_pdf_name
 from .private_files import restrict_private_directory, restrict_private_file
-from .project_inventory import load_project_inventory
-from .resume import latex_to_text
+from .project_inventory import load_project_inventory, sync_project_inventory_from_master
 from .resume_settings import update_settings
 from .resume_sources import (
     SUPPORTED_RESUME_SUFFIXES,
@@ -605,52 +604,6 @@ def _atomic_write_private(path: Path, text: str) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
-def _project_inventory_entries(master_latex: str, evidence_id: str) -> list[dict[str, object]]:
-    """Project the master resume's existing LaTeX project blocks into strict inventory entries."""
-    section = re.search(r"(?ms)^\\section\{Projects\}\s*$.*?(?=^\\section\{|\Z)", master_latex)
-    if section is None:
-        return []
-    body = section.group(0)
-    headings = list(re.finditer(r"(?m)^\\resumeProjectHeading\b", body))
-    entries: list[dict[str, object]] = []
-    used_ids: set[str] = set()
-    for index, heading in enumerate(headings):
-        next_heading = headings[index + 1].start() if index + 1 < len(headings) else len(body)
-        closing = body.find(r"\resumeSubHeadingListEnd", heading.start(), next_heading)
-        end = closing if closing >= 0 else next_heading
-        latex = body[heading.start() : end].strip() + "\n"
-        bullets = latex.count(r"\resumeItem{")
-        title_match = re.search(r"\\textbf\{(?P<title>[^{}]+)\}", latex)
-        title = title_match.group("title").strip() if title_match else ""
-        if not title or not bullets:
-            continue
-        base_id = re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-") or "project"
-        candidate_id = base_id
-        suffix = 2
-        while candidate_id in used_ids:
-            candidate_id = f"{base_id}-{suffix}"
-            suffix += 1
-        used_ids.add(candidate_id)
-        tags = sorted(
-            {
-                term
-                for term in re.findall(r"[a-z0-9+#.]+", latex_to_text(latex).casefold())
-                if len(term) > 1
-            }
-        )
-        entries.append(
-            {
-                "id": candidate_id,
-                "title": title,
-                "latex": latex,
-                "evidence_ids": [evidence_id],
-                "bullet_evidence_ids": [[evidence_id] for _ in range(bullets)],
-                "tags": tags or [candidate_id],
-            }
-        )
-    return entries
-
-
 def _project_inventory_path(
     config_path: Path, erga_vault_dir: Path | None, vault_path: Path | None
 ) -> Path:
@@ -666,28 +619,11 @@ def _project_inventory_path(
 
 def _write_project_inventory(
     path: Path, *, master_latex: str, evidence_id: str
-) -> tuple[bool, int]:
-    """Create a reviewable inventory once, preserving an existing user catalogue untouched."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, list):
-            raise ValueError(f"project inventory must be a JSON array: {path}")
-        return False, len(payload)
-    entries = _project_inventory_entries(master_latex, evidence_id)
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}-", delete=False
-    ) as temporary:
-        json.dump(entries, temporary, indent=2, sort_keys=True)
-        temporary.write("\n")
-        temporary.flush()
-        os.fsync(temporary.fileno())
-        temporary_path = Path(temporary.name)
-    try:
-        temporary_path.replace(path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-    return True, len(entries)
+) -> tuple[bool, int, int]:
+    """Create or reconcile the reviewable catalogue with all current master projects."""
+    return sync_project_inventory_from_master(
+        path, master_latex=master_latex, evidence_id=evidence_id
+    )
 
 
 def _configure_core_paths(
@@ -792,7 +728,7 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         source_name=master.path.name,
     )
     inventory_path = _project_inventory_path(selections.config_path, erga_vault_dir, vault_path)
-    inventory_created, inventory_count = _write_project_inventory(
+    inventory_created, inventory_added, inventory_count = _write_project_inventory(
         inventory_path,
         master_latex=master.text if master.format == "tex" else "",
         evidence_id=evidence.id,
@@ -839,9 +775,14 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         completed.append("Managed resume style preference")
     if vault_path is not None:
         completed.append("Optional Obsidian workspace and tracker view")
-    inventory_origin = (
-        "created from your master resume" if inventory_created else "existing catalogue retained"
-    )
+    if inventory_created:
+        inventory_origin = "created from your master resume"
+    elif inventory_added:
+        inventory_origin = (
+            f"preserved existing entries and added {inventory_added} master project(s)"
+        )
+    else:
+        inventory_origin = "existing catalogue already matched the master resume"
     next_steps = [
         "Run `erga status` to confirm your local setup.",
         (

@@ -13,10 +13,43 @@ from erga_mcp.project_inventory import (
     project_quality_issues,
     select_project_rationales,
     select_projects,
+    sync_project_inventory_from_master,
 )
 
 
 class ProjectInventoryTests(unittest.TestCase):
+    def test_sync_appends_missing_master_projects_without_replacing_catalogue_entries(self) -> None:
+        existing = {
+            "id": "custom-platform",
+            "title": "Custom Platform",
+            "latex": "custom latex remains byte-for-byte",
+            "evidence_ids": ["ev_custom"],
+            "bullet_evidence_ids": [["ev_custom"]],
+            "tags": ["custom"],
+        }
+        master = r"""\section{Projects}
+\resumeSubHeadingListStart
+\resumeProjectHeading{\textbf{Realtime Controller} $|$ \textit{C++, Python}}{}
+\resumeItemListStart
+\resumeItem{Built a real-time controller with measured latency.}
+\resumeItemListEnd
+\resumeSubHeadingListEnd
+"""
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "projects.json"
+            path.write_text(json.dumps([existing], indent=2) + "\n", encoding="utf-8")
+
+            created, added, total = sync_project_inventory_from_master(
+                path, master_latex=master, evidence_id="ev_master"
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertFalse(created)
+        self.assertEqual((added, total), (1, 2))
+        self.assertEqual(payload[0], existing)
+        self.assertEqual(payload[1]["id"], "realtime-controller")
+        self.assertEqual(payload[1]["bullet_evidence_ids"], [["ev_master"]])
+
     def test_inventory_loads_explicit_github_repository_mappings(self) -> None:
         evidence = [
             Evidence("ev_ok", "Career#Project", "Verified project", True, datetime.now(UTC)),
@@ -357,6 +390,49 @@ class ProjectInventoryTests(unittest.TestCase):
             selections[0].matched_terms,
             ("python", "real", "services", "time"),
         )
+        self.assertIn("real-time / interactive systems", selections[0].matched_signals)
+
+    def test_role_signal_coverage_prefers_complementary_projects_over_redundant_overlap(
+        self,
+    ) -> None:
+        def candidate(project_id: str, title: str, tags: tuple[str, ...]) -> ProjectCandidate:
+            return ProjectCandidate(
+                id=project_id,
+                title=title,
+                latex=(
+                    rf"\resumeProjectHeading{{\textbf{{{title}}}}}{{}}\n"
+                    r"\resumeItemListStart\n"
+                    rf"\resumeItem{{Built the verified {title} project.}}\n"
+                    r"\resumeItemListEnd"
+                ),
+                evidence_ids=(f"ev_{project_id}",),
+                bullet_evidence_ids=((f"ev_{project_id}",),),
+                tags=tags,
+            )
+
+        candidates = (
+            candidate("ctrl-arm", "Ctrl-ARM", ("c++", "python", "ml", "real-time", "latency")),
+            candidate(
+                "spec-kit",
+                "Spec Kit",
+                ("python", "testing", "agentic-coding-tools", "developer-tools", "open-source"),
+            ),
+            candidate(
+                "forge",
+                "Forge",
+                ("platform", "scale", "data-processing", "production", "typescript"),
+            ),
+            candidate("guido", "Guido", ("python", "systems", "testing", "robotics")),
+        )
+        posting = (
+            "Build production-scale distributed systems, real-time communication, data "
+            "processing, and rendering. Use C++ or Python, machine learning frameworks, "
+            "and agentic coding tools. Own coding, testing, and deployment to production."
+        )
+
+        selected = select_projects(candidates, posting, max_projects=3)
+
+        self.assertEqual({item.id for item in selected}, {"ctrl-arm", "spec-kit", "forge"})
 
 
 if __name__ == "__main__":
