@@ -61,7 +61,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 10)
+        self.assertEqual(TAILORING_VERSION, 11)
 
     def test_relevance_requires_term_boundaries_and_rejects_substring_collisions(self) -> None:
         for skill, unrelated in (
@@ -331,6 +331,65 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
             proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
             self.assertIn("Earned a responsive website", proposed)
             self.assertEqual(result.constraint_violations, ())
+
+    def test_git_enrichment_can_resolve_six_implemented_project_bullets(self) -> None:
+        evidence = [
+            Evidence(
+                id=f"ev_{index}",
+                source_ref=f"git-derived:project-{index}",
+                text=f"Implemented verified workstream {index} from Git history.",
+                approved=True,
+                created_at=datetime.now(UTC),
+            )
+            for index in range(6)
+        ]
+        projects = tuple(
+            ProjectCandidate(
+                id=f"project-{project}",
+                title=f"Project {project}",
+                latex=(
+                    rf"\resumeProjectHeading{{\textbf{{Project {project}}}}}{{}}"
+                    "\n"
+                    r"\resumeItemListStart"
+                    "\n"
+                    rf"\resumeItem{{Implemented Python API workstream {project * 2} "
+                    "from Git history.}"
+                    "\n"
+                    rf"\resumeItem{{Implemented Python testing workstream {project * 2 + 1} "
+                    "from Git history.}"
+                    "\n"
+                    r"\resumeItemListEnd"
+                    "\n"
+                ),
+                evidence_ids=(f"ev_{project * 2}", f"ev_{project * 2 + 1}"),
+                bullet_evidence_ids=((f"ev_{project * 2}",), (f"ev_{project * 2 + 1}",)),
+                tags=("python", "api", "testing"),
+            )
+            for project in range(3)
+        )
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text(_TEMPLATE, encoding="utf-8")
+
+            result = create_automatic_resume_proposal(
+                resume_path=source,
+                output_dir=root / "artifacts",
+                job_description="Required Python API testing",
+                evidence=evidence,
+                editable_sections=("projects",),
+                project_candidates=projects,
+                project_count=3,
+                require_unique_lead_verbs=True,
+            )
+
+            report = json.loads(result.proposal.claim_report_path.read_text(encoding="utf-8"))
+            self.assertEqual(result.constraint_violations, ())
+            self.assertTrue(result.meaningful_change)
+            self.assertTrue(report["constraints"]["lead_verbs"]["passed"])
+            self.assertEqual(len(report["constraints"]["lead_verbs"]["rewrites"]), 5)
+            self.assertEqual(report["constraints"]["lead_verbs"]["duplicates"], {})
 
     def test_unknown_duplicate_verbs_remain_a_hard_constraint_violation(self) -> None:
         with TemporaryDirectory() as directory:
