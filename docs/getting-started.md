@@ -39,6 +39,9 @@ The wizard separates résumé input into three explicit decisions:
    one or two example bullets to calibrate the numeric range. Calibration discards the examples
    and stores only the resulting numbers. Maximum pages are enforced during compilation; the
    character range is enforced when CLI or MCP workflows author new `\resumeItem{...}` bullets.
+   Automatic intake also measures each rendered bullet with the configured LaTeX template: a
+   wrapping project is replaced by the next approved relevant project, and a package is never
+   published while any bullet still needs a second line.
 
 The résumé/evidence workflow and private application database are the ready-to-use career core.
 Obsidian is an optional human-readable workspace and tracker view. Coding assistants, Hermes,
@@ -342,9 +345,11 @@ On messaging platforms, a successful validated PDF is emitted through Hermes' do
 directive so Discord/Telegram/etc. receive an actual attachment rather than a server-local path.
 The PDF is the compiled tailored proposal, not a stale baseline build. Automatic tailoring changes
 ordering only: every claim remains byte-for-byte sourced from the user-provided template, with
-per-claim provenance in `claim-report.json`. Configured bullet limits prevent new violations and a
-configured `max_pages` is enforced with the same pure-Python PDF parser on macOS, Linux, and
-Windows.
+per-claim provenance in `claim-report.json`. Configured bullet limits prevent new violations;
+automatic intake also performs an exact TeX width preflight and selects another approved project
+when a candidate's bullet would wrap. A final width check prevents publication if any bullet still
+needs a second line. A configured `max_pages` is enforced with the same pure-Python PDF parser on
+macOS, Linux, and Windows.
 Before ranking, the fetcher keeps visible official job text and bounded structured job metadata but
 removes scripts, styles, navigation, and footer content. Relevance matching is boundary-aware and
 does not treat substrings inside unrelated words as skill matches.

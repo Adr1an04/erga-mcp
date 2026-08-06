@@ -5,6 +5,7 @@ import json
 import subprocess
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Barrier
@@ -15,22 +16,126 @@ from unittest.mock import patch
 from mcp.server.mcpserver.exceptions import ToolError
 from starlette.testclient import TestClient
 
-from erga_mcp.config import DEFAULT_CONFIG
+from erga_mcp.config import DEFAULT_CONFIG, load_config
 from erga_mcp.mcp_server import (
     IntakeJobResult,
     IntakeValidationResult,
     _compile_intake_proposal,
+    _layout_safe_project_selection,
     _metadata_from_url,
     _require_constraint_valid_proposal,
     _require_master_template_parity,
     build_server,
     build_streamable_http_app,
 )
-from erga_mcp.resume import LatexValidation
+from erga_mcp.models import Evidence
+from erga_mcp.project_inventory import ProjectCandidate
+from erga_mcp.resume import LatexValidation, ResumeItemLayoutValidation
 from erga_mcp.store import ErgaStore
 
 
 class McpServerTests(unittest.TestCase):
+    def test_layout_fallback_rejects_a_wrapped_project_and_selects_the_next_candidate(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            resume = root / "resume.tex"
+            resume.write_text(
+                r"\newcommand{\resumeSubHeadingListStart}{\begin{itemize}}"
+                "\n"
+                r"\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}"
+                "\n"
+                r"\newcommand{\resumeItemListStart}{\begin{itemize}}"
+                "\n"
+                r"\newcommand{\resumeItemListEnd}{\end{itemize}}"
+                "\n"
+                r"\newcommand{\resumeProjectHeading}[2]{\item #1}"
+                "\n"
+                r"\newcommand{\resumeItem}[1]{\item #1}"
+                "\n"
+                r"\begin{document}"
+                "\n"
+                r"\section{Projects}"
+                "\n"
+                r"\resumeSubHeadingListStart"
+                "\n"
+                r"\resumeProjectHeading{\textbf{Template}}{}"
+                "\n"
+                r"\resumeItemListStart"
+                "\n"
+                r"\resumeItem{Template project bullet.}"
+                "\n"
+                r"\resumeItemListEnd"
+                "\n"
+                r"\resumeSubHeadingListEnd"
+                "\n"
+                r"\end{document}"
+                "\n",
+                encoding="utf-8",
+            )
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace('template_path = ""', f'template_path = "{resume}"')
+                .replace("editable_sections = []", 'editable_sections = ["projects"]')
+                .replace("bullet_min_chars = 0", "bullet_min_chars = 1")
+                .replace("bullet_target_chars = 0", "bullet_target_chars = 60")
+                .replace("bullet_max_chars = 0", "bullet_max_chars = 116")
+                .replace("project_count = 4", "project_count = 1"),
+                encoding="utf-8",
+            )
+            config = load_config(config_path)
+            evidence = Evidence(
+                id="ev_project",
+                source_ref="synthetic:test",
+                text="Approved synthetic project evidence.",
+                approved=True,
+                created_at=datetime.now(UTC),
+            )
+
+            def candidate(project_id: str, title: str) -> ProjectCandidate:
+                return ProjectCandidate(
+                    id=project_id,
+                    title=title,
+                    latex=(
+                        rf"\resumeProjectHeading{{\textbf{{{title}}} $|$ \textit{{Python}}}}{{}}"
+                        "\n"
+                        r"\resumeItemListStart"
+                        "\n"
+                        r"\resumeItem{Built a Python service from approved synthetic evidence.}"
+                        "\n"
+                        r"\resumeItemListEnd"
+                        "\n"
+                    ),
+                    evidence_ids=(evidence.id,),
+                    bullet_evidence_ids=((evidence.id,),),
+                    tags=("python",),
+                )
+
+            layouts = (
+                ResumeItemLayoutValidation(("latexmk",), 0, 1, (0,), "", ""),
+                ResumeItemLayoutValidation(("latexmk",), 0, 1, (), "", ""),
+            )
+            with patch(
+                "erga_mcp.mcp_server.validate_single_line_resume_items",
+                side_effect=layouts,
+            ) as validate:
+                selected, rejections = _layout_safe_project_selection(
+                    resume_path=resume,
+                    output_dir=root / "output",
+                    job_description="Python service engineering",
+                    evidence=[evidence],
+                    project_candidates=(
+                        candidate("alpha-wrap", "Alpha Wrap"),
+                        candidate("beta-safe", "Beta Safe"),
+                    ),
+                    config=config,
+                )
+
+            self.assertEqual(selected, ("beta-safe",))
+            self.assertEqual(rejections[0]["id"], "alpha-wrap")
+            self.assertEqual(validate.call_count, 2)
+
     def test_master_resume_must_match_the_template_when_a_master_is_configured(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1036,7 +1141,7 @@ class McpServerTests(unittest.TestCase):
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
             self.assertTrue(result["tailoring_meaningful_change"])
             self.assertEqual(result["tailoring_changed_sections"], ["Experience"])
-            self.assertEqual(result["tailoring_version"], 14)
+            self.assertEqual(result["tailoring_version"], 15)
             self.assertEqual(result["git_project_research"], [])
             output_pdf = Path(result["validation"]["pdf"])
             self.assertEqual(output_pdf.name, "Candidate_Resume.pdf")
@@ -1045,7 +1150,7 @@ class McpServerTests(unittest.TestCase):
                 (Path(result["package_dir"]) / "package.json").read_text(encoding="utf-8")
             )
             self.assertTrue(manifest["tailoring"]["meaningful_change"])
-            self.assertEqual(manifest["tailoring"]["version"], 14)
+            self.assertEqual(manifest["tailoring"]["version"], 15)
 
     def test_rebuilds_an_incomplete_legacy_package_and_preserves_its_files(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1114,7 +1219,7 @@ class McpServerTests(unittest.TestCase):
             )
             manifest = json.loads((repaired / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["legacy_backup"], "legacy-backup")
-            self.assertEqual(manifest["tailoring"]["version"], 14)
+            self.assertEqual(manifest["tailoring"]["version"], 15)
             self.assertIn("Legacy package preserved", result["integration_warnings"][-1])
 
     def test_compile_rejects_a_pdf_over_the_configured_page_cap(self) -> None:

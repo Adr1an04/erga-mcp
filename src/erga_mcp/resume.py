@@ -8,9 +8,11 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from .models import Evidence
 
@@ -26,6 +28,18 @@ class ResumeProposal:
 class LatexValidation:
     command: tuple[str, ...]
     returncode: int
+    stdout: str
+    stderr: str
+
+
+@dataclass(frozen=True)
+class ResumeItemLayoutValidation:
+    """Exact TeX measurement of which rendered resume bullets need another line."""
+
+    command: tuple[str, ...]
+    returncode: int
+    item_count: int
+    wrapped_item_indices: tuple[int, ...]
     stdout: str
     stderr: str
 
@@ -47,6 +61,22 @@ _MACOS_TEXBIN = Path("/Library/TeX/texbin")
 _LATEX_COMMAND_WITH_ARGUMENT = re.compile(r"\\[A-Za-z]+\*?(?:\[[^]]*\])?\{([^{}]*)\}")
 _LATEX_COMMAND = re.compile(r"\\[A-Za-z]+\*?(?:\[[^]]*\])?")
 _SPACE = re.compile(r"\s+")
+_LAYOUT_MARKER = re.compile(r"ERGA-RESUME-ITEM-(?P<state>FIT|WRAP):(?P<index>\d+)")
+_SINGLE_LINE_LAYOUT_INSTRUMENT = r"""
+\newlength{\ergaResumeItemWidth}
+\newcounter{ergaResumeItemCounter}
+\let\ergaOriginalResumeItem\resumeItem
+\renewcommand{\resumeItem}[1]{%
+  \stepcounter{ergaResumeItemCounter}%
+  \settowidth{\ergaResumeItemWidth}{\small #1}%
+  \ifdim\ergaResumeItemWidth>\linewidth
+    \typeout{ERGA-RESUME-ITEM-WRAP:\arabic{ergaResumeItemCounter}}%
+  \else
+    \typeout{ERGA-RESUME-ITEM-FIT:\arabic{ergaResumeItemCounter}}%
+  \fi
+  \ergaOriginalResumeItem{#1}%
+}
+"""
 
 
 def _section_key(value: str) -> str:
@@ -523,3 +553,87 @@ def validate_latex_proposal(
         stdout=completed.stdout,
         stderr=completed.stderr,
     )
+
+
+def validate_single_line_resume_items(
+    proposal_path: Path,
+    *,
+    latexmk: Path = Path("latexmk"),
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> ResumeItemLayoutValidation:
+    """Compile an instrumented sibling and measure bullets against their exact line width."""
+    if proposal_path.suffix.lower() != ".tex" or not proposal_path.is_file():
+        raise ValueError("proposal_path must point to an existing .tex proposal")
+    source = proposal_path.read_text(encoding="utf-8")
+    document_marker = r"\begin{document}"
+    document_start = source.find(document_marker)
+    if document_start < 0:
+        raise ValueError("resume proposal must contain \\begin{document}")
+    document = source[document_start:]
+    item_count = len(resume_item_texts(document))
+    instrumented = source.replace(
+        document_marker,
+        document_marker + _SINGLE_LINE_LAYOUT_INSTRUMENT,
+        1,
+    )
+    latexmk_executable = resolve_latexmk_executable(latexmk)
+    environment = os.environ.copy()
+    executable_directory = str(latexmk_executable.parent)
+    path_entries = environment.get("PATH", "").split(os.pathsep)
+    if executable_directory not in path_entries:
+        environment["PATH"] = os.pathsep.join(
+            [executable_directory, *[entry for entry in path_entries if entry]]
+        )
+
+    temporary_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=proposal_path.parent,
+            prefix="erga-layout-",
+            suffix=".tex",
+            delete=False,
+        ) as temporary:
+            temporary.write(instrumented)
+            temporary_path = Path(temporary.name)
+        command = (
+            str(latexmk_executable),
+            "-pdf",
+            "-no-shell-escape",
+            "-interaction=nonstopmode",
+            temporary_path.name,
+        )
+        completed = runner(
+            command,
+            cwd=proposal_path.parent,
+            capture_output=True,
+            check=False,
+            env=environment,
+            text=True,
+            timeout=120,
+        )
+        log_path = temporary_path.with_suffix(".log")
+        log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+        observed: dict[int, str] = {}
+        for match in _LAYOUT_MARKER.finditer(f"{completed.stdout}\n{log}"):
+            observed[int(match.group("index"))] = match.group("state")
+        if completed.returncode == 0 and set(observed) != set(range(1, item_count + 1)):
+            raise ValueError(
+                "single-line layout validation did not observe every rendered resume bullet"
+            )
+        return ResumeItemLayoutValidation(
+            command=command,
+            returncode=completed.returncode,
+            item_count=item_count,
+            wrapped_item_indices=tuple(
+                index - 1 for index, state in sorted(observed.items()) if state == "WRAP"
+            ),
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+    finally:
+        if temporary_path is not None:
+            for generated in temporary_path.parent.glob(f"{temporary_path.stem}.*"):
+                if generated.is_file() or generated.is_symlink():
+                    generated.unlink(missing_ok=True)

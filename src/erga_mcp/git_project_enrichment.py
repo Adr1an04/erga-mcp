@@ -30,6 +30,7 @@ class GitProjectEnrichment:
     reports: tuple[dict[str, object], ...]
     warnings: tuple[str, ...]
     catalogue_candidate_count: int
+    quality_rejections: tuple[dict[str, object], ...] = ()
 
 
 def merge_github_project_catalogue(

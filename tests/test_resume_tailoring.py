@@ -14,6 +14,7 @@ from erga_mcp.resume_tailoring import (
     TAILORING_VERSION,
     _record_lead_verb_rewrites,
     _relevance,
+    classify_wrapped_resume_items,
     create_automatic_resume_proposal,
     pdf_page_count,
 )
@@ -61,7 +62,34 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 14)
+        self.assertEqual(TAILORING_VERSION, 15)
+
+    def test_classifies_wrapped_bullets_as_project_or_baseline_content(self) -> None:
+        candidates = (
+            ProjectCandidate(
+                id="design-site",
+                title="Design Site",
+                latex="",
+                evidence_ids=(),
+                bullet_evidence_ids=(),
+            ),
+            ProjectCandidate(
+                id="stream-engine",
+                title="Stream Engine",
+                latex="",
+                evidence_ids=(),
+                bullet_evidence_ids=(),
+            ),
+        )
+
+        project_ids, baseline_indices = classify_wrapped_resume_items(
+            _TEMPLATE,
+            candidates,
+            (0, 2, 3),
+        )
+
+        self.assertEqual(project_ids, ("design-site", "stream-engine"))
+        self.assertEqual(baseline_indices, (0,))
 
     def test_relevance_requires_term_boundaries_and_rejects_substring_collisions(self) -> None:
         for skill, unrelated in (

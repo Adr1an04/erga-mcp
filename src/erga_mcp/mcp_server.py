@@ -79,10 +79,12 @@ from .resume import (
     create_section_resume_proposal,
     normalize_cycle,
     validate_latex_proposal,
+    validate_single_line_resume_items,
 )
 from .resume_sources import resume_source_context as build_resume_source_context
 from .resume_tailoring import (
     TAILORING_VERSION,
+    classify_wrapped_resume_items,
     create_automatic_resume_proposal,
     pdf_page_count,
     plan_resume_project_selection,
@@ -339,6 +341,95 @@ def _inventory_candidates(
     return load_project_inventory(path, evidence)
 
 
+def _layout_safe_project_selection(
+    *,
+    resume_path: Path,
+    output_dir: Path,
+    job_description: str,
+    evidence: list[Evidence],
+    project_candidates: tuple[ProjectCandidate, ...],
+    config: ErgaConfig,
+) -> tuple[tuple[str, ...], tuple[dict[str, object], ...]]:
+    """Reject wrapped project blocks and deterministically select the next approved projects."""
+    candidates_by_id = {candidate.id: candidate for candidate in project_candidates}
+    layout_rejections: list[dict[str, object]] = []
+    rejected_ids: set[str] = set()
+    for _ in range(len(project_candidates) + 1):
+        automatic = create_automatic_resume_proposal(
+            resume_path=resume_path,
+            output_dir=output_dir,
+            job_description=job_description,
+            evidence=evidence,
+            editable_sections=config.resume.editable_sections,
+            bullet_min_chars=config.resume.bullet_min_chars,
+            bullet_target_chars=config.resume.bullet_target_chars,
+            bullet_max_chars=config.resume.bullet_max_chars,
+            project_candidates=project_candidates,
+            project_count=config.resume.project_count,
+            require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+            additional_project_quality_rejections=tuple(layout_rejections),
+        )
+        _require_constraint_valid_proposal(automatic)
+        layout = validate_single_line_resume_items(
+            automatic.proposal.proposed_tex_path,
+            latexmk=Path(config.resume.latexmk),
+        )
+        if layout.returncode != 0:
+            raise ValueError("single-line resume layout preflight did not compile")
+        wrapped_project_ids, non_project_indices = classify_wrapped_resume_items(
+            automatic.proposal.proposed_tex_path.read_text(encoding="utf-8"),
+            project_candidates,
+            layout.wrapped_item_indices,
+        )
+        if non_project_indices:
+            rendered = ", ".join(str(index + 1) for index in non_project_indices)
+            raise ValueError(
+                "configured baseline resume bullets render beyond one line "
+                f"(document bullet indexes: {rendered})"
+            )
+        selected_ids = set(_selected_project_ids(automatic.project_selection))
+        newly_rejected = [
+            project_id
+            for project_id in wrapped_project_ids
+            if project_id in selected_ids and project_id not in rejected_ids
+        ]
+        if not newly_rejected:
+            if wrapped_project_ids:
+                raise ValueError("single-line project fallback could not resolve wrapped bullets")
+            return _selected_project_ids(automatic.project_selection), tuple(layout_rejections)
+        for project_id in newly_rejected:
+            candidate = candidates_by_id[project_id]
+            rejected_ids.add(project_id)
+            layout_rejections.append(
+                {
+                    "id": candidate.id,
+                    "title": candidate.title,
+                    "reasons": ["project bullet renders beyond one line"],
+                }
+            )
+    raise ValueError("single-line project fallback exhausted the approved project inventory")
+
+
+def _require_single_line_resume_layout(
+    proposal_path: Path,
+    *,
+    latexmk: str,
+    enabled: bool,
+) -> None:
+    """Refuse publication when the exact final proposal contains a wrapped resume bullet."""
+    if not enabled:
+        return
+    layout = validate_single_line_resume_items(proposal_path, latexmk=Path(latexmk))
+    if layout.returncode != 0:
+        raise ValueError("single-line resume layout validation did not compile")
+    if layout.wrapped_item_indices:
+        rendered = ", ".join(str(index + 1) for index in layout.wrapped_item_indices)
+        raise ValueError(
+            "tailored resume still contains bullets that render beyond one line "
+            f"(document bullet indexes: {rendered})"
+        )
+
+
 def _git_enriched_inventory_candidates(
     *,
     config: ErgaConfig,
@@ -375,16 +466,28 @@ def _git_enriched_inventory_candidates(
         for section in config.resume.editable_sections
     )
     selected_project_ids: tuple[str, ...] = ()
+    layout_rejections: tuple[dict[str, object], ...] = ()
     if projects_editable:
-        selection_plan = plan_resume_project_selection(
-            resume_path=resume_path,
-            candidates=eligible_candidates,
-            job_description=job_description,
-            project_count=config.resume.project_count,
-            maximum_characters=config.resume.bullet_max_chars,
-            require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
-        )
-        selected_project_ids = tuple(candidate.id for candidate in selection_plan.selected)
+        if config.resume.bullet_max_chars:
+            with TemporaryDirectory(prefix="erga-project-layout-") as layout_directory:
+                selected_project_ids, layout_rejections = _layout_safe_project_selection(
+                    resume_path=resume_path,
+                    output_dir=Path(layout_directory),
+                    job_description=job_description,
+                    evidence=evidence,
+                    project_candidates=eligible_candidates,
+                    config=config,
+                )
+        else:
+            selection_plan = plan_resume_project_selection(
+                resume_path=resume_path,
+                candidates=eligible_candidates,
+                job_description=job_description,
+                project_count=config.resume.project_count,
+                maximum_characters=config.resume.bullet_max_chars,
+                require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+            )
+            selected_project_ids = tuple(candidate.id for candidate in selection_plan.selected)
     enrichment = enrich_ranked_projects_from_git(
         candidates=candidates,
         job_description=job_description,
@@ -397,14 +500,16 @@ def _git_enriched_inventory_candidates(
         cache_root=config.data_dir / "git-project-cache",
         selected_project_ids=selected_project_ids,
     )
-    if discovery_warning is None:
-        return enrichment
+    warnings = enrichment.warnings
+    if discovery_warning is not None:
+        warnings = (discovery_warning, *warnings)
     return GitProjectEnrichment(
         candidates=enrichment.candidates,
         evidence=enrichment.evidence,
         reports=enrichment.reports,
-        warnings=(discovery_warning, *enrichment.warnings),
+        warnings=warnings,
         catalogue_candidate_count=enrichment.catalogue_candidate_count,
+        quality_rejections=layout_rejections,
     )
 
 
@@ -491,6 +596,7 @@ def _realign_git_project_research(
         reports=refreshed.reports,
         warnings=(*discovery_warnings, *refreshed.warnings),
         catalogue_candidate_count=enrichment.catalogue_candidate_count,
+        quality_rejections=enrichment.quality_rejections,
     )
 
 
@@ -976,6 +1082,7 @@ def _upgrade_existing_tailoring(
         project_candidates=project_candidates,
         project_count=config.resume.project_count,
         require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+        additional_project_quality_rejections=enrichment.quality_rejections,
     )
     automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
     enrichment = _realign_git_project_research(
@@ -987,6 +1094,11 @@ def _upgrade_existing_tailoring(
     )
     _require_git_research_alignment(automatic.project_selection, enrichment)
     _require_constraint_valid_proposal(automatic)
+    _require_single_line_resume_layout(
+        automatic.proposal.proposed_tex_path,
+        latexmk=config.resume.latexmk,
+        enabled=bool(config.resume.bullet_max_chars),
+    )
     validation = _compile_intake_proposal(
         automatic.proposal.proposed_tex_path,
         latexmk=config.resume.latexmk,
@@ -1899,6 +2011,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 project_candidates=project_candidates,
                 project_count=config.resume.project_count,
                 require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+                additional_project_quality_rejections=enrichment.quality_rejections,
             )
             automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
             enrichment = _realign_git_project_research(
@@ -1911,6 +2024,11 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             _require_git_research_alignment(automatic.project_selection, enrichment)
             _require_constraint_valid_proposal(automatic)
             proposal = automatic.proposal
+            _require_single_line_resume_layout(
+                proposal.proposed_tex_path,
+                latexmk=config.resume.latexmk,
+                enabled=bool(config.resume.bullet_max_chars),
+            )
             validation = _compile_intake_proposal(
                 proposal.proposed_tex_path,
                 latexmk=config.resume.latexmk,
@@ -2239,6 +2357,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             project_candidates=project_candidates,
             project_count=config.resume.project_count,
             require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+            additional_project_quality_rejections=enrichment.quality_rejections,
         )
         automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
         enrichment = _realign_git_project_research(
@@ -2251,6 +2370,11 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         _require_git_research_alignment(automatic.project_selection, enrichment)
         _require_constraint_valid_proposal(automatic)
         proposal = automatic.proposal
+        _require_single_line_resume_layout(
+            proposal.proposed_tex_path,
+            latexmk=config.resume.latexmk,
+            enabled=bool(config.resume.bullet_max_chars),
+        )
         validation = _compile_intake_proposal(
             proposal.proposed_tex_path,
             latexmk=config.resume.latexmk,

@@ -39,8 +39,9 @@ Erga rejects duplicate IDs, missing/unapproved evidence IDs, non-project LaTeX b
 - Terms on explicit required-qualification lines receive a 5× effective weight (base match plus a 4× requirement bonus), so a required technology outranks incidental responsibility wording.
 - Ties are deterministic by project ID.
 - Selected blocks are copied verbatim; Erga never invents or rewrites a claim.
+- When a maximum bullet length is configured, Erga runs an exact TeX width preflight before Git enrichment. A selected project whose bullet would wrap is rejected for that proposal and the next approved, relevant inventory project is considered.
 - The package claim report records the inventory mode, candidate count, selected IDs/titles, and a `project_claims` entry for every selected project bullet with its approved evidence IDs.
 - If no arsenal project matches, the report uses `inventory_no_match` and leaves the template Projects section unchanged—there is no stale-template reordering.
 - If a new inventory bullet violates configured constraints, the proposal is reverted and the report uses `inventory_constraint_fallback` with no selected project or project-claim records.
 
-The existing LaTeX compile/page-limit validation still applies. A rejected compile does not alter the master résumé.
+The final proposal is measured again before publication. Any wrapped non-project bullet, or a wrapped project bullet that cannot be replaced from approved inventory, stops publication with a precise validation error. The existing LaTeX compile/page-limit validation still applies. A rejected compile does not alter the master résumé.

@@ -219,7 +219,7 @@ _LEAD_VERB_ALTERNATIVES = {
     ),
     "won": ("Earned", "Secured", "Captured"),
 }
-TAILORING_VERSION = 14
+TAILORING_VERSION = 15
 
 
 @dataclass(frozen=True)
@@ -345,6 +345,65 @@ def _command_spans(
             )
         )
         position = argument_end
+
+
+def classify_wrapped_resume_items(
+    source: str,
+    candidates: tuple[ProjectCandidate, ...],
+    wrapped_item_indices: tuple[int, ...],
+) -> tuple[tuple[str, ...], tuple[int, ...]]:
+    """Map wrapped document bullets to inventory projects or immutable baseline sections."""
+    document_start = source.find(r"\begin{document}")
+    if document_start < 0:
+        raise ValueError("resume proposal must contain \\begin{document}")
+    document = source[document_start:]
+    bullets = _command_spans(document, "resumeItem")
+    project_start, project_end, _ = _section_body(document, "Projects")
+    headings = _command_spans(
+        document,
+        "resumeProjectHeading",
+        start=project_start,
+        end=project_end,
+    )
+    project_ranges: list[tuple[int, int, str]] = []
+    for index, heading in enumerate(headings):
+        entry_end = headings[index + 1].start if index + 1 < len(headings) else project_end
+        emphasized_titles = {
+            _normalized(span.content) for span in _command_spans(heading.content, "textbf")
+        }
+        heading_text = _normalized(heading.content)
+        matches = [
+            candidate
+            for candidate in candidates
+            if (
+                _normalized(candidate.title) in emphasized_titles
+                or heading_text == _normalized(candidate.title)
+                or heading_text.startswith(f"{_normalized(candidate.title)} ")
+            )
+        ]
+        if len(matches) != 1:
+            raise ValueError("rendered project heading does not match one inventory project")
+        project_ranges.append((heading.start, entry_end, matches[0].id))
+
+    project_ids: list[str] = []
+    non_project_indices: list[int] = []
+    for item_index in wrapped_item_indices:
+        if item_index < 0 or item_index >= len(bullets):
+            raise ValueError("resume layout validator returned an invalid bullet index")
+        position = bullets[item_index].start
+        project_id = next(
+            (
+                candidate_id
+                for entry_start, entry_end, candidate_id in project_ranges
+                if entry_start <= position < entry_end
+            ),
+            None,
+        )
+        if project_id is None:
+            non_project_indices.append(item_index)
+        elif project_id not in project_ids:
+            project_ids.append(project_id)
+    return tuple(project_ids), tuple(non_project_indices)
 
 
 def _ranked_commands(
@@ -531,18 +590,20 @@ def _resume_project_selection_plan(
     project_count: int,
     maximum_characters: int,
     require_unique_lead_verbs: bool,
+    additional_quality_rejections: tuple[dict[str, object], ...] = (),
 ) -> ResumeProjectSelectionPlan:
     if not candidates:
         return ResumeProjectSelectionPlan((), (), ())
     start, end, _ = _section_body(original, "Projects")
     effective_candidates = _prefer_master_project_blocks(original[start:end], candidates)
-    quality_rejections = tuple(
-        _project_quality_rejections(
+    quality_rejections = (
+        *_project_quality_rejections(
             effective_candidates,
             original,
             maximum_characters=maximum_characters,
             require_unique_lead_verbs=require_unique_lead_verbs,
-        )
+        ),
+        *additional_quality_rejections,
     )
     rejected_ids = {
         str(item["id"]) for item in quality_rejections if isinstance(item.get("id"), str)
@@ -989,6 +1050,7 @@ def create_automatic_resume_proposal(
     project_candidates: tuple[ProjectCandidate, ...] = (),
     project_count: int = 4,
     require_unique_lead_verbs: bool = False,
+    additional_project_quality_rejections: tuple[dict[str, object], ...] = (),
 ) -> AutomaticResumeProposal:
     """Tailor a résumé using only user-provided claims and approved project blocks."""
     if resume_path.suffix.casefold() != ".tex" or not resume_path.is_file():
@@ -1014,6 +1076,7 @@ def create_automatic_resume_proposal(
             project_count=project_count,
             maximum_characters=bullet_max_chars,
             require_unique_lead_verbs=require_unique_lead_verbs,
+            additional_quality_rejections=additional_project_quality_rejections,
         )
         if projects_requested
         else ResumeProjectSelectionPlan((), (), ())
