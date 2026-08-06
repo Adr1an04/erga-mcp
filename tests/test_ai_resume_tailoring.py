@@ -104,7 +104,7 @@ class AIResumeTailoringTests(unittest.TestCase):
                 "\n"
                 r"\resumeProjectHeading{\textbf{Template}}{}"
                 "\n"
-                r"\resumeItem{Built a template project.}"
+                r"\resumeItem{Built a template project for 10 users.}"
                 "\n"
                 r"\section{Technical Skills}"
                 "\nPython"
@@ -127,6 +127,13 @@ class AIResumeTailoringTests(unittest.TestCase):
                 approved=True,
                 created_at=datetime.now(UTC),
             )
+            metric = Evidence(
+                id="ev_metric",
+                source_ref="git-metric:api-platform@abc",
+                text="Attributed work touched 3 implementation files and 2 test files.",
+                approved=True,
+                created_at=datetime.now(UTC),
+            )
             session = _SamplingSession(submission)
             result = asyncio.run(
                 draft_evidence_backed_projects(
@@ -135,11 +142,11 @@ class AIResumeTailoringTests(unittest.TestCase):
                     resume_path=resume,
                     job_description="Required: Python FastAPI API testing",
                     candidates=(_candidate(),),
-                    evidence=[approved, git],
+                    evidence=[approved, git, metric],
                     reports=(
                         {
                             "project_id": "api-platform",
-                            "evidence_ids": ["ev_git"],
+                            "evidence_ids": ["ev_git", "ev_metric"],
                             "repositories": [
                                 {
                                     "repository": "example/api-platform",
@@ -149,7 +156,12 @@ class AIResumeTailoringTests(unittest.TestCase):
                                         "has_implementation_changes": True,
                                         "has_test_changes": True,
                                         "languages": ["Python"],
-                                        "resume_use": "supporting_evidence_only",
+                                        "resume_metric_candidates": [
+                                            "Attributed work touched 3 implementation files and "
+                                            "2 test files."
+                                        ],
+                                        "resume_use": "draft_scale_evidence",
+                                        "requires_user_confirmation": True,
                                     },
                                 }
                             ],
@@ -215,9 +227,9 @@ class AIResumeTailoringTests(unittest.TestCase):
         self.assertIn("Engineered", prompt["allowed_lead_verbs"])
         self.assertIn("Validated", prompt["allowed_lead_verbs"])
         self.assertEqual(prompt["projects"][0]["relevance_rank"], 1)
-        self.assertTrue(
-            prompt["projects"][0]["git_engineering_signals_for_ranking_only"][0]["has_test_changes"]
-        )
+        self.assertTrue(prompt["projects"][0]["git_engineering_signals"][0]["has_test_changes"])
+        self.assertEqual(prompt["master_project_quantitative_coverage_percent"], 100)
+        self.assertEqual(prompt["required_quantified_bullets_per_project"], 2)
 
     def test_retry_can_lock_the_semantic_project_selection_during_copy_repair(self) -> None:
         result, session = self._draft(
@@ -291,6 +303,59 @@ class AIResumeTailoringTests(unittest.TestCase):
                     ]
                 }
             )
+
+    def test_rejects_metric_free_copy_below_master_quantitative_coverage(self) -> None:
+        with self.assertRaisesRegex(ValueError, "quantitative bullet coverage"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": "Engineered a Python API with authenticated requests.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                }
+            )
+
+    def test_accepts_verified_git_scale_metrics_for_master_parity(self) -> None:
+        result, _ = self._draft(
+            {
+                "projects": [
+                    {
+                        "project_id": "api-platform",
+                        "bullets": [
+                            {
+                                "text": "Engineered a Python API across 3 implementation files.",
+                                "evidence_ids": ["ev_metric", "ev_api"],
+                            },
+                            {
+                                "text": (
+                                    "Validated authenticated request handling across 2 test files."
+                                ),
+                                "evidence_ids": ["ev_metric", "ev_api"],
+                            },
+                        ],
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(
+            resume_item_texts(result.candidates[0].latex),
+            (
+                "Engineered a Python API across 3 implementation files.",
+                "Validated authenticated request handling across 2 test files.",
+            ),
+        )
 
     def test_adds_the_project_evidence_id_that_supports_a_number(self) -> None:
         result, _ = self._draft(

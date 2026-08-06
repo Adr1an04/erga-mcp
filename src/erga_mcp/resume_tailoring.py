@@ -219,7 +219,7 @@ _LEAD_VERB_ALTERNATIVES = {
     ),
     "won": ("Earned", "Secured", "Captured"),
 }
-TAILORING_VERSION = 15
+TAILORING_VERSION = 16
 
 
 @dataclass(frozen=True)

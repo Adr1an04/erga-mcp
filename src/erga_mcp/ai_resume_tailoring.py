@@ -25,7 +25,7 @@ _WORD = re.compile(r"[A-Za-z][A-Za-z0-9+#.\-]*")
 _FORBIDDEN_GIT_PROSE = re.compile(
     r"\b(?:commits?|diffs?|diff hashes?|git history|line churn|authored commits?|"
     r"commit counts?|file counts?|lines? (?:added|changed|deleted))\b|"
-    r"\b\d+\s+files?\b",
+    r"\bcode churn\b",
     re.IGNORECASE,
 )
 _SUBMIT_TOOL = "submit_evidence_backed_projects"
@@ -79,14 +79,35 @@ def _baseline_lead_verbs(resume_path: Path) -> frozenset[str]:
     )
 
 
+def _master_project_quantitative_coverage(resume_path: Path) -> int:
+    """Return the master Projects section's percentage of bullets containing numbers."""
+    source = resume_path.read_text(encoding="utf-8")
+    match = re.search(r"^\\section\{Projects\}\s*$", source, re.MULTILINE | re.IGNORECASE)
+    if match is None:
+        return 0
+    following = re.search(r"^\\section\{[^}]+\}\s*$", source[match.end() :], re.MULTILINE)
+    end = match.end() + following.start() if following is not None else len(source)
+    bullets = resume_item_texts(source[match.end() : end])
+    if not bullets:
+        return 0
+    quantified = sum(bool(_NUMBER.search(bullet)) for bullet in bullets)
+    return round(100 * quantified / len(bullets))
+
+
+def project_quantitative_bullet_count(candidate: ProjectCandidate) -> int:
+    """Count project bullets that retain at least one supported quantitative fact."""
+    return sum(bool(_NUMBER.search(bullet)) for bullet in resume_item_texts(candidate.latex))
+
+
 def _candidate_sources(
     candidate: ProjectCandidate,
     *,
     report: dict[str, object],
     evidence_by_id: dict[str, Evidence],
-) -> tuple[list[dict[str, object]], dict[str, str], frozenset[str]]:
+) -> tuple[list[dict[str, object]], dict[str, str], frozenset[str], frozenset[str]]:
     sources: list[dict[str, object]] = []
     scoped_text: dict[str, list[str]] = {}
+    quantitative_tokens: set[str] = set()
     for bullet, evidence_ids in zip(
         resume_item_texts(candidate.latex),
         candidate.bullet_evidence_ids,
@@ -98,6 +119,9 @@ def _candidate_sources(
                 "text": latex_to_text(bullet),
                 "evidence_ids": list(evidence_ids),
             }
+        )
+        quantitative_tokens.update(
+            _normalized_number(number) for number in _NUMBER.findall(latex_to_text(bullet))
         )
         for evidence_id in evidence_ids:
             scoped_text.setdefault(evidence_id, []).append(latex_to_text(bullet))
@@ -112,21 +136,33 @@ def _candidate_sources(
         item = evidence_by_id.get(evidence_id)
         if item is None or not item.approved:
             continue
+        metric_evidence = item.source_ref.startswith("git-metric:")
         sources.append(
             {
-                "kind": "authored_git_diff_evidence",
+                "kind": (
+                    "verified_git_metric_evidence"
+                    if metric_evidence
+                    else "authored_git_diff_evidence"
+                ),
                 "text": item.text,
                 "evidence_ids": [item.id],
                 "source_ref": item.source_ref,
             }
         )
-        # Diff accounting is useful implementation evidence, but commit/file/line totals are
-        # not product outcomes. Never allow those raw numbers to become résumé metrics.
-        scoped_text.setdefault(item.id, []).append(_NUMBER.sub("", item.text))
+        if metric_evidence:
+            scoped_text.setdefault(item.id, []).append(item.text)
+            quantitative_tokens.update(
+                _normalized_number(number) for number in _NUMBER.findall(item.text)
+            )
+        else:
+            # Diff accounting is implementation evidence, but its incidental commit/file/line
+            # totals are not automatically publishable. Only separately verified metric evidence
+            # may provide quantitative claims to the résumé writer.
+            scoped_text.setdefault(item.id, []).append(_NUMBER.sub("", item.text))
     flattened = {
         evidence_id: "\n".join(dict.fromkeys(texts)) for evidence_id, texts in scoped_text.items()
     }
-    return sources, flattened, frozenset(flattened)
+    return sources, flattened, frozenset(flattened), frozenset(quantitative_tokens)
 
 
 def _submission_schema(
@@ -241,6 +277,8 @@ def _validate_submission(
     candidate_by_id: dict[str, ProjectCandidate],
     source_text_by_project: dict[str, dict[str, str]],
     allowed_ids_by_project: dict[str, frozenset[str]],
+    quantitative_tokens_by_project: dict[str, frozenset[str]],
+    required_quantified_bullets: int,
     project_count: int,
     bullets_per_project: int,
     bullet_max_chars: int,
@@ -270,6 +308,7 @@ def _validate_submission(
                 f"each AI-selected project must contain exactly {bullets_per_project} bullets"
             )
         rendered_bullets: list[tuple[str, tuple[str, ...]]] = []
+        quantified_bullets = 0
         for raw_bullet in raw_bullets:
             if not isinstance(raw_bullet, dict):
                 raise ValueError("each AI-authored bullet must be an object")
@@ -301,6 +340,7 @@ def _validate_submission(
             project_sources = source_text_by_project[project_id]
             cited_text = "\n".join(project_sources[item] for item in evidence_ids)
             cited_numbers = {_normalized_number(item) for item in _NUMBER.findall(cited_text)}
+            bullet_numbers = {_normalized_number(item) for item in _NUMBER.findall(text)}
             unsupported_numbers: set[str] = set()
             supplemental_ids: list[str] = []
             for number in _NUMBER.findall(text):
@@ -322,6 +362,8 @@ def _validate_submission(
                     "AI-authored bullet contains a number absent from its project evidence: "
                     + ", ".join(sorted(unsupported_numbers))
                 )
+            if bullet_numbers & quantitative_tokens_by_project[project_id]:
+                quantified_bullets += 1
             evidence_ids = tuple(dict.fromkeys((*evidence_ids, *supplemental_ids)))
             words = _WORD.findall(text)
             if not words:
@@ -335,6 +377,11 @@ def _validate_submission(
                 raise ValueError(f"AI-authored bullet reuses the lead verb {words[0]!r}")
             used_leads.add(lead)
             rendered_bullets.append((text, evidence_ids))
+        if quantified_bullets < required_quantified_bullets:
+            raise ValueError(
+                "AI-authored project falls below the master resume's supported quantitative "
+                "bullet coverage"
+            )
         candidate = _replace_candidate_bullets(
             candidate_by_id[project_id],
             rendered_bullets,
@@ -405,9 +452,15 @@ async def draft_evidence_backed_projects(
     candidate_by_id: dict[str, ProjectCandidate] = {}
     source_text_by_project: dict[str, dict[str, str]] = {}
     allowed_ids_by_project: dict[str, frozenset[str]] = {}
+    quantitative_tokens_by_project: dict[str, frozenset[str]] = {}
+    master_quantitative_coverage = _master_project_quantitative_coverage(resume_path)
+    required_quantified_bullets = min(
+        bullets_per_project,
+        (bullets_per_project * master_quantitative_coverage + 99) // 100,
+    )
     for candidate in candidates:
         report = report_by_id.get(candidate.id, {})
-        sources, scoped_text, allowed_ids = _candidate_sources(
+        sources, scoped_text, allowed_ids, quantitative_tokens = _candidate_sources(
             candidate,
             report=report,
             evidence_by_id=evidence_by_id,
@@ -417,6 +470,7 @@ async def draft_evidence_backed_projects(
         candidate_by_id[candidate.id] = candidate
         source_text_by_project[candidate.id] = scoped_text
         allowed_ids_by_project[candidate.id] = allowed_ids
+        quantitative_tokens_by_project[candidate.id] = quantitative_tokens
         raw_repository_reports = report.get("repositories")
         repository_reports = (
             [item for item in raw_repository_reports if isinstance(item, dict)]
@@ -439,7 +493,12 @@ async def draft_evidence_backed_projects(
                 "relevance_rank": relevance_rank[candidate.id],
                 "matched_role_terms": list(rationale.matched_terms) if rationale else [],
                 "matched_role_signals": list(rationale.matched_signals) if rationale else [],
-                "git_engineering_signals_for_ranking_only": git_engineering_signals,
+                "git_engineering_signals": git_engineering_signals,
+                "supported_quantitative_tokens": sorted(quantitative_tokens),
+                "required_quantified_bullets": required_quantified_bullets,
+                "meets_master_metric_requirement": (
+                    not required_quantified_bullets or bool(quantitative_tokens)
+                ),
                 "sources": sources,
             }
         )
@@ -466,6 +525,8 @@ async def draft_evidence_backed_projects(
         "job_description": job_description,
         "project_count": project_count,
         "bullets_per_project": bullets_per_project,
+        "master_project_quantitative_coverage_percent": master_quantitative_coverage,
+        "required_quantified_bullets_per_project": required_quantified_bullets,
         "bullet_character_preferences": {
             "minimum_soft": bullet_min_chars,
             "target": bullet_target_chars,
@@ -483,7 +544,7 @@ async def draft_evidence_backed_projects(
             "lines added",
             "lines changed",
             "lines deleted",
-            "numeric file counts",
+            "unsupported impact, adoption, performance, or coverage claims",
         ],
         "projects": contexts,
     }
@@ -499,11 +560,19 @@ async def draft_evidence_backed_projects(
         "Never add a year or date from general knowledge. "
         "Match the specificity and polish of the approved_resume_bullet sources. Combine concrete "
         "diff-backed implementation details with approved outcome metrics when both are supported; "
-        "never replace an outcome with Git accounting or generic task prose. Prefer required role "
+        "never replace an outcome with generic task prose. Every selected project must meet "
+        "required_quantified_bullets using numeric tokens from that project's supported evidence. "
+        "Prefer approved impact, adoption, performance, competition, test, endpoint, and feature "
+        "metrics. When those are unavailable, verified_git_metric_evidence may quantify "
+        "attributable "
+        "implementation-file, test-file, language, or source/test change scale without presenting "
+        "those facts as product impact. Use different supported quantitative facts across bullets "
+        "when possible. Prefer required role "
         "terms, matched role signals, and complementary engineering depth when selecting projects. "
-        "Use relevance_rank, matched role signals, and Git engineering signals only to compare "
-        "projects; they are not publishable claims. Do not mention commits, diffs, files, line "
-        "counts, evidence, Git, or the tailoring process. "
+        "Use relevance_rank and matched role signals to compare projects. Do not mention commits, "
+        "diffs, line counts, evidence, Git, or the tailoring process. Exact implementation-file "
+        "and "
+        "test-file counts from verified_git_metric_evidence are allowed. "
         "When allowed_lead_verbs is non-empty, begin every bullet with a different verb from that "
         "exact list; no two bullets anywhere in the submission may share a lead verb. Return plain "
         "text, never LaTeX. Prefer concrete engineering scope and outcomes over generic prose."
@@ -556,6 +625,8 @@ async def draft_evidence_backed_projects(
         candidate_by_id=candidate_by_id,
         source_text_by_project=source_text_by_project,
         allowed_ids_by_project=allowed_ids_by_project,
+        quantitative_tokens_by_project=quantitative_tokens_by_project,
+        required_quantified_bullets=required_quantified_bullets,
         project_count=project_count,
         bullets_per_project=bullets_per_project,
         bullet_max_chars=bullet_max_chars,

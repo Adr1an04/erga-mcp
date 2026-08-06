@@ -30,7 +30,10 @@ from pydantic import BaseModel, Field, StrictInt
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
-from .ai_resume_tailoring import draft_evidence_backed_projects
+from .ai_resume_tailoring import (
+    draft_evidence_backed_projects,
+    project_quantitative_bullet_count,
+)
 from .cli import DEFAULT_CONFIG_PATH, _notes_application, _package_for_application
 from .config import ErgaConfig, load_config
 from .contact_projection import project_recruiter_contacts
@@ -689,6 +692,14 @@ async def _ai_tailored_project_enrichment(
                 {
                     **report_by_id[project_id],
                     "generated_bullets": len(candidate_by_id[project_id].bullet_evidence_ids),
+                    "quantified_bullets": project_quantitative_bullet_count(
+                        candidate_by_id[project_id]
+                    ),
+                    "quantitative_coverage_percent": round(
+                        100
+                        * project_quantitative_bullet_count(candidate_by_id[project_id])
+                        / len(candidate_by_id[project_id].bullet_evidence_ids)
+                    ),
                     "resume_bullets_source": "host_model_evidence_synthesis",
                     "tailoring_model": drafted.model,
                 }
@@ -1867,16 +1878,17 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         title="Analyze attributable Git-backed project scope",
         description=(
             "Inspect a single explicit local Git worktree and return review-only, "
-            "author-attributed supporting facts from recognized source and test files. Generated "
-            "assets, dependencies, locks, snapshots, docs, and data are excluded. Results are not "
-            "resume-ready and never estimate impact, coverage, or performance."
+            "author-attributed scale facts and draft metric candidates from recognized source and "
+            "test files. Generated assets, dependencies, locks, snapshots, docs, and data are "
+            "excluded. Candidates require confirmation and never estimate impact, coverage, or "
+            "performance."
         ),
         annotations=_READ_ONLY,
     )
     def propose_project_metrics(
         repo_path: str, author_email: str, commit_limit: int = 200
     ) -> dict[str, object]:
-        """Return user-confirmation-required Git scope facts for one explicit repository."""
+        """Return confirmation-required Git scope and draft metrics for one repository."""
         proposal = propose_git_project_metrics(
             Path(repo_path), author_email=author_email, commit_limit=commit_limit
         )

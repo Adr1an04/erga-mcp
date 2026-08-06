@@ -70,7 +70,7 @@ class ProjectMetricProposalTests(unittest.TestCase):
             self.assertEqual(report.test_file_share_percent, 50)
             self.assertEqual(report.other_files_changed, 0)
             self.assertEqual(report.languages, ("Python",))
-            self.assertEqual(report.resume_use, "supporting_evidence_only")
+            self.assertEqual(report.resume_use, "draft_scale_evidence")
             self.assertEqual(
                 report.review_facts,
                 (
@@ -82,6 +82,13 @@ class ProjectMetricProposalTests(unittest.TestCase):
             )
             self.assertTrue(report.requires_user_confirmation)
             self.assertNotIn("impact", " ".join(report.review_facts).casefold())
+            self.assertEqual(
+                report.resume_metric_candidates,
+                (
+                    "Attributed work touched 1 implementation file and 1 test file.",
+                    "Attributed source and test changes covered 1 detected language: Python.",
+                ),
+            )
 
     def test_excludes_locks_generated_assets_snapshots_and_data_from_code_totals(self) -> None:
         with TemporaryDirectory() as directory:
@@ -100,12 +107,19 @@ class ProjectMetricProposalTests(unittest.TestCase):
                 author,
             )
             self._commit(repo, "dist/bundle.js", "var generated = true;\n", "build", author)
+            self._commit(
+                repo,
+                "venv/lib/python/site-packages/vendor.py",
+                "VENDORED = True\n",
+                "environment",
+                author,
+            )
 
             report = propose_git_project_metrics(repo, author_email="adrian@example.test")
 
         self.assertEqual(report.source_files_changed, 1)
         self.assertEqual(report.test_files_changed, 0)
-        self.assertEqual(report.other_files_changed, 5)
+        self.assertEqual(report.other_files_changed, 6)
         self.assertEqual(report.files_changed, 1)
         self.assertEqual(report.lines_added, 1)
         self.assertEqual(report.languages, ("TypeScript",))
@@ -125,6 +139,24 @@ class ProjectMetricProposalTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "no commits matched author_email"):
                 propose_git_project_metrics(repo, author_email="nobody@example.test")
+
+    def test_does_not_propose_resume_metrics_for_documentation_only_history(self) -> None:
+        with TemporaryDirectory() as directory:
+            repo = Path(directory)
+            self._git(repo, "init")
+            self._commit(
+                repo,
+                "README.md",
+                "# Project\n",
+                "document project",
+                "Adrian <adrian@example.test>",
+            )
+
+            report = propose_git_project_metrics(repo, author_email="adrian@example.test")
+
+        self.assertEqual(report.resume_metric_candidates, ())
+        self.assertEqual(report.source_files_changed, 0)
+        self.assertEqual(report.test_files_changed, 0)
 
     def test_pipeline_summary_inspects_exact_attributed_commits_outside_recent_limit(self) -> None:
         with TemporaryDirectory() as directory:

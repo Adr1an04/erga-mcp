@@ -18,7 +18,11 @@ from .github_projects import (
 )
 from .models import Evidence, GitResearchBullet
 from .project_inventory import ProjectCandidate, select_projects, with_canonical_project_link
-from .project_metrics import project_metric_model_context, summarize_git_project_metrics
+from .project_metrics import (
+    ProjectMetricProposal,
+    project_metric_model_context,
+    summarize_git_project_metrics,
+)
 from .store import ErgaStore
 
 _TOKEN = re.compile(r"[a-z0-9+#.]+")
@@ -165,6 +169,30 @@ def _approved_bullet_evidence(
     return store.add_evidence(source_ref=source_ref, text=bullet.text, approved=True)
 
 
+def _approved_metric_evidence(
+    *,
+    store: ErgaStore,
+    project_id: str,
+    repository: str,
+    proposal: ProjectMetricProposal,
+) -> Evidence:
+    """Persist exact Git-derived scale facts with stable review provenance."""
+    text = " ".join(proposal.resume_metric_candidates)
+    digest = hashlib.sha256(
+        "\n".join((repository, proposal.attribution, text)).encode("utf-8")
+    ).hexdigest()[:20]
+    source_ref = f"git-metric:{project_id}@{digest}"
+    existing = next(
+        (item for item in store.list_evidence() if item.source_ref == source_ref),
+        None,
+    )
+    if existing is not None:
+        if not existing.approved or existing.text != text:
+            raise ValueError("stored Git metric evidence does not match its provenance hash")
+        return existing
+    return store.add_evidence(source_ref=source_ref, text=text, approved=True)
+
+
 def enrich_ranked_projects_from_git(
     *,
     candidates: tuple[ProjectCandidate, ...],
@@ -243,6 +271,7 @@ def enrich_ranked_projects_from_git(
         project_bullets: list[GitResearchBullet] = []
         project_commits: set[str] = set()
         project_files: set[str] = set()
+        project_metric_evidence: list[Evidence] = []
         repository_reports: list[dict[str, object]] = []
         try:
             if login is None:
@@ -275,6 +304,16 @@ def enrich_ranked_projects_from_git(
                         "status": "verified",
                         **project_metric_model_context(metrics),
                     }
+                    if metrics.resume_metric_candidates:
+                        metric_evidence = _approved_metric_evidence(
+                            store=store,
+                            project_id=candidate.id,
+                            repository=repository,
+                            proposal=metrics,
+                        )
+                        project_metric_evidence.append(metric_evidence)
+                        derived_evidence.append(metric_evidence)
+                        metric_context["evidence_id"] = metric_evidence.id
                 summary, bullets = synthesize_diff_research(
                     str(worktree),
                     observations,
@@ -352,6 +391,7 @@ def enrich_ranked_projects_from_git(
             for bullet in ranked_bullets
         ]
         derived_evidence.extend(bullet_evidence)
+        report_evidence = [*bullet_evidence, *project_metric_evidence]
         reports.append(
             {
                 "project_id": candidate.id,
@@ -362,7 +402,7 @@ def enrich_ranked_projects_from_git(
                 "files": len(project_files),
                 "generated_bullets": len(ranked_bullets),
                 "resume_bullets_source": "approved_catalogue",
-                "evidence_ids": [item.id for item in bullet_evidence],
+                "evidence_ids": [item.id for item in report_evidence],
             }
         )
 

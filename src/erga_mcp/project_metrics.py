@@ -29,6 +29,7 @@ _LOCK_FILE_NAMES = frozenset(
 _IGNORED_DIRECTORY_NAMES = frozenset(
     {
         ".cache",
+        ".direnv",
         ".git",
         ".gradle",
         ".mypy_cache",
@@ -38,14 +39,19 @@ _IGNORED_DIRECTORY_NAMES = frozenset(
         ".ruff_cache",
         ".tox",
         ".venv",
+        ".virtualenv",
         "__pycache__",
         "build",
         "coverage",
         "dist",
+        "env",
         "generated",
         "node_modules",
+        "site-packages",
         "target",
         "vendor",
+        "venv",
+        "virtualenv",
     }
 )
 _GENERATED_PATH_PARTS = frozenset({"snapshots", "__snapshots__"})
@@ -194,7 +200,8 @@ class ProjectMetricProposal:
     test_lines_deleted: int
     languages: tuple[str, ...]
     review_facts: tuple[str, ...]
-    resume_use: str = "supporting_evidence_only"
+    resume_metric_candidates: tuple[str, ...]
+    resume_use: str = "draft_scale_evidence"
     requires_user_confirmation: bool = True
 
 
@@ -215,7 +222,7 @@ class _FileTotals:
 def propose_git_project_metrics(
     repo: Path, *, author_email: str, commit_limit: int = DEFAULT_COMMIT_LIMIT
 ) -> ProjectMetricProposal:
-    """Return bounded Git facts for review, never a ready-to-publish résumé claim."""
+    """Return bounded Git facts and review-required quantitative draft candidates."""
     normalized_email = author_email.strip().casefold()
     if not normalized_email:
         raise ValueError("author_email is required to make attributable metric proposals")
@@ -245,11 +252,13 @@ def summarize_git_project_metrics(
     author_email: str | None = None,
     commits: list[_Commit] | None = None,
 ) -> ProjectMetricProposal:
-    """Summarize exact attributed commits for ranking and model context.
+    """Summarize exact attributed commits for ranking and reviewable draft metrics.
 
     Only recognized implementation and test files contribute to line totals. Generated output,
     dependencies, lockfiles, documentation, data, and media are deliberately excluded. The facts
-    remain review-only because Git cannot prove user impact, performance, adoption, or coverage.
+    remain review-required because Git cannot prove user impact, performance, adoption, or
+    coverage. File and language counts may describe attributable engineering scale as long as
+    they are not presented as product outcomes.
     """
     if commit_limit < 1:
         raise ValueError("commit_limit must be positive")
@@ -313,6 +322,24 @@ def summarize_git_project_metrics(
         f"Recorded {lines_added:,} additions and {lines_deleted:,} deletions only in "
         "recognized source and test files.",
     )
+    resume_metric_candidates_list: list[str] = []
+    if source_files or test_files:
+        file_parts = []
+        if source_files:
+            file_parts.append(
+                f"{len(source_files)} implementation file{'s' if len(source_files) != 1 else ''}"
+            )
+        if test_files:
+            file_parts.append(f"{len(test_files)} test file{'s' if len(test_files) != 1 else ''}")
+        resume_metric_candidates_list.append(
+            "Attributed work touched " + " and ".join(file_parts) + "."
+        )
+    if languages:
+        resume_metric_candidates_list.append(
+            f"Attributed source and test changes covered {len(languages)} detected language"
+            f"{'s' if len(languages) != 1 else ''}: {', '.join(languages)}."
+        )
+    resume_metric_candidates = tuple(resume_metric_candidates_list)
     return ProjectMetricProposal(
         repo_path=str(resolved),
         attribution=attribution,
@@ -335,18 +362,21 @@ def summarize_git_project_metrics(
         test_lines_deleted=test_lines_deleted,
         languages=languages,
         review_facts=candidates,
+        resume_metric_candidates=resume_metric_candidates,
     )
 
 
 def project_metric_model_context(proposal: ProjectMetricProposal) -> dict[str, object]:
-    """Return non-publishable engineering signals suitable for project ranking prompts."""
+    """Return verified engineering signals and review-required scale facts for drafting."""
     return {
         "attribution": proposal.attribution,
         "attributed_changes_observed": proposal.commit_count > 0,
         "has_implementation_changes": proposal.source_files_changed > 0,
         "has_test_changes": proposal.test_files_changed > 0,
         "languages": list(proposal.languages),
+        "resume_metric_candidates": list(proposal.resume_metric_candidates),
         "resume_use": proposal.resume_use,
+        "requires_user_confirmation": proposal.requires_user_confirmation,
     }
 
 

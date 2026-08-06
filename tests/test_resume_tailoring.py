@@ -62,7 +62,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 15)
+        self.assertEqual(TAILORING_VERSION, 16)
 
     def test_classifies_wrapped_bullets_as_project_or_baseline_content(self) -> None:
         candidates = (

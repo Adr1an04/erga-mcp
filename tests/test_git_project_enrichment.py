@@ -175,7 +175,13 @@ class GitProjectEnrichmentTests(unittest.TestCase):
                         source_files_changed=1,
                         test_files_changed=1,
                         languages=("Python",),
-                        resume_use="supporting_evidence_only",
+                        resume_metric_candidates=(
+                            "Attributed work touched 1 implementation file and 1 test file.",
+                            "Attributed source and test changes covered 1 detected language: "
+                            "Python.",
+                        ),
+                        resume_use="draft_scale_evidence",
+                        requires_user_confirmation=True,
                     ),
                 ) as summarize_metrics,
             ):
@@ -197,16 +203,25 @@ class GitProjectEnrichmentTests(unittest.TestCase):
         self.assertIn("approved API Platform baseline", selected.latex)
         self.assertNotIn("commit", selected.latex)
         self.assertNotIn("+120/-18 lines", selected.latex)
-        self.assertTrue(all(105 <= len(item.text) <= 116 for item in result.evidence))
-        self.assertEqual(len(result.evidence), 1)
-        self.assertTrue(result.evidence[0].approved)
-        self.assertTrue(result.evidence[0].source_ref.startswith("git-derived:api-platform@"))
+        bullet_evidence = [
+            item for item in result.evidence if item.source_ref.startswith("git-derived:")
+        ]
+        metric_evidence = [
+            item for item in result.evidence if item.source_ref.startswith("git-metric:")
+        ]
+        self.assertTrue(all(105 <= len(item.text) <= 116 for item in bullet_evidence))
+        self.assertEqual(len(bullet_evidence), 1)
+        self.assertEqual(len(metric_evidence), 1)
+        self.assertTrue(all(item.approved for item in result.evidence))
+        self.assertIn("1 implementation file", metric_evidence[0].text)
         self.assertEqual(result.reports[0]["authored_commits"], 1)
         repository_report = result.reports[0]["repositories"][0]
         self.assertTrue(repository_report["metric_context"]["has_test_changes"])
         self.assertEqual(repository_report["metric_context"]["languages"], ["Python"])
+        self.assertEqual(repository_report["metric_context"]["evidence_id"], metric_evidence[0].id)
         self.assertEqual(summarize_metrics.call_args.kwargs["attributed_commit_shas"], {"a" * 40})
         self.assertEqual(result.reports[0]["resume_bullets_source"], "approved_catalogue")
+        self.assertEqual(len(result.reports[0]["evidence_ids"]), 2)
         self.assertEqual(result.warnings, ())
 
     def test_missing_repository_mapping_retains_approved_catalogue_bullet(self) -> None:

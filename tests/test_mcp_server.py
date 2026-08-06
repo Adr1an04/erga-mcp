@@ -782,9 +782,10 @@ class McpServerTests(unittest.TestCase):
 
         self.assertEqual(payload["commit_count"], 1)
         self.assertTrue(payload["requires_user_confirmation"])
-        self.assertEqual(payload["resume_use"], "supporting_evidence_only")
+        self.assertEqual(payload["resume_use"], "draft_scale_evidence")
         self.assertEqual(len(payload["review_facts"]), 3)
-        self.assertNotIn("resume_metric_candidates", payload)
+        self.assertEqual(len(payload["resume_metric_candidates"]), 2)
+        self.assertIn("1 implementation file", payload["resume_metric_candidates"][0])
 
     def test_git_research_tool_requires_existing_explicit_roots(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1422,7 +1423,7 @@ class McpServerTests(unittest.TestCase):
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
             self.assertTrue(result["tailoring_meaningful_change"])
             self.assertEqual(result["tailoring_changed_sections"], ["Experience"])
-            self.assertEqual(result["tailoring_version"], 15)
+            self.assertEqual(result["tailoring_version"], 16)
             self.assertEqual(result["git_project_research"], [])
             output_pdf = Path(result["validation"]["pdf"])
             self.assertEqual(output_pdf.name, "Candidate_Resume.pdf")
@@ -1431,7 +1432,7 @@ class McpServerTests(unittest.TestCase):
                 (Path(result["package_dir"]) / "package.json").read_text(encoding="utf-8")
             )
             self.assertTrue(manifest["tailoring"]["meaningful_change"])
-            self.assertEqual(manifest["tailoring"]["version"], 15)
+            self.assertEqual(manifest["tailoring"]["version"], 16)
 
     def test_rebuilds_an_incomplete_legacy_package_and_preserves_its_files(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1500,7 +1501,7 @@ class McpServerTests(unittest.TestCase):
             )
             manifest = json.loads((repaired / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["legacy_backup"], "legacy-backup")
-            self.assertEqual(manifest["tailoring"]["version"], 15)
+            self.assertEqual(manifest["tailoring"]["version"], 16)
             self.assertIn("Legacy package preserved", result["integration_warnings"][-1])
 
     def test_compile_rejects_a_pdf_over_the_configured_page_cap(self) -> None:
