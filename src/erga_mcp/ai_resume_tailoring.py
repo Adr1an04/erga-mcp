@@ -25,7 +25,30 @@ _WORD = re.compile(r"[A-Za-z][A-Za-z0-9+#.\-]*")
 _FORBIDDEN_GIT_PROSE = re.compile(
     r"\b(?:commits?|diffs?|diff hashes?|git history|line churn|authored commits?|"
     r"commit counts?|file counts?|lines? (?:added|changed|deleted))\b|"
-    r"\bcode churn\b",
+    r"\bcode churn\b|"
+    r"\b\d[\d,.]*\+?%?\s+(?:of\s+)?(?:unique\s+)?"
+    r"(?:(?:implementation|source|test|code|changed)\s+)?"
+    r"(?:files?|lines?|languages?)\b",
+    re.IGNORECASE,
+)
+_LOW_SIGNAL_METRIC_NOUN = re.compile(
+    r"\b(?:(?:implementation|source|test|code|changed)\s+)?"
+    r"(?:files?|commits?|lines?|languages?|pull requests?)\b",
+    re.IGNORECASE,
+)
+_QUALITY_METRIC_NOUN = re.compile(
+    r"\b(?:applications?|apis?|attendees?|awards?|batch sizes?|benchmark runs?|categories?|"
+    r"commands?|customers?|"
+    r"deployments?|endpoints?|environments?|events?|features?|health checks?|integrations?|"
+    r"jobs?|members?|metrics?|models?|organizations?|partners?|pdf extraction paths?|pipelines?|"
+    r"projects?|"
+    r"records?|requests?|routes?|services?|submissions?|suites?|teams?|tests?|transactions?|"
+    r"users?|workflows?|weeks?)\b",
+    re.IGNORECASE,
+)
+_QUALITY_METRIC_CONTEXT = re.compile(
+    r"\b(?:accuracy|benchmarked|cut|faster|latency|placed|prevented|ranked|reduced|saved|"
+    r"throughput|won)\b",
     re.IGNORECASE,
 )
 _SUBMIT_TOOL = "submit_evidence_backed_projects"
@@ -69,6 +92,96 @@ def _normalized_number(value: str) -> str:
     return value.casefold().replace(",", "").rstrip(".,")
 
 
+def _resume_quality_numbers(value: str) -> frozenset[str]:
+    """Return supported numbers that describe outcomes or useful functional scope.
+
+    Repository activity counts are useful for attribution and research, but they are not
+    recruiter-facing outcomes. Standalone years are also context, not quantitative impact.
+    """
+    quality: set[str] = set()
+    for match in _NUMBER.finditer(value):
+        normalized = _normalized_number(match.group(0))
+        raw = match.group(0).casefold().rstrip(".,")
+        if re.fullmatch(r"(?:19|20)\d{2}", raw):
+            continue
+        window = value[max(0, match.start() - 18) : min(len(value), match.end() + 42)]
+        if _LOW_SIGNAL_METRIC_NOUN.search(window):
+            continue
+        has_outcome_unit = raw.startswith("$") or raw.endswith(("%", "ms", "hz", "x", "/year"))
+        if (
+            not has_outcome_unit
+            and _QUALITY_METRIC_NOUN.search(window) is None
+            and _QUALITY_METRIC_CONTEXT.search(window) is None
+        ):
+            continue
+        quality.add(normalized)
+    return frozenset(quality)
+
+
+def _git_implementation_context(value: str) -> str:
+    """Strip Git accounting from diff evidence while retaining attributable implementation."""
+    normalized = " ".join(value.split())
+    structured = re.match(
+        r"Implemented (?P<kinds>.+?) work across .+?, covering (?P<focus>.+?)"
+        r"(?:\s+(?:via|from|in|through|with) (?:Git|reviewed|diff-backed).*)?\.?$",
+        normalized,
+        re.IGNORECASE,
+    )
+    if structured is not None:
+        kinds = structured.group("kinds").strip(" ,./-")
+        focus = structured.group("focus").strip(" ,./-")
+        return f"Verified authored {kinds} implementation covering {focus}."
+    sanitized = _NUMBER.sub("", normalized)
+    sanitized = re.sub(
+        r"\b(?:commits?|files?|lines?|Git|diffs?|history|reviewed)\b",
+        "",
+        sanitized,
+        flags=re.IGNORECASE,
+    )
+    sanitized = re.sub(r"\bacross\s+(?:and\s+)?\b", "", sanitized, flags=re.IGNORECASE)
+    sanitized = " ".join(sanitized.split()).strip(" ,./-()")
+    return sanitized or "Verified authored implementation changes."
+
+
+def _resume_safe_approved_bullet(value: str) -> str:
+    """Preserve approved implementation detail while removing legacy activity-count clauses."""
+    normalized = " ".join(value.split())
+    safe = re.sub(
+        r"\s+across\s+\d[\d,.]*\+?\s+(?:(?:Git|implementation|source|test|code)\s+)?"
+        r"(?:commits?|files?|lines?|languages?)\b.*$",
+        "",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    safe = re.sub(
+        r",?\s+totaling\s+[+$\d,./\-\s]+(?:Git-reviewed\s+)?lines?.*$",
+        "",
+        safe,
+        flags=re.IGNORECASE,
+    )
+    return safe.rstrip(" ,.;-") + "."
+
+
+def _safe_git_engineering_signal(context: dict[str, object]) -> dict[str, object]:
+    """Expose qualitative Git signals to the writer while dropping every activity count."""
+    raw_languages = context.get("languages")
+    languages = (
+        [item for item in raw_languages if isinstance(item, str)]
+        if isinstance(raw_languages, list)
+        else []
+    )
+    return {
+        "status": "verified",
+        "attribution": context.get("attribution"),
+        "attributed_changes_observed": context.get("attributed_changes_observed") is True,
+        "has_implementation_changes": context.get("has_implementation_changes") is True,
+        "has_test_changes": context.get("has_test_changes") is True,
+        "languages": languages,
+        "resume_use": "engineering_context_only",
+        "activity_metrics_allowed_in_resume": False,
+    }
+
+
 def _baseline_lead_verbs(resume_path: Path) -> frozenset[str]:
     source = resume_path.read_text(encoding="utf-8")
     without_projects = replace_section_contents(source, "Projects", "")
@@ -80,7 +193,7 @@ def _baseline_lead_verbs(resume_path: Path) -> frozenset[str]:
 
 
 def _master_project_quantitative_coverage(resume_path: Path) -> int:
-    """Return the master Projects section's percentage of bullets containing numbers."""
+    """Return the master Projects section's percentage of bullets with quality metrics."""
     source = resume_path.read_text(encoding="utf-8")
     match = re.search(r"^\\section\{Projects\}\s*$", source, re.MULTILINE | re.IGNORECASE)
     if match is None:
@@ -90,13 +203,16 @@ def _master_project_quantitative_coverage(resume_path: Path) -> int:
     bullets = resume_item_texts(source[match.end() : end])
     if not bullets:
         return 0
-    quantified = sum(bool(_NUMBER.search(bullet)) for bullet in bullets)
+    quantified = sum(bool(_resume_quality_numbers(latex_to_text(bullet))) for bullet in bullets)
     return round(100 * quantified / len(bullets))
 
 
 def project_quantitative_bullet_count(candidate: ProjectCandidate) -> int:
-    """Count project bullets that retain at least one supported quantitative fact."""
-    return sum(bool(_NUMBER.search(bullet)) for bullet in resume_item_texts(candidate.latex))
+    """Count project bullets that retain a supported outcome or functional-scope metric."""
+    return sum(
+        bool(_resume_quality_numbers(latex_to_text(bullet)))
+        for bullet in resume_item_texts(candidate.latex)
+    )
 
 
 def _candidate_sources(
@@ -104,27 +220,29 @@ def _candidate_sources(
     *,
     report: dict[str, object],
     evidence_by_id: dict[str, Evidence],
-) -> tuple[list[dict[str, object]], dict[str, str], frozenset[str], frozenset[str]]:
+) -> tuple[list[dict[str, object]], dict[str, str], frozenset[str], frozenset[str], int]:
     sources: list[dict[str, object]] = []
     scoped_text: dict[str, list[str]] = {}
     quantitative_tokens: set[str] = set()
+    quality_metric_sources = 0
     for bullet, evidence_ids in zip(
         resume_item_texts(candidate.latex),
         candidate.bullet_evidence_ids,
         strict=True,
     ):
+        bullet_text = _resume_safe_approved_bullet(latex_to_text(bullet))
         sources.append(
             {
                 "kind": "approved_resume_bullet",
-                "text": latex_to_text(bullet),
+                "text": bullet_text,
                 "evidence_ids": list(evidence_ids),
             }
         )
-        quantitative_tokens.update(
-            _normalized_number(number) for number in _NUMBER.findall(latex_to_text(bullet))
-        )
+        bullet_quality_numbers = _resume_quality_numbers(bullet_text)
+        quantitative_tokens.update(bullet_quality_numbers)
+        quality_metric_sources += bool(bullet_quality_numbers)
         for evidence_id in evidence_ids:
-            scoped_text.setdefault(evidence_id, []).append(latex_to_text(bullet))
+            scoped_text.setdefault(evidence_id, []).append(bullet_text)
 
     raw_git_ids = report.get("evidence_ids")
     git_ids = (
@@ -137,32 +255,49 @@ def _candidate_sources(
         if item is None or not item.approved:
             continue
         metric_evidence = item.source_ref.startswith("git-metric:")
+        if metric_evidence:
+            # Older stores may contain Git activity metrics created by a previous release. They
+            # remain auditable locally but can never become model-visible resume evidence.
+            continue
+        functional_scope_evidence = item.source_ref.startswith("git-scope:")
+        if functional_scope_evidence:
+            scope_numbers = _resume_quality_numbers(item.text)
+            if not scope_numbers:
+                continue
+            sources.append(
+                {
+                    "kind": "verified_git_functional_scope_evidence",
+                    "text": item.text,
+                    "evidence_ids": [item.id],
+                    "source_ref": item.source_ref,
+                }
+            )
+            scoped_text.setdefault(item.id, []).append(item.text)
+            quantitative_tokens.update(scope_numbers)
+            quality_metric_sources += 1
+            continue
+        safe_text = _git_implementation_context(item.text)
         sources.append(
             {
-                "kind": (
-                    "verified_git_metric_evidence"
-                    if metric_evidence
-                    else "authored_git_diff_evidence"
-                ),
-                "text": item.text,
+                "kind": "authored_git_diff_evidence",
+                "text": safe_text,
                 "evidence_ids": [item.id],
                 "source_ref": item.source_ref,
             }
         )
-        if metric_evidence:
-            scoped_text.setdefault(item.id, []).append(item.text)
-            quantitative_tokens.update(
-                _normalized_number(number) for number in _NUMBER.findall(item.text)
-            )
-        else:
-            # Diff accounting is implementation evidence, but its incidental commit/file/line
-            # totals are not automatically publishable. Only separately verified metric evidence
-            # may provide quantitative claims to the résumé writer.
-            scoped_text.setdefault(item.id, []).append(_NUMBER.sub("", item.text))
+        # Diff evidence supplies attributable implementation detail only. Quantitative outcomes
+        # must come from approved project evidence, never incidental Git accounting.
+        scoped_text.setdefault(item.id, []).append(safe_text)
     flattened = {
         evidence_id: "\n".join(dict.fromkeys(texts)) for evidence_id, texts in scoped_text.items()
     }
-    return sources, flattened, frozenset(flattened), frozenset(quantitative_tokens)
+    return (
+        sources,
+        flattened,
+        frozenset(flattened),
+        frozenset(quantitative_tokens),
+        quality_metric_sources,
+    )
 
 
 def _submission_schema(
@@ -340,7 +475,7 @@ def _validate_submission(
             project_sources = source_text_by_project[project_id]
             cited_text = "\n".join(project_sources[item] for item in evidence_ids)
             cited_numbers = {_normalized_number(item) for item in _NUMBER.findall(cited_text)}
-            bullet_numbers = {_normalized_number(item) for item in _NUMBER.findall(text)}
+            quality_numbers = _resume_quality_numbers(text)
             unsupported_numbers: set[str] = set()
             supplemental_ids: list[str] = []
             for number in _NUMBER.findall(text):
@@ -362,7 +497,7 @@ def _validate_submission(
                     "AI-authored bullet contains a number absent from its project evidence: "
                     + ", ".join(sorted(unsupported_numbers))
                 )
-            if bullet_numbers & quantitative_tokens_by_project[project_id]:
+            if quality_numbers & quantitative_tokens_by_project[project_id]:
                 quantified_bullets += 1
             evidence_ids = tuple(dict.fromkeys((*evidence_ids, *supplemental_ids)))
             words = _WORD.findall(text)
@@ -460,11 +595,15 @@ async def draft_evidence_backed_projects(
     )
     for candidate in candidates:
         report = report_by_id.get(candidate.id, {})
-        sources, scoped_text, allowed_ids, quantitative_tokens = _candidate_sources(
-            candidate,
-            report=report,
-            evidence_by_id=evidence_by_id,
+        sources, scoped_text, allowed_ids, quantitative_tokens, quality_metric_sources = (
+            _candidate_sources(
+                candidate,
+                report=report,
+                evidence_by_id=evidence_by_id,
+            )
         )
+        if quality_metric_sources < required_quantified_bullets:
+            continue
         if not sources:
             continue
         candidate_by_id[candidate.id] = candidate
@@ -478,7 +617,7 @@ async def draft_evidence_backed_projects(
             else []
         )
         git_engineering_signals = [
-            context
+            _safe_git_engineering_signal(context)
             for repository_report in repository_reports
             if isinstance((context := repository_report.get("metric_context")), dict)
             and context.get("status") == "verified"
@@ -496,14 +635,16 @@ async def draft_evidence_backed_projects(
                 "git_engineering_signals": git_engineering_signals,
                 "supported_quantitative_tokens": sorted(quantitative_tokens),
                 "required_quantified_bullets": required_quantified_bullets,
-                "meets_master_metric_requirement": (
-                    not required_quantified_bullets or bool(quantitative_tokens)
-                ),
+                "quality_metric_sources": quality_metric_sources,
+                "meets_master_metric_requirement": True,
                 "sources": sources,
             }
         )
     if len(contexts) < project_count:
-        raise ValueError("not enough researched projects are available for AI tailoring")
+        raise ValueError(
+            "not enough researched projects have approved outcome or functional-scope metrics "
+            "to match the master resume"
+        )
 
     baseline_leads = _baseline_lead_verbs(resume_path)
     allowed_lead_verbs = tuple(
@@ -544,6 +685,10 @@ async def draft_evidence_backed_projects(
             "lines added",
             "lines changed",
             "lines deleted",
+            "implementation-file counts",
+            "source-file counts",
+            "test-file counts",
+            "language counts",
             "unsupported impact, adoption, performance, or coverage claims",
         ],
         "projects": contexts,
@@ -561,18 +706,16 @@ async def draft_evidence_backed_projects(
         "Match the specificity and polish of the approved_resume_bullet sources. Combine concrete "
         "diff-backed implementation details with approved outcome metrics when both are supported; "
         "never replace an outcome with generic task prose. Every selected project must meet "
-        "required_quantified_bullets using numeric tokens from that project's supported evidence. "
-        "Prefer approved impact, adoption, performance, competition, test, endpoint, and feature "
-        "metrics. When those are unavailable, verified_git_metric_evidence may quantify "
-        "attributable "
-        "implementation-file, test-file, language, or source/test change scale without presenting "
-        "those facts as product impact. Use different supported quantitative facts across bullets "
-        "when possible. Prefer required role "
+        "required_quantified_bullets using outcome or functional-scope numeric tokens from that "
+        "project's approved evidence. Prefer approved impact, adoption, performance, competition, "
+        "reliability, test-suite, endpoint, shipped-feature, and organizational-scope metrics. "
+        "Commit, pull-request, implementation-file, source-file, test-file, language, and line "
+        "counts are activity accounting, not resume outcomes; never use them to satisfy the metric "
+        "requirement or include them in a bullet. Use different supported quantitative facts "
+        "across bullets when possible. Prefer required role "
         "terms, matched role signals, and complementary engineering depth when selecting projects. "
         "Use relevance_rank and matched role signals to compare projects. Do not mention commits, "
-        "diffs, line counts, evidence, Git, or the tailoring process. Exact implementation-file "
-        "and "
-        "test-file counts from verified_git_metric_evidence are allowed. "
+        "diffs, file counts, line counts, evidence, Git, or the tailoring process. "
         "When allowed_lead_verbs is non-empty, begin every bullet with a different verb from that "
         "exact list; no two bullets anywhere in the submission may share a lead verb. Return plain "
         "text, never LaTeX. Prefer concrete engineering scope and outcomes over generic prose."

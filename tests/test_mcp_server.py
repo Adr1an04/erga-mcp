@@ -782,10 +782,9 @@ class McpServerTests(unittest.TestCase):
 
         self.assertEqual(payload["commit_count"], 1)
         self.assertTrue(payload["requires_user_confirmation"])
-        self.assertEqual(payload["resume_use"], "draft_scale_evidence")
+        self.assertEqual(payload["resume_use"], "engineering_context_only")
         self.assertEqual(len(payload["review_facts"]), 3)
-        self.assertEqual(len(payload["resume_metric_candidates"]), 2)
-        self.assertIn("1 implementation file", payload["resume_metric_candidates"][0])
+        self.assertEqual(payload["resume_metric_candidates"], [])
 
     def test_git_research_tool_requires_existing_explicit_roots(self) -> None:
         with TemporaryDirectory() as directory:

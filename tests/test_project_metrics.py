@@ -70,7 +70,7 @@ class ProjectMetricProposalTests(unittest.TestCase):
             self.assertEqual(report.test_file_share_percent, 50)
             self.assertEqual(report.other_files_changed, 0)
             self.assertEqual(report.languages, ("Python",))
-            self.assertEqual(report.resume_use, "draft_scale_evidence")
+            self.assertEqual(report.resume_use, "engineering_context_only")
             self.assertEqual(
                 report.review_facts,
                 (
@@ -82,13 +82,7 @@ class ProjectMetricProposalTests(unittest.TestCase):
             )
             self.assertTrue(report.requires_user_confirmation)
             self.assertNotIn("impact", " ".join(report.review_facts).casefold())
-            self.assertEqual(
-                report.resume_metric_candidates,
-                (
-                    "Attributed work touched 1 implementation file and 1 test file.",
-                    "Attributed source and test changes covered 1 detected language: Python.",
-                ),
-            )
+            self.assertEqual(report.resume_metric_candidates, ())
 
     def test_excludes_locks_generated_assets_snapshots_and_data_from_code_totals(self) -> None:
         with TemporaryDirectory() as directory:
@@ -110,7 +104,19 @@ class ProjectMetricProposalTests(unittest.TestCase):
             self._commit(
                 repo,
                 "venv/lib/python/site-packages/vendor.py",
-                "VENDORED = True\n",
+                (
+                    '@router.get("/fake-one")\n'
+                    '@router.post("/fake-two")\n'
+                    '@router.delete("/fake-three")\n'
+                    'app.command("fake-one")\n'
+                    'app.command("fake-two")\n'
+                    'app.command("fake-three")\n'
+                    "def test_fake_one(): pass\n"
+                    "def test_fake_two(): pass\n"
+                    "def test_fake_three(): pass\n"
+                    "def test_fake_four(): pass\n"
+                    "def test_fake_five(): pass\n"
+                ),
                 "environment",
                 author,
             )
@@ -123,6 +129,10 @@ class ProjectMetricProposalTests(unittest.TestCase):
         self.assertEqual(report.files_changed, 1)
         self.assertEqual(report.lines_added, 1)
         self.assertEqual(report.languages, ("TypeScript",))
+        self.assertEqual(report.attributed_test_cases, 0)
+        self.assertEqual(report.attributed_http_routes, 0)
+        self.assertEqual(report.attributed_cli_commands, 0)
+        self.assertEqual(report.resume_metric_candidates, ())
         self.assertIn("no recognized test files", report.review_facts[1])
 
     def test_rejects_an_unknown_author_before_generating_candidates(self) -> None:
@@ -157,6 +167,38 @@ class ProjectMetricProposalTests(unittest.TestCase):
         self.assertEqual(report.resume_metric_candidates, ())
         self.assertEqual(report.source_files_changed, 0)
         self.assertEqual(report.test_files_changed, 0)
+
+    def test_proposes_only_meaningful_functional_scope_from_attributed_code(self) -> None:
+        with TemporaryDirectory() as directory:
+            repo = Path(directory)
+            self._git(repo, "init")
+            author = "Adrian <adrian@example.test>"
+            routes = "\n".join(
+                (
+                    '@router.get("/jobs")',
+                    '@router.post("/jobs")',
+                    '@router.delete("/jobs/{job_id}")',
+                    "def routes(): pass",
+                )
+            )
+            tests = "\n".join(f"def test_case_{index}(): pass" for index in range(1, 6))
+            self._commit(repo, "src/routes.py", routes + "\n", "add routes", author)
+            self._commit(repo, "tests/test_routes.py", tests + "\n", "add tests", author)
+
+            report = propose_git_project_metrics(repo, author_email="adrian@example.test")
+
+        self.assertEqual(report.attributed_http_routes, 3)
+        self.assertEqual(report.attributed_test_cases, 5)
+        self.assertEqual(report.attributed_cli_commands, 0)
+        self.assertEqual(report.resume_use, "verified_functional_scope")
+        self.assertEqual(
+            report.resume_metric_candidates,
+            (
+                "Verified 5 distinct attributed test cases present in the current repository.",
+                "Verified 3 distinct attributed HTTP routes present in the current repository.",
+            ),
+        )
+        self.assertNotIn("files", " ".join(report.resume_metric_candidates).casefold())
 
     def test_pipeline_summary_inspects_exact_attributed_commits_outside_recent_limit(self) -> None:
         with TemporaryDirectory() as directory:

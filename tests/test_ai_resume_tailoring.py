@@ -14,6 +14,8 @@ from erga_mcp.ai_resume_tailoring import (
     _FORBIDDEN_GIT_PROSE,
     _latex_text,
     _normalized_number,
+    _resume_quality_numbers,
+    _resume_safe_approved_bullet,
     draft_evidence_backed_projects,
 )
 from erga_mcp.models import Evidence
@@ -74,6 +76,27 @@ class AIResumeTailoringTests(unittest.TestCase):
     def test_raw_git_filter_allows_implementation_files_but_blocks_accounting(self) -> None:
         self.assertIsNone(_FORBIDDEN_GIT_PROSE.search("Generated typed configuration files."))
         self.assertIsNotNone(_FORBIDDEN_GIT_PROSE.search("Changed 12 files across 4 commits."))
+        self.assertIsNotNone(
+            _FORBIDDEN_GIT_PROSE.search("Engineered a CUDA CLI across 71 implementation files.")
+        )
+
+    def test_resume_quality_numbers_exclude_activity_counts_and_standalone_years(self) -> None:
+        self.assertEqual(
+            _resume_quality_numbers("Served 1,000+ members with 99.3% request accuracy."),
+            frozenset({"1000+", "99.3%"}),
+        )
+        self.assertEqual(
+            _resume_quality_numbers("Changed 71 implementation files in 2026."), frozenset()
+        )
+        self.assertEqual(_resume_quality_numbers("Built the service with Python 3."), frozenset())
+        self.assertEqual(
+            _resume_quality_numbers("Processed 2,000+ submissions across 5 API routes."),
+            frozenset({"2000+", "5"}),
+        )
+        self.assertEqual(
+            _resume_quality_numbers("Won 1st of 245 at a hackathon in 2026."),
+            frozenset({"1", "245"}),
+        )
 
     def test_model_typography_is_normalized_before_latex_rendering(self) -> None:
         self.assertEqual(
@@ -81,6 +104,14 @@ class AIResumeTailoringTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "ASCII"):
             _latex_text("Shipped an interface 🚀")
+
+    def test_legacy_activity_clause_is_removed_without_losing_implementation_detail(self) -> None:
+        self.assertEqual(
+            _resume_safe_approved_bullet(
+                "Evolved a Rust daemon across 16 Git commits and 57 files, totaling 3,186 lines."
+            ),
+            "Evolved a Rust daemon.",
+        )
 
     def _draft(
         self,
@@ -134,6 +165,15 @@ class AIResumeTailoringTests(unittest.TestCase):
                 approved=True,
                 created_at=datetime.now(UTC),
             )
+            scope = Evidence(
+                id="ev_scope",
+                source_ref="git-scope:api-platform@def",
+                text=(
+                    "Verified 5 distinct attributed test cases present in the current repository."
+                ),
+                approved=True,
+                created_at=datetime.now(UTC),
+            )
             session = _SamplingSession(submission)
             result = asyncio.run(
                 draft_evidence_backed_projects(
@@ -142,11 +182,11 @@ class AIResumeTailoringTests(unittest.TestCase):
                     resume_path=resume,
                     job_description="Required: Python FastAPI API testing",
                     candidates=(_candidate(),),
-                    evidence=[approved, git, metric],
+                    evidence=[approved, git, metric, scope],
                     reports=(
                         {
                             "project_id": "api-platform",
-                            "evidence_ids": ["ev_git", "ev_metric"],
+                            "evidence_ids": ["ev_git", "ev_metric", "ev_scope"],
                             "repositories": [
                                 {
                                     "repository": "example/api-platform",
@@ -228,6 +268,13 @@ class AIResumeTailoringTests(unittest.TestCase):
         self.assertIn("Validated", prompt["allowed_lead_verbs"])
         self.assertEqual(prompt["projects"][0]["relevance_rank"], 1)
         self.assertTrue(prompt["projects"][0]["git_engineering_signals"][0]["has_test_changes"])
+        self.assertFalse(
+            prompt["projects"][0]["git_engineering_signals"][0][
+                "activity_metrics_allowed_in_resume"
+            ]
+        )
+        self.assertNotIn("implementation files", json.dumps(prompt))
+        self.assertIn("verified_git_functional_scope_evidence", json.dumps(prompt))
         self.assertEqual(prompt["master_project_quantitative_coverage_percent"], 100)
         self.assertEqual(prompt["required_quantified_bullets_per_project"], 2)
 
@@ -326,7 +373,33 @@ class AIResumeTailoringTests(unittest.TestCase):
                 }
             )
 
-    def test_accepts_verified_git_scale_metrics_for_master_parity(self) -> None:
+    def test_rejects_legacy_git_activity_metrics_for_master_parity(self) -> None:
+        with self.assertRaisesRegex(ValueError, "forbidden Git-accounting phrase"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Engineered a Python API across 71 implementation files."
+                                    ),
+                                    "evidence_ids": ["ev_metric", "ev_api"],
+                                },
+                                {
+                                    "text": (
+                                        "Validated authenticated requests across 2 test files."
+                                    ),
+                                    "evidence_ids": ["ev_metric", "ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                }
+            )
+
+    def test_accepts_git_verified_functional_scope_with_an_approved_outcome(self) -> None:
         result, _ = self._draft(
             {
                 "projects": [
@@ -334,14 +407,12 @@ class AIResumeTailoringTests(unittest.TestCase):
                         "project_id": "api-platform",
                         "bullets": [
                             {
-                                "text": "Engineered a Python API across 3 implementation files.",
-                                "evidence_ids": ["ev_metric", "ev_api"],
+                                "text": "Engineered a Python API serving 100 users safely.",
+                                "evidence_ids": ["ev_api"],
                             },
                             {
-                                "text": (
-                                    "Validated authenticated request handling across 2 test files."
-                                ),
-                                "evidence_ids": ["ev_metric", "ev_api"],
+                                "text": "Validated request handling with 5 attributed tests.",
+                                "evidence_ids": ["ev_scope", "ev_git"],
                             },
                         ],
                     }
@@ -350,11 +421,8 @@ class AIResumeTailoringTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            resume_item_texts(result.candidates[0].latex),
-            (
-                "Engineered a Python API across 3 implementation files.",
-                "Validated authenticated request handling across 2 test files.",
-            ),
+            resume_item_texts(result.candidates[0].latex)[1],
+            "Validated request handling with 5 attributed tests.",
         )
 
     def test_adds_the_project_evidence_id_that_supports_a_number(self) -> None:

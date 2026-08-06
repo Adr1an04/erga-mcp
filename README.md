@@ -232,16 +232,20 @@ The recommended `career` MCP profile includes:
 | `prepare_job_workspace` | Create a bounded local job package from a supplied URL |
 | `create_tailored_resume` | Create a proposal, diff, and evidence report |
 | `validate_tailored_resume` | Run the configured local LaTeX compiler |
-| `propose_project_metrics` | Analyze one explicit local Git worktree for author-attributed scale facts and review-required draft metrics; excludes generated assets, dependencies, locks, snapshots, docs, and data, and never invents impact, coverage, or performance |
+| `propose_project_metrics` | Analyze one explicit local Git worktree for author-attributed engineering context and deterministic test-case, HTTP-route, and CLI-command scope; excludes generated assets, dependencies, locks, snapshots, docs, and data, and never promotes commit, file, language, or line counts into résumé claims |
 
 Private archive export, full writing-style source context, mail integration, Hermes monitors, and
 persistent Git scanning are excluded from `career`. `propose_project_metrics` is deliberately
 included because it reads only the explicitly supplied worktree, requires an author email, and never
-writes evidence or a résumé. Its results are marked `draft_scale_evidence` and require user
-confirmation. During job intake, the same verified facts may supply quantitative scale to the
-reviewable local draft. The validator preserves the master résumé's quantitative bullet coverage;
-if supported metrics cannot meet that bar, Erga keeps the master project copy instead. Select
-another documented profile only when the connected host should receive additional capability.
+writes evidence or a résumé. Results remain `engineering_context_only` unless deterministic
+functional scope is available; every proposal requires review. During job intake, Git verifies
+attributable implementation details and can provide scope from authored test cases, HTTP routes,
+and CLI commands. Activity
+counts cannot satisfy résumé-quality quantitative coverage. Outcome, adoption, performance,
+reliability, shipped-feature, and organizational-scope metrics must still be supported by approved
+project evidence. If the combined evidence cannot meet the master résumé's quality bar, Erga keeps
+stronger master project copy instead. Select another documented profile only when the connected
+host should receive additional capability.
 
 With the optional `erga-mcp-router` Hermes plugin enabled, `/erga-tracker` renders every configured
 cycle from that same local Obsidian tracker directly in the current chat. Discord receives compact

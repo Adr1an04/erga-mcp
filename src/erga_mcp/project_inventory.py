@@ -203,7 +203,12 @@ _INTERNAL_RESEARCH_PATTERNS = (
     ),
     (
         "commit/file accounting instead of an outcome",
-        re.compile(r"\b\d+\s+(?:git\s+)?commits?\s+and\s+\d+\s+files?\b", re.I),
+        re.compile(
+            r"(?:\b\d[\d,.]*\+?\s+(?:(?:implementation|source|test|code)\s+)?"
+            r"(?:files?|commits?|lines?|languages?)\b|"
+            r"\b\d[\d,.]*%\s+of\s+(?:code/)?test\s+files?\b)",
+            re.I,
+        ),
     ),
     (
         "code-churn wording",
@@ -586,6 +591,7 @@ def select_projects(
     *,
     max_projects: int,
     minimum_bullets: int = 1,
+    require_resume_quality: bool = True,
 ) -> tuple[ProjectCandidate, ...]:
     """Select role-relevant, sufficiently substantial candidates deterministically."""
     if max_projects < 1:
@@ -601,7 +607,10 @@ def select_projects(
             if len(candidate.bullet_evidence_ids) >= minimum_bullets
         )
     )
-    eligible = tuple(candidate for candidate in eligible if not project_quality_issues(candidate))
+    if require_resume_quality:
+        eligible = tuple(
+            candidate for candidate in eligible if not project_quality_issues(candidate)
+        )
     remaining = {
         candidate.id: (
             candidate,

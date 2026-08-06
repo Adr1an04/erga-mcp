@@ -319,10 +319,38 @@ class ProjectInventoryTests(unittest.TestCase):
         )
 
         selected = select_projects((raw_research, polished), "Required: Python API", max_projects=2)
+        research_selected = select_projects(
+            (raw_research, polished),
+            "Required: Python API",
+            max_projects=2,
+            require_resume_quality=False,
+        )
 
         self.assertTrue(project_quality_issues(raw_research))
         self.assertEqual(project_quality_issues(polished), ())
         self.assertEqual([candidate.id for candidate in selected], ["polished"])
+        self.assertEqual(
+            {candidate.id for candidate in research_selected}, {"raw-research", "polished"}
+        )
+
+    def test_project_quality_rejects_standalone_file_count_metrics(self) -> None:
+        candidate = ProjectCandidate(
+            id="activity-count",
+            title="Activity Count",
+            latex=(
+                r"\resumeProjectHeading{\textbf{Activity Count}}{}\n"
+                r"\resumeItemListStart\n"
+                r"\resumeItem{Engineered a diagnostic CLI across 71 implementation files.}\n"
+                r"\resumeItemListEnd"
+            ),
+            evidence_ids=("ev_activity",),
+            bullet_evidence_ids=(("ev_activity",),),
+            tags=("cli",),
+        )
+
+        self.assertIn(
+            "commit/file accounting instead of an outcome", project_quality_issues(candidate)
+        )
 
     def test_inventory_rejects_unapproved_or_missing_evidence(self) -> None:
         evidence = [

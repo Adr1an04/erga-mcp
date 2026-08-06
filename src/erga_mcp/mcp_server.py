@@ -1878,17 +1878,18 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         title="Analyze attributable Git-backed project scope",
         description=(
             "Inspect a single explicit local Git worktree and return review-only, "
-            "author-attributed scale facts and draft metric candidates from recognized source and "
-            "test files. Generated assets, dependencies, locks, snapshots, docs, and data are "
-            "excluded. Candidates require confirmation and never estimate impact, coverage, or "
-            "performance."
+            "author-attributed engineering context plus deterministic test-case, HTTP-route, "
+            "and CLI-command scope from recognized source and test files. "
+            "Generated assets, dependencies, locks, snapshots, docs, and data are excluded. "
+            "Commit, file, language, and line counts remain internal review facts and are never "
+            "promoted into resume metrics or mistaken for product impact."
         ),
         annotations=_READ_ONLY,
     )
     def propose_project_metrics(
         repo_path: str, author_email: str, commit_limit: int = 200
     ) -> dict[str, object]:
-        """Return confirmation-required Git scope and draft metrics for one repository."""
+        """Return confirmation-required Git scope for one repository, not resume claims."""
         proposal = propose_git_project_metrics(
             Path(repo_path), author_email=author_email, commit_limit=commit_limit
         )

@@ -176,11 +176,12 @@ class GitProjectEnrichmentTests(unittest.TestCase):
                         test_files_changed=1,
                         languages=("Python",),
                         resume_metric_candidates=(
-                            "Attributed work touched 1 implementation file and 1 test file.",
-                            "Attributed source and test changes covered 1 detected language: "
-                            "Python.",
+                            "Verified 5 distinct attributed test cases present in the current "
+                            "repository.",
+                            "Verified 3 distinct attributed HTTP routes present in the current "
+                            "repository.",
                         ),
-                        resume_use="draft_scale_evidence",
+                        resume_use="verified_functional_scope",
                         requires_user_confirmation=True,
                     ),
                 ) as summarize_metrics,
@@ -206,22 +207,26 @@ class GitProjectEnrichmentTests(unittest.TestCase):
         bullet_evidence = [
             item for item in result.evidence if item.source_ref.startswith("git-derived:")
         ]
-        metric_evidence = [
-            item for item in result.evidence if item.source_ref.startswith("git-metric:")
+        scope_evidence = [
+            item for item in result.evidence if item.source_ref.startswith("git-scope:")
         ]
         self.assertTrue(all(105 <= len(item.text) <= 116 for item in bullet_evidence))
         self.assertEqual(len(bullet_evidence), 1)
-        self.assertEqual(len(metric_evidence), 1)
+        self.assertEqual(len(scope_evidence), 2)
+        self.assertFalse(any(item.source_ref.startswith("git-metric:") for item in result.evidence))
         self.assertTrue(all(item.approved for item in result.evidence))
-        self.assertIn("1 implementation file", metric_evidence[0].text)
         self.assertEqual(result.reports[0]["authored_commits"], 1)
         repository_report = result.reports[0]["repositories"][0]
         self.assertTrue(repository_report["metric_context"]["has_test_changes"])
         self.assertEqual(repository_report["metric_context"]["languages"], ["Python"])
-        self.assertEqual(repository_report["metric_context"]["evidence_id"], metric_evidence[0].id)
+        self.assertFalse(repository_report["metric_context"]["activity_metrics_allowed_in_resume"])
+        self.assertEqual(
+            repository_report["metric_context"]["functional_scope_evidence_ids"],
+            [item.id for item in scope_evidence],
+        )
         self.assertEqual(summarize_metrics.call_args.kwargs["attributed_commit_shas"], {"a" * 40})
         self.assertEqual(result.reports[0]["resume_bullets_source"], "approved_catalogue")
-        self.assertEqual(len(result.reports[0]["evidence_ids"]), 2)
+        self.assertEqual(len(result.reports[0]["evidence_ids"]), 3)
         self.assertEqual(result.warnings, ())
 
     def test_missing_repository_mapping_retains_approved_catalogue_bullet(self) -> None:

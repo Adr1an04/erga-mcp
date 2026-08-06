@@ -169,28 +169,29 @@ def _approved_bullet_evidence(
     return store.add_evidence(source_ref=source_ref, text=bullet.text, approved=True)
 
 
-def _approved_metric_evidence(
+def _approved_functional_scope_evidence(
     *,
     store: ErgaStore,
     project_id: str,
     repository: str,
     proposal: ProjectMetricProposal,
-) -> Evidence:
-    """Persist exact Git-derived scale facts with stable review provenance."""
-    text = " ".join(proposal.resume_metric_candidates)
-    digest = hashlib.sha256(
-        "\n".join((repository, proposal.attribution, text)).encode("utf-8")
-    ).hexdigest()[:20]
-    source_ref = f"git-metric:{project_id}@{digest}"
-    existing = next(
-        (item for item in store.list_evidence() if item.source_ref == source_ref),
-        None,
-    )
-    if existing is not None:
-        if not existing.approved or existing.text != text:
-            raise ValueError("stored Git metric evidence does not match its provenance hash")
-        return existing
-    return store.add_evidence(source_ref=source_ref, text=text, approved=True)
+) -> list[Evidence]:
+    """Persist deterministic tests/routes/commands as résumé-eligible scope evidence."""
+    approved: list[Evidence] = []
+    existing_by_ref = {item.source_ref: item for item in store.list_evidence()}
+    for text in proposal.resume_metric_candidates:
+        digest = hashlib.sha256(
+            "\n".join((repository, proposal.attribution, text)).encode("utf-8")
+        ).hexdigest()[:20]
+        source_ref = f"git-scope:{project_id}@{digest}"
+        existing = existing_by_ref.get(source_ref)
+        if existing is not None:
+            if not existing.approved or existing.text != text:
+                raise ValueError("stored Git functional-scope evidence does not match provenance")
+            approved.append(existing)
+            continue
+        approved.append(store.add_evidence(source_ref=source_ref, text=text, approved=True))
+    return approved
 
 
 def enrich_ranked_projects_from_git(
@@ -218,6 +219,7 @@ def enrich_ranked_projects_from_git(
             job_description,
             max_projects=max(1, len(resume_candidates)),
             minimum_bullets=bullets_per_project,
+            require_resume_quality=False,
         )
     else:
         candidates_by_id = {candidate.id: candidate for candidate in resume_candidates}
@@ -271,7 +273,7 @@ def enrich_ranked_projects_from_git(
         project_bullets: list[GitResearchBullet] = []
         project_commits: set[str] = set()
         project_files: set[str] = set()
-        project_metric_evidence: list[Evidence] = []
+        project_scope_evidence: list[Evidence] = []
         repository_reports: list[dict[str, object]] = []
         try:
             if login is None:
@@ -304,16 +306,17 @@ def enrich_ranked_projects_from_git(
                         "status": "verified",
                         **project_metric_model_context(metrics),
                     }
-                    if metrics.resume_metric_candidates:
-                        metric_evidence = _approved_metric_evidence(
-                            store=store,
-                            project_id=candidate.id,
-                            repository=repository,
-                            proposal=metrics,
-                        )
-                        project_metric_evidence.append(metric_evidence)
-                        derived_evidence.append(metric_evidence)
-                        metric_context["evidence_id"] = metric_evidence.id
+                    scope_evidence = _approved_functional_scope_evidence(
+                        store=store,
+                        project_id=candidate.id,
+                        repository=repository,
+                        proposal=metrics,
+                    )
+                    project_scope_evidence.extend(scope_evidence)
+                    derived_evidence.extend(scope_evidence)
+                    metric_context["functional_scope_evidence_ids"] = [
+                        item.id for item in scope_evidence
+                    ]
                 summary, bullets = synthesize_diff_research(
                     str(worktree),
                     observations,
@@ -391,7 +394,7 @@ def enrich_ranked_projects_from_git(
             for bullet in ranked_bullets
         ]
         derived_evidence.extend(bullet_evidence)
-        report_evidence = [*bullet_evidence, *project_metric_evidence]
+        report_evidence = [*bullet_evidence, *project_scope_evidence]
         reports.append(
             {
                 "project_id": candidate.id,
