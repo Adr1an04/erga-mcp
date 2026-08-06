@@ -382,6 +382,39 @@ class McpServerTests(unittest.TestCase):
         self.assertNotIn("summary", draft)
         self.assertNotIn("bullet_candidates", draft)
 
+    def test_project_metric_tool_returns_review_only_attributed_candidates(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            repo = root / "project"
+            repo.mkdir()
+            for arguments in (
+                ("init",),
+                ("config", "user.email", "adrian@example.test"),
+                ("config", "user.name", "Adrian"),
+            ):
+                subprocess.run(["git", *arguments], cwd=repo, check=True, capture_output=True)
+            source = repo / "src" / "app.py"
+            source.parent.mkdir(parents=True)
+            source.write_text("def run():\n    return True\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "commit", "-m", "add app"], cwd=repo, check=True, capture_output=True
+            )
+
+            result: Any = asyncio.run(
+                build_server(config_path).call_tool(
+                    "propose_project_metrics",
+                    {"repo_path": str(repo), "author_email": "adrian@example.test"},
+                )
+            )
+            payload = cast(dict[str, Any], result.structured_content)
+
+        self.assertEqual(payload["commit_count"], 1)
+        self.assertTrue(payload["requires_user_confirmation"])
+        self.assertEqual(len(payload["resume_metric_candidates"]), 3)
+
     def test_git_research_tool_requires_existing_explicit_roots(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
@@ -487,6 +520,7 @@ class McpServerTests(unittest.TestCase):
                     "resume_source_context",
                     "list_mail_events",
                     "token_usage",
+                    "propose_project_metrics",
                     "record_token_usage",
                     "sync_recruiting_mail",
                     "intake_job_url",

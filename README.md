@@ -207,10 +207,13 @@ The recommended `career` MCP profile includes:
 | `prepare_job_workspace` | Create a bounded local job package from a supplied URL |
 | `create_tailored_resume` | Create a proposal, diff, and evidence report |
 | `validate_tailored_resume` | Run the configured local LaTeX compiler |
+| `propose_project_metrics` | Analyze one explicit local Git worktree for author-attributed, review-only project metrics; never claims impact or coverage |
 
-Private archive export, full writing-style source context, mail integration, Hermes monitors, Git
-scanning, and token recording are excluded from `career`. Select another documented profile only
-when the connected host should receive that additional capability.
+Private archive export, full writing-style source context, mail integration, Hermes monitors, and
+persistent Git scanning are excluded from `career`. `propose_project_metrics` is deliberately
+included because it reads only the explicitly supplied worktree, requires an author email, and never
+writes evidence or a résumé. Select another documented profile only when the connected host should
+receive additional capability.
 
 With the optional `erga-mcp-router` Hermes plugin enabled, `/erga-tracker` renders that same local Obsidian tracker directly in the current chat, and `/erga-mail-sync` runs a bounded configured-mail sync. Both return compact Markdown that remains readable across Discord, Signal, Telegram, Slack, and other Hermes platforms. The tracker does not write to the vault; the mail command stores metadata-only events and does not expose message bodies, previews, or credentials.
 

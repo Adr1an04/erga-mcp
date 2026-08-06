@@ -65,6 +65,7 @@ from .job_research import (
 from .job_workspace import create_job_workspace
 from .models import Evidence
 from .project_inventory import ProjectCandidate, load_project_inventory, select_projects
+from .project_metrics import propose_git_project_metrics
 from .resume import (
     create_section_resume_proposal,
     normalize_cycle,
@@ -117,6 +118,7 @@ _READ_TOOL_NAMES = frozenset(
         "token_usage",
     }
 )
+_LOCAL_ANALYSIS_TOOL_NAMES = frozenset({"propose_project_metrics"})
 _NETWORK_READ_TOOL_NAMES = frozenset({"scrape_public_page", "extract_public_page"})
 _NETWORK_WRITE_TOOL_NAMES = frozenset({"discover_job_research"})
 _LOCAL_WRITE_TOOL_NAMES = frozenset(
@@ -163,6 +165,7 @@ _CAREER_TOOL_NAMES = frozenset(
         "create_tailored_resume",
         "validate_tailored_resume",
         "create_cover_letter",
+        "propose_project_metrics",
     }
 )
 _CAREER_PRIVATE_TOOL_NAMES = _CAREER_TOOL_NAMES | frozenset(
@@ -171,6 +174,7 @@ _CAREER_PRIVATE_TOOL_NAMES = _CAREER_TOOL_NAMES | frozenset(
 _ALL_TOOL_NAMES = frozenset(
     {
         *_READ_TOOL_NAMES,
+        *_LOCAL_ANALYSIS_TOOL_NAMES,
         *_NETWORK_READ_TOOL_NAMES,
         *_NETWORK_WRITE_TOOL_NAMES,
         *_LOCAL_WRITE_TOOL_NAMES,
@@ -1200,6 +1204,25 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             dict[str, object],
             store.token_usage_summary(application_id=normalized or None),
         )
+
+    @profile_tool(
+        "propose_project_metrics",
+        title="Propose attributable Git-backed project metrics",
+        description=(
+            "Inspect a single explicit local Git worktree and propose review-only, "
+            "author-attributed project metrics. It never estimates business impact, test "
+            "coverage, or performance; it never writes evidence or changes a resume."
+        ),
+        annotations=_READ_ONLY,
+    )
+    def propose_project_metrics(
+        repo_path: str, author_email: str, commit_limit: int = 200
+    ) -> dict[str, object]:
+        """Return user-confirmation-required Git metrics for one explicit repository."""
+        proposal = propose_git_project_metrics(
+            Path(repo_path), author_email=author_email, commit_limit=commit_limit
+        )
+        return cast(dict[str, object], _json_value(asdict(proposal)))
 
     @profile_tool(
         "research_git_worktrees",

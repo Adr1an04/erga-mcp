@@ -40,6 +40,7 @@ _CAREER_TOOLS = {
     "create_tailored_resume",
     "validate_tailored_resume",
     "create_cover_letter",
+    "propose_project_metrics",
 }
 
 
