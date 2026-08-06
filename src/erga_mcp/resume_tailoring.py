@@ -95,7 +95,7 @@ _RELEVANCE_CLUSTERS = (
     frozenset({"pytorch", "tensorflow", "machine", "ml", "model", "inference"}),
     frozenset({"test", "testing", "pytest", "quality", "reliability"}),
 )
-TAILORING_VERSION = 6
+TAILORING_VERSION = 7
 
 
 @dataclass(frozen=True)
