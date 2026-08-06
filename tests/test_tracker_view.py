@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 
 from erga_mcp.tracker_view import (
     filter_application_tracker,
+    paginate_application_tracker,
     read_application_tracker,
     render_tracker_message,
 )
@@ -37,10 +38,14 @@ class TrackerViewTests(unittest.TestCase):
         self.assertIn("Erga application tracker", message)
         self.assertIn("2 roles", message)
         self.assertIn("**Fall 2026**", message)
-        self.assertIn("🟡 **Cloudflare** - Software Engineer Intern", message)
-        self.assertIn("📬 **Google** - Software Engineering Intern", message)
+        self.assertIn(
+            "🟡 **[Cloudflare](https://example.test)** - Software Engineer Intern", message
+        )
+        self.assertIn(
+            "📬 **[Google](https://example.test)** - Software Engineering Intern", message
+        )
         self.assertIn("Next: Review résumé", message)
-        self.assertNotIn("https://example.test", message)
+        self.assertIn("**[Cloudflare](https://example.test)**", message)
 
     def test_uses_distinct_oa_interview_and_offer_icons(self) -> None:
         with TemporaryDirectory() as directory:
@@ -79,9 +84,11 @@ class TrackerViewTests(unittest.TestCase):
             matches = filter_application_tracker(
                 read_application_tracker(tracker_dir), "cloudflare"
             )
+            all_entries = filter_application_tracker(read_application_tracker(tracker_dir), "all")
             message = render_tracker_message(matches, query="cloudflare")
 
         self.assertEqual([entry.company for entry in matches.entries], ["Cloudflare"])
+        self.assertEqual(len(all_entries.entries), 2)
         self.assertIn("Search: cloudflare · 1 match", message)
         self.assertNotIn("Snowflake", message)
 
@@ -117,9 +124,73 @@ class TrackerViewTests(unittest.TestCase):
             message = render_tracker_message(snapshot, max_entries=20)
 
         self.assertEqual(len(snapshot.entries), 25)
-        self.assertIn("Showing 20 of 25 roles.", message)
+        self.assertIn("Page 1 of 2 · showing 1-20 of 25 roles.", message)
         self.assertIn("Company 19", message)
         self.assertNotIn("Company 20", message)
+
+        second_page = paginate_application_tracker(snapshot, page=2, page_size=20)
+        second_message = render_tracker_message(snapshot, page=2, page_size=20)
+        self.assertEqual(second_page.page, 2)
+        self.assertEqual(len(second_page.entries), 5)
+        self.assertIn("Company 20", second_message)
+        self.assertNotIn("Company 19", second_message)
+
+    def test_groups_cycles_once_and_combines_assessment_status_aliases(self) -> None:
+        with TemporaryDirectory() as directory:
+            tracker_dir = Path(directory)
+            header = (
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            )
+            (tracker_dir / "Fall 2026 Application Tracker.md").write_text(
+                header
+                + "| Alpha | Engineer | Remote | Source | OA | | Prepare | Note |\n"
+                + "| Beta | Engineer | Remote | Source | Applied | | Wait | Note |\n",
+                encoding="utf-8",
+            )
+            (tracker_dir / "Summer 2027 Applications.md").write_text(
+                header
+                + "| Gamma | Engineer | Remote | Source | Online assessment | | Prepare | Note |\n"
+                + "| Delta | Engineer | Remote | Source | Researching | | Review | Note |\n",
+                encoding="utf-8",
+            )
+
+            snapshot = read_application_tracker(tracker_dir)
+            message = render_tracker_message(snapshot, page_size=10)
+
+        self.assertEqual(snapshot.summary["assessment"], 2)
+        self.assertNotIn("oa", snapshot.summary)
+        self.assertEqual(message.count("**Summer 2027**"), 1)
+        self.assertEqual(message.count("**Fall 2026**"), 1)
+        self.assertLess(message.index("**Summer 2027**"), message.index("**Fall 2026**"))
+
+    def test_coalesces_one_unambiguous_email_confirmation_with_its_sourced_job(self) -> None:
+        with TemporaryDirectory() as directory:
+            tracker_dir = Path(directory)
+            header = (
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            )
+            (tracker_dir / "Fall 2026 Application Tracker.md").write_text(
+                header + "| Example | Application confirmed by email | | | Rejected | "
+                "2026-08-01 | Closed | Note |\n",
+                encoding="utf-8",
+            )
+            (tracker_dir / "Unscheduled Application Tracker.md").write_text(
+                header + "| Example | Software Engineer Intern | Remote | "
+                "[Job](https://example.test/job) | Applied | | Wait | Note |\n",
+                encoding="utf-8",
+            )
+
+            snapshot = read_application_tracker(tracker_dir)
+
+        self.assertEqual(len(snapshot.entries), 1)
+        self.assertEqual(snapshot.entries[0].role, "Software Engineer Intern")
+        self.assertEqual(snapshot.entries[0].source_url, "https://example.test/job")
+        self.assertEqual(snapshot.entries[0].status, "Rejected")
+        self.assertEqual(snapshot.entries[0].applied, "2026-08-01")
 
 
 if __name__ == "__main__":

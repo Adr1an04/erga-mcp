@@ -237,7 +237,14 @@ Private archive export, full writing-style source context, mail integration, Her
 scanning, and token recording are excluded from `career`. Select another documented profile only
 when the connected host should receive that additional capability.
 
-With the optional `erga-mcp-router` Hermes plugin enabled, `/erga-tracker` renders that same local Obsidian tracker directly in the current chat, and `/erga-mail-sync` runs a bounded configured-mail sync. Both return compact Markdown that remains readable across Discord, Signal, Telegram, Slack, and other Hermes platforms. The tracker does not write to the vault; the mail command stores metadata-only events and does not expose message bodies, previews, or credentials.
+With the optional `erga-mcp-router` Hermes plugin enabled, `/erga-tracker` renders every configured
+cycle from that same local Obsidian tracker directly in the current chat. Discord receives compact
+Previous/Next pagination; `/erga-tracker all page 2` and searches such as
+`/erga-tracker applied page 2` work on text-only platforms too. Each available company links to its
+saved posting. `/erga-mail-sync` runs a bounded configured-mail sync. Both commands return compact
+Markdown that remains readable across Discord, Signal, Telegram, Slack, and other Hermes platforms.
+The tracker does not write to the vault; the mail command stores metadata-only events and does not
+expose message bodies, previews, or credentials.
 
 The full list of permissions and safety limits is in [`docs/security.md`](docs/security.md).
 

@@ -94,6 +94,7 @@ from .resume_tailoring import (
 from .store import ErgaStore, SQLiteStoreFactory, StoreFactory
 from .tracker_view import (
     filter_application_tracker,
+    paginate_application_tracker,
     read_application_tracker,
     render_tracker_message,
 )
@@ -226,6 +227,7 @@ _SAFE_PACKAGE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _TRACKING_QUERY_KEYS = frozenset(
     {
         "gh_src",
+        "fbclid",
         "lever-source",
         "ref",
         "referrer",
@@ -1765,8 +1767,12 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         )
 
     @profile_tool("application_tracker", annotations=_READ_ONLY)
-    def application_tracker(query: str = "") -> dict[str, object]:
-        """Render or search the optional local Obsidian tracker without modifying it."""
+    def application_tracker(
+        query: str = "",
+        page: Annotated[StrictInt, Field(ge=1)] = 1,
+        page_size: Annotated[StrictInt, Field(ge=1, le=10)] = 6,
+    ) -> dict[str, object]:
+        """Render or search every local tracker cycle with stable pagination."""
         if not config.tracker.enabled or config.tracker.tracker_dir is None:
             return {
                 "enabled": False,
@@ -1777,11 +1783,14 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                     "Obsidian application tracking is not configured for this Erga workspace."
                 ),
             }
+        normalized_query = "" if query.strip().casefold() in {"all", "*"} else query.strip()
         snapshot = filter_application_tracker(
-            read_application_tracker(config.tracker.tracker_dir), query
+            read_application_tracker(config.tracker.tracker_dir), normalized_query
         )
+        pagination = paginate_application_tracker(snapshot, page=page, page_size=page_size)
+        applications = store.list_applications()
         summaries_by_identity: dict[str, list[dict[str, int]]] = {}
-        for application in store.list_applications():
+        for application in applications:
             summaries_by_identity.setdefault(_job_identity(application.source_url), []).append(
                 store.token_usage_summary(application_id=application.id)
             )
@@ -1789,19 +1798,29 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             entry.source_url: _combine_token_summaries(
                 summaries_by_identity.get(_job_identity(entry.source_url), [])
             )
-            for entry in snapshot.entries
+            for entry in pagination.entries
             if entry.source_url
         }
         return {
             "enabled": True,
-            "entries": [asdict(entry) for entry in snapshot.entries],
+            "entries": [asdict(entry) for entry in pagination.entries],
             "summary": snapshot.summary,
+            "total_entries": pagination.total,
+            "page": pagination.page,
+            "page_count": pagination.page_count,
+            "page_size": pagination.page_size,
+            "has_previous": pagination.page > 1,
+            "has_next": pagination.page < pagination.page_count,
+            "cycles": sorted({entry.cycle for entry in snapshot.entries}),
+            "local_application_records": len(applications),
             "token_usage": store.token_usage_summary(),
             "message": render_tracker_message(
                 snapshot,
-                max_entries=12,
-                query=query,
+                page=pagination.page,
+                page_size=pagination.page_size,
+                query=normalized_query,
                 token_usage_by_source_url=token_usage_by_source_url,
+                local_application_count=len(applications),
             ),
         }
 

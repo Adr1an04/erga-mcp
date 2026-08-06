@@ -30,6 +30,7 @@ _DEFAULT_GIT_RESEARCH_ROOT_ENV = "ERGA_MCP_GIT_RESEARCH_ROOT"
 _DEFAULT_WEB_SEARCH_TOOL_NAME = "web_search"
 _DEFAULT_CRON_TOOL_NAME = "cronjob"
 _DEFAULT_TOKEN_TOOL_NAME = "mcp__erga_mcp__record_token_usage"
+_TRACKER_PAGE_SIZE = 6
 _MONITOR_SETTINGS_NAME = "erga-mcp-monitor.json"
 _MONITOR_MAIL_SCRIPT_NAME = "erga-mcp-mail.py"
 _MONITOR_HISTORY_SCRIPT_NAME = "erga-mcp-history.py"
@@ -899,10 +900,12 @@ def register(
             }
         )
 
-    def tracker_command(raw_args: str) -> str:
-        query = raw_args.strip()
+    def tracker_response(query: str, page: int) -> object:
         try:
-            tracker = ctx.dispatch_tool(tracker_tool, {"query": query})
+            tracker = ctx.dispatch_tool(
+                tracker_tool,
+                {"query": query, "page": page, "page_size": _TRACKER_PAGE_SIZE},
+            )
         except Exception as exc:
             return f"Erga tracker failed: {exc}"
         error_text = _dispatch_error_text(tracker)
@@ -920,7 +923,97 @@ def register(
         )
         if payload is None:
             return "Erga tracker failed: the tracker tool returned no display message."
-        return str(payload["message"])
+        message = str(payload["message"])
+        resolved_page = payload.get("page")
+        page_count = payload.get("page_count")
+        if (
+            not supports_discord_buttons
+            or not isinstance(resolved_page, int)
+            or isinstance(resolved_page, bool)
+            or not isinstance(page_count, int)
+            or isinstance(page_count, bool)
+            or page_count <= 1
+        ):
+            return message
+        assert DiscordButton is not None
+        assert DiscordCommandResponse is not None
+
+        def button_payload(target_page: int) -> str:
+            return json.dumps(
+                {"query": query[:180], "page": target_page},
+                separators=(",", ":"),
+            )
+
+        buttons = []
+        if resolved_page > 1:
+            buttons.append(
+                DiscordButton(
+                    label="Previous",
+                    action_id="erga.tracker.page",
+                    payload=button_payload(resolved_page - 1),
+                )
+            )
+        buttons.append(
+            DiscordButton(
+                label=f"Page {resolved_page}/{page_count}",
+                action_id="erga.tracker.page",
+                payload=button_payload(resolved_page),
+                disabled=True,
+            )
+        )
+        if resolved_page < page_count:
+            buttons.append(
+                DiscordButton(
+                    label="Next",
+                    action_id="erga.tracker.page",
+                    payload=button_payload(resolved_page + 1),
+                )
+            )
+        return DiscordCommandResponse(text=message, buttons=tuple(buttons))
+
+    def tracker_command(raw_args: str) -> object:
+        arguments = raw_args.strip()
+        query = arguments
+        page = 1
+        if arguments.casefold() in {"", "all", "*"}:
+            query = ""
+        elif page_only := re.fullmatch(
+            r"(?:(?:all|\*)\s+)?(?:page\s+)?(?P<page>\d+)",
+            arguments,
+            re.IGNORECASE,
+        ):
+            query = ""
+            page = int(page_only.group("page"))
+        elif query_page := re.fullmatch(
+            r"(?P<query>.+?)\s+page\s+(?P<page>\d+)",
+            arguments,
+            re.IGNORECASE,
+        ):
+            query = query_page.group("query").strip()
+            page = int(query_page.group("page"))
+            if query.casefold() in {"all", "*"}:
+                query = ""
+        if page < 1:
+            return "Usage: /erga-tracker [all|company|role|status|cycle] [page N]"
+        return tracker_response(query, page)
+
+    def tracker_page_button(interaction: Any) -> object:
+        try:
+            payload = json.loads(interaction.payload)
+        except (AttributeError, TypeError, json.JSONDecodeError):
+            return "Erga tracker failed: invalid pagination state. Run /erga-tracker again."
+        if not isinstance(payload, dict):
+            return "Erga tracker failed: invalid pagination state. Run /erga-tracker again."
+        query = payload.get("query")
+        page = payload.get("page")
+        if (
+            not isinstance(query, str)
+            or not isinstance(page, int)
+            or isinstance(page, bool)
+            or page < 1
+        ):
+            return "Erga tracker failed: invalid pagination state. Run /erga-tracker again."
+        return tracker_response(query, page)
 
     def discovery_research_command(raw_args: str) -> str:
         query = raw_args.strip()
@@ -1138,6 +1231,7 @@ def register(
         return review_text
 
     if supports_discord_buttons:
+        ctx.register_discord_button_handler("erga.tracker.page", tracker_page_button)
         for action in ("back", "skip", "save", "next"):
             ctx.register_discord_button_handler(
                 f"erga.review.{action}",
@@ -1181,9 +1275,9 @@ def register(
         "erga-tracker",
         handler=tracker_command,
         description=(
-            "Show or search the local Obsidian application tracker in a compact message card."
+            "Browse or search every local application tracker cycle with Discord pagination."
         ),
-        args_hint="[company, role, status, or cycle]",
+        args_hint="[all|company|role|status|cycle] [page N]",
     )
     ctx.register_command(
         "erga-research",

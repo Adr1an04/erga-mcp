@@ -39,6 +39,56 @@ from erga_mcp.store import ErgaStore
 
 
 class McpServerTests(unittest.TestCase):
+    def test_application_tracker_returns_complete_paginated_cross_cycle_results(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            tracker_dir = root / "trackers"
+            tracker_dir.mkdir()
+            header = (
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            )
+            (tracker_dir / "Fall 2026 Application Tracker.md").write_text(
+                header + "| Alpha | Engineer | Remote | [Job](https://example.test/a) | "
+                "Applied | | Wait | Note |\n"
+                "| Beta | Engineer | Remote | [Job](https://example.test/b) | "
+                "OA | | Test | Note |\n",
+                encoding="utf-8",
+            )
+            (tracker_dir / "Summer 2027 Applications.md").write_text(
+                header + "| Gamma | Engineer | Remote | [Job](https://example.test/c) | "
+                "Draft | | Apply | Note |\n"
+                "| Delta | Engineer | Remote | [Job](https://example.test/d) | "
+                "Researching | | Review | Note |\n"
+                "| Epsilon | Engineer | Remote | [Job](https://example.test/e) | "
+                "Applied | | Wait | Note |\n",
+                encoding="utf-8",
+            )
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace(
+                    'enabled = false\ntracker_dir = ""',
+                    f'enabled = true\ntracker_dir = "{tracker_dir}"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            server = build_server(config_path)
+            tool = server._tool_manager.get_tool("application_tracker")
+
+            result = tool.fn(query="all", page=2, page_size=2)
+
+        self.assertEqual(result["total_entries"], 5)
+        self.assertEqual(result["page"], 2)
+        self.assertEqual(result["page_count"], 3)
+        self.assertTrue(result["has_previous"])
+        self.assertTrue(result["has_next"])
+        self.assertEqual(len(result["entries"]), 2)
+        self.assertEqual(result["summary"]["assessment"], 1)
+        self.assertIn("Page 2 of 3 · showing 3-4 of 5 roles.", result["message"])
+        self.assertNotIn("Search: all", result["message"])
+
     def test_ai_shortlist_ranks_projects_without_rejecting_their_old_bullet_wording(self) -> None:
         def candidate(project_id: str, tags: tuple[str, ...], bullet: str) -> ProjectCandidate:
             return ProjectCandidate(
