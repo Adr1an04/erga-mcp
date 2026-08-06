@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Barrier
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -20,6 +21,7 @@ from erga_mcp.mcp_server import (
     IntakeValidationResult,
     _compile_intake_proposal,
     _metadata_from_url,
+    _require_constraint_valid_proposal,
     build_server,
     build_streamable_http_app,
 )
@@ -28,6 +30,11 @@ from erga_mcp.store import ErgaStore
 
 
 class McpServerTests(unittest.TestCase):
+    def test_constraint_fallback_proposals_are_rejected_before_a_resume_is_compiled(self) -> None:
+        automatic = SimpleNamespace(constraint_violations=("duplicate lead verb 'built'",))
+        with self.assertRaisesRegex(ValueError, "duplicate lead verb 'built'"):
+            _require_constraint_valid_proposal(automatic)
+
     def test_modern_streamable_http_discovery_is_stateless_and_origin_guarded(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"

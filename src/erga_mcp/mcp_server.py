@@ -376,6 +376,15 @@ def _compile_intake_proposal(
     return IntakeValidationResult(returncode=0, pdf=str(output_pdf), page_count=page_count)
 
 
+def _require_constraint_valid_proposal(automatic: object) -> None:
+    """Stop before compilation when deterministic tailoring rejected the proposal."""
+    violations = getattr(automatic, "constraint_violations", ())
+    if violations:
+        raise ValueError(
+            "automatic tailored resume violates hard constraints: " + "; ".join(violations)
+        )
+
+
 def _json_value(value: object) -> object:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -749,6 +758,7 @@ def _upgrade_existing_tailoring(
         project_count=config.resume.project_count,
         require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
     )
+    _require_constraint_valid_proposal(automatic)
     validation = _compile_intake_proposal(
         automatic.proposal.proposed_tex_path,
         latexmk=config.resume.latexmk,
@@ -1608,11 +1618,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 project_candidates=project_candidates,
                 project_count=config.resume.project_count,
             )
-            if automatic.constraint_violations:
-                raise ValueError(
-                    "automatic tailored resume violates hard constraints: "
-                    + "; ".join(automatic.constraint_violations)
-                )
+            _require_constraint_valid_proposal(automatic)
             proposal = automatic.proposal
             validation = _compile_intake_proposal(
                 proposal.proposed_tex_path,
@@ -1926,11 +1932,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             project_count=config.resume.project_count,
             require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
         )
-        if automatic.constraint_violations:
-            raise ValueError(
-                "automatic tailored resume violates hard constraints: "
-                + "; ".join(automatic.constraint_violations)
-            )
+        _require_constraint_valid_proposal(automatic)
         proposal = automatic.proposal
         validation = _compile_intake_proposal(
             proposal.proposed_tex_path,
