@@ -69,7 +69,7 @@ class McpServerTests(unittest.TestCase):
             config_path.write_text(
                 DEFAULT_CONFIG.replace(
                     'enabled = false\ntracker_dir = ""',
-                    f'enabled = true\ntracker_dir = "{tracker_dir}"',
+                    f"enabled = true\ntracker_dir = {json.dumps(str(tracker_dir))}",
                     1,
                 ),
                 encoding="utf-8",
@@ -137,7 +137,10 @@ class McpServerTests(unittest.TestCase):
             resume.write_text("synthetic resume", encoding="utf-8")
             config_path = root / "config.toml"
             config_path.write_text(
-                DEFAULT_CONFIG.replace('template_path = ""', f'template_path = "{resume}"')
+                DEFAULT_CONFIG.replace(
+                    'template_path = ""',
+                    f"template_path = {json.dumps(str(resume))}",
+                )
                 .replace("project_count = 4", "project_count = 1")
                 .replace("bullet_min_chars = 0", "bullet_min_chars = 99")
                 .replace("bullet_target_chars = 0", "bullet_target_chars = 105")
@@ -248,7 +251,10 @@ class McpServerTests(unittest.TestCase):
             )
             config_path = root / "config.toml"
             config_path.write_text(
-                DEFAULT_CONFIG.replace('template_path = ""', f'template_path = "{resume}"')
+                DEFAULT_CONFIG.replace(
+                    'template_path = ""',
+                    f"template_path = {json.dumps(str(resume))}",
+                )
                 .replace("editable_sections = []", 'editable_sections = ["projects"]')
                 .replace("bullet_min_chars = 0", "bullet_min_chars = 1")
                 .replace("bullet_target_chars = 0", "bullet_target_chars = 60")
