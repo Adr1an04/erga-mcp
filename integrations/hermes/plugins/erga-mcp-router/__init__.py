@@ -788,8 +788,9 @@ def register(
                 "Report the package, research note, local application record, Obsidian tracker "
                 "notes/cycles, secondary research status, whether deterministic tailoring made a "
                 "meaningful change and which sections changed; list selected projects and their "
-                "matched role terms as the deterministic selection rationale; and report any "
-                "actionable integration warning. "
+                "matched role terms as the deterministic selection rationale; report the "
+                "authenticated Git commit/file counts used to generate project bullets; and "
+                "report any actionable integration warning. "
                 "Only say the PDF is attached when validation succeeded; the router will add "
                 "the native message attachment/document-upload directive automatically."
             )

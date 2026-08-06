@@ -77,6 +77,7 @@ class ProjectCandidate:
     evidence_ids: tuple[str, ...]
     bullet_evidence_ids: tuple[tuple[str, ...], ...] = ()
     tags: tuple[str, ...] = ()
+    git_repositories: tuple[str, ...] = ()
 
 
 def _terms(value: str) -> frozenset[str]:
@@ -105,6 +106,11 @@ def _validate_candidate(candidate: ProjectCandidate, approved_ids: frozenset[str
         raise ValueError("project inventory entries require approved evidence IDs")
     if any(evidence_id not in approved_ids for evidence_id in candidate.evidence_ids):
         raise ValueError("project inventory entries require approved evidence IDs")
+    if any(
+        re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None
+        for repository in candidate.git_repositories
+    ):
+        raise ValueError("project inventory git_repositories must contain GitHub owner/repo names")
     if any(marker in candidate.latex for marker in _DISALLOWED_LATEX):
         raise ValueError("project inventory LaTeX contains a disallowed command")
     unknown_commands = {
@@ -169,6 +175,14 @@ def _candidate_from_json(value: object) -> ProjectCandidate:
             raise ValueError(f"project inventory {name} must be a list of non-empty string lists")
         return tuple(tuple(entry.strip() for entry in entries) for entries in item)
 
+    def optional_string_list(name: str) -> tuple[str, ...]:
+        item = value.get(name, [])
+        if not isinstance(item, list) or any(
+            not isinstance(entry, str) or not entry.strip() for entry in item
+        ):
+            raise ValueError(f"project inventory {name} must be a list of non-empty strings")
+        return tuple(entry.strip() for entry in item)
+
     return ProjectCandidate(
         id=string("id"),
         title=string("title"),
@@ -176,6 +190,7 @@ def _candidate_from_json(value: object) -> ProjectCandidate:
         evidence_ids=string_list("evidence_ids"),
         bullet_evidence_ids=nested_string_list("bullet_evidence_ids"),
         tags=string_list("tags"),
+        git_repositories=optional_string_list("git_repositories"),
     )
 
 

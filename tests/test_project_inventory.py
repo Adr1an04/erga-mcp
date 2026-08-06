@@ -16,6 +16,66 @@ from erga_mcp.project_inventory import (
 
 
 class ProjectInventoryTests(unittest.TestCase):
+    def test_inventory_loads_explicit_github_repository_mappings(self) -> None:
+        evidence = [
+            Evidence("ev_ok", "Career#Project", "Verified project", True, datetime.now(UTC)),
+        ]
+        payload = [
+            {
+                "id": "api-platform",
+                "title": "API Platform",
+                "latex": (
+                    r"\resumeProjectHeading{\textbf{API Platform}}{}"
+                    "\n"
+                    r"\resumeItemListStart"
+                    "\n"
+                    r"\resumeItem{Built a verified API platform.}"
+                    "\n"
+                    r"\resumeItemListEnd"
+                ),
+                "evidence_ids": ["ev_ok"],
+                "bullet_evidence_ids": [["ev_ok"]],
+                "tags": ["python", "api"],
+                "git_repositories": ["example/api-platform"],
+            }
+        ]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "projects.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            projects = load_project_inventory(path, evidence)
+
+        self.assertEqual(projects[0].git_repositories, ("example/api-platform",))
+
+    def test_inventory_rejects_non_github_repository_mappings(self) -> None:
+        evidence = [
+            Evidence("ev_ok", "Career#Project", "Verified project", True, datetime.now(UTC)),
+        ]
+        payload = [
+            {
+                "id": "api-platform",
+                "title": "API Platform",
+                "latex": (
+                    r"\resumeProjectHeading{\textbf{API Platform}}{}"
+                    "\n"
+                    r"\resumeItemListStart"
+                    "\n"
+                    r"\resumeItem{Built a verified API platform.}"
+                    "\n"
+                    r"\resumeItemListEnd"
+                ),
+                "evidence_ids": ["ev_ok"],
+                "bullet_evidence_ids": [["ev_ok"]],
+                "tags": ["python", "api"],
+                "git_repositories": ["/private/local/path"],
+            }
+        ]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "projects.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "GitHub owner/repo"):
+                load_project_inventory(path, evidence)
+
     def test_select_projects_prefers_role_specific_arsenal_entries_over_template_order(
         self,
     ) -> None:

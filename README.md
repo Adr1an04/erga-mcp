@@ -112,6 +112,28 @@ The configuration contains paths and feature settings, never credentials. Use
 `erga init` remains available as a low-level non-interactive initializer for advanced and scripted
 installations.
 
+### Git-backed project tailoring
+
+Project inventory entries may declare one or more GitHub repositories without embedding local
+paths or credentials:
+
+```json
+{
+  "id": "api-platform",
+  "title": "API Platform",
+  "git_repositories": ["example/api-platform"]
+}
+```
+
+When at least one inventory entry has this mapping and GitHub CLI is already authenticated, job
+intake refreshes a private JSON index of owned and direct-collaborator repositories. It ranks the
+full metadata catalogue before reading source code, then fetches only the selected repositories.
+Erga attributes commits to the connected GitHub identity, inspects all fetched refs, and derives
+reviewable bullets with computed commit, file, and line-change counts. Generated claims retain a
+commit anchor and diff hashes; collaborator commits and invented impact metrics are excluded. If
+GitHub or a selected repository is unavailable, intake keeps an existing approved catalogue bullet
+or skips an unverified discovered project and returns an actionable warning.
+
 After core setup, optionally connect any number of coding assistants:
 
 ```bash
