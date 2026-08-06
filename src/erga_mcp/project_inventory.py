@@ -61,6 +61,15 @@ _REQUIREMENT_MARKERS = (
 
 
 @dataclass(frozen=True)
+class ProjectSelection:
+    """One deterministic project choice with its job-description overlap."""
+
+    id: str
+    title: str
+    matched_terms: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ProjectCandidate:
     id: str
     title: str
@@ -227,3 +236,32 @@ def select_projects(
         key=lambda item: (-item[1], item[0].id),
     )
     return tuple(candidate for candidate, score in ranked if score > 0)[:max_projects]
+
+
+def select_project_rationales(
+    candidates: Sequence[ProjectCandidate],
+    job_description: str,
+    *,
+    max_projects: int,
+    minimum_bullets: int = 1,
+) -> tuple[ProjectSelection, ...]:
+    """Return each selected project with the exact job terms that justified its selection."""
+    job_terms = _terms(job_description)
+    return tuple(
+        ProjectSelection(
+            id=candidate.id,
+            title=candidate.title,
+            matched_terms=tuple(
+                sorted(
+                    (_terms(latex_to_text(candidate.latex)) | _terms(" ".join(candidate.tags)))
+                    & job_terms
+                )
+            ),
+        )
+        for candidate in select_projects(
+            candidates,
+            job_description,
+            max_projects=max_projects,
+            minimum_bullets=minimum_bullets,
+        )
+    )

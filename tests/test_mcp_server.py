@@ -22,6 +22,7 @@ from erga_mcp.mcp_server import (
     _compile_intake_proposal,
     _metadata_from_url,
     _require_constraint_valid_proposal,
+    _require_master_template_parity,
     build_server,
     build_streamable_http_app,
 )
@@ -30,6 +31,17 @@ from erga_mcp.store import ErgaStore
 
 
 class McpServerTests(unittest.TestCase):
+    def test_master_resume_must_match_the_template_when_a_master_is_configured(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master = root / "master.tex"
+            template = root / "template.tex"
+            master.write_text("Master résumé", encoding="utf-8")
+            template.write_text("Different résumé", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "does not match the configured master"):
+                _require_master_template_parity(master_path=master, template_path=template)
+
     def test_constraint_fallback_proposals_are_rejected_before_a_resume_is_compiled(self) -> None:
         automatic = SimpleNamespace(constraint_violations=("duplicate lead verb 'built'",))
         with self.assertRaisesRegex(ValueError, "duplicate lead verb 'built'"):
@@ -1020,7 +1032,7 @@ class McpServerTests(unittest.TestCase):
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
             self.assertTrue(result["tailoring_meaningful_change"])
             self.assertEqual(result["tailoring_changed_sections"], ["Experience"])
-            self.assertEqual(result["tailoring_version"], 7)
+            self.assertEqual(result["tailoring_version"], 8)
             output_pdf = Path(result["validation"]["pdf"])
             self.assertEqual(output_pdf.name, "Candidate_Resume.pdf")
             self.assertEqual(output_pdf.read_bytes(), b"exact tailored pdf")
@@ -1028,7 +1040,7 @@ class McpServerTests(unittest.TestCase):
                 (Path(result["package_dir"]) / "package.json").read_text(encoding="utf-8")
             )
             self.assertTrue(manifest["tailoring"]["meaningful_change"])
-            self.assertEqual(manifest["tailoring"]["version"], 7)
+            self.assertEqual(manifest["tailoring"]["version"], 8)
 
     def test_rebuilds_an_incomplete_legacy_package_and_preserves_its_files(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1097,7 +1109,7 @@ class McpServerTests(unittest.TestCase):
             )
             manifest = json.loads((repaired / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["legacy_backup"], "legacy-backup")
-            self.assertEqual(manifest["tailoring"]["version"], 7)
+            self.assertEqual(manifest["tailoring"]["version"], 8)
             self.assertIn("Legacy package preserved", result["integration_warnings"][-1])
 
     def test_compile_rejects_a_pdf_over_the_configured_page_cap(self) -> None:

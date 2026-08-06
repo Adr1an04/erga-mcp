@@ -7,7 +7,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.models import Evidence
-from erga_mcp.project_inventory import ProjectCandidate, load_project_inventory, select_projects
+from erga_mcp.project_inventory import (
+    ProjectCandidate,
+    load_project_inventory,
+    select_project_rationales,
+    select_projects,
+)
 
 
 class ProjectInventoryTests(unittest.TestCase):
@@ -228,6 +233,34 @@ class ProjectInventoryTests(unittest.TestCase):
             path.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "bullet_evidence_ids"):
                 load_project_inventory(path, evidence)
+
+    def test_selection_rationales_expose_the_matched_job_terms(self) -> None:
+        candidate = ProjectCandidate(
+            id="realtime-platform",
+            title="Realtime Platform",
+            latex=(
+                r"\resumeProjectHeading{\textbf{Realtime Platform} $|$ \textit{Python, Redis}}{}\n"
+                r"\resumeItemListStart\n"
+                r"\resumeItem{Built Python services with Redis for real-time messaging.}\n"
+                r"\resumeItemListEnd"
+            ),
+            evidence_ids=("ev_realtime",),
+            tags=("python", "redis", "real-time"),
+        )
+
+        selections = select_project_rationales(
+            (candidate,),
+            "Responsibilities: build Python services for real-time communication with Redis.",
+            max_projects=1,
+        )
+
+        self.assertEqual(len(selections), 1)
+        self.assertEqual(selections[0].id, "realtime-platform")
+        self.assertEqual(selections[0].title, "Realtime Platform")
+        self.assertEqual(
+            selections[0].matched_terms,
+            ("python", "real", "services", "time"),
+        )
 
 
 if __name__ == "__main__":

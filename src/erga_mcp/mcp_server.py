@@ -244,6 +244,14 @@ class IntakeValidationResult(BaseModel):
     skipped: str | None = None
 
 
+class IntakeProjectSelection(BaseModel):
+    """One selected project and the role terms that deterministically justified it."""
+
+    id: str
+    title: str
+    matched_terms: list[str] = Field(default_factory=list)
+
+
 class IntakeJobResult(BaseModel):
     """Structured paths and status returned by the primary job-link intake tool."""
 
@@ -251,6 +259,7 @@ class IntakeJobResult(BaseModel):
     job_snapshot: str
     selected_evidence: str
     selection_strategy: str
+    project_selections: list[IntakeProjectSelection] = Field(default_factory=list)
     proposal_tex: str
     diff: str
     claim_report: str
@@ -374,6 +383,26 @@ def _compile_intake_proposal(
     if output_pdf != proposal_pdf:
         proposal_pdf.replace(output_pdf)
     return IntakeValidationResult(returncode=0, pdf=str(output_pdf), page_count=page_count)
+
+
+def _require_master_template_parity(*, master_path: Path | None, template_path: Path) -> None:
+    """Prevent a configured factual master and the tailored baseline from drifting apart."""
+    if master_path is None:
+        return
+    if master_path.suffix.casefold() != ".tex":
+        raise ValueError(
+            "configured master resume must be a LaTeX (.tex) file for automatic tailoring"
+        )
+    try:
+        master = master_path.read_text(encoding="utf-8")
+        template = template_path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError("configured master resume or template could not be read") from error
+    if master != template:
+        raise ValueError(
+            "resume template does not match the configured master; re-import the master or "
+            "update the template before automatic tailoring"
+        )
 
 
 def _require_constraint_valid_proposal(automatic: object) -> None:
@@ -716,6 +745,10 @@ def _upgrade_existing_tailoring(
         return result
 
     source_resume = package_dir / "source" / "resume.tex"
+    _require_master_template_parity(
+        master_path=config.resume.master_path,
+        template_path=source_resume,
+    )
     snapshot_path = package_dir / "research" / "job-description.txt"
     snapshot_refreshed = False
     if existing_tailoring_version != TAILORING_VERSION:
@@ -737,7 +770,11 @@ def _upgrade_existing_tailoring(
     all_approved = [item for item in store.list_evidence() if item.approved]
     evidence = [item for item in all_approved if item.id in selected_ids]
     tailoring_context = _tailoring_context(research, snapshot)
-    project_candidates = _inventory_candidates(config, all_approved)
+    project_candidates = (
+        ()
+        if config.resume.project_selection_mode == "template_only"
+        else _inventory_candidates(config, all_approved)
+    )
     evidence = _include_selected_project_evidence(
         evidence,
         all_approved,
@@ -767,6 +804,7 @@ def _upgrade_existing_tailoring(
     )
     manifest_value.update(
         {
+            "project_selections": automatic.project_selection.get("selected", []),
             "tailoring": {
                 "changed_sections": list(automatic.changed_sections),
                 "meaningful_change": automatic.meaningful_change,
@@ -925,6 +963,18 @@ def _result_from_manifest(
     selection_strategy = manifest.get("selection_strategy")
     if not isinstance(selection_strategy, str):
         selection_strategy = "unknown"
+    project_selections = [
+        IntakeProjectSelection(
+            id=item["id"],
+            title=item["title"],
+            matched_terms=[term for term in item.get("matched_terms", []) if isinstance(term, str)],
+        )
+        for item in cast(list[object], manifest.get("project_selections", []))
+        if isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and isinstance(item.get("title"), str)
+        and isinstance(item.get("matched_terms", []), list)
+    ]
     raw_tailoring = manifest.get("tailoring")
     tailoring_meaningful_change = False
     tailoring_changed_sections: list[str] = []
@@ -944,6 +994,7 @@ def _result_from_manifest(
         job_snapshot=str(job_snapshot),
         selected_evidence=str(selected_evidence),
         selection_strategy="existing_package" if reused else selection_strategy,
+        project_selections=project_selections,
         proposal_tex=str(proposal_tex),
         diff=str(diff),
         claim_report=str(claim_report),
@@ -1541,6 +1592,10 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 "resume template_path must be configured before first job intake; "
                 "set [resume].template_path to a local .tex file"
             )
+        _require_master_template_parity(
+            master_path=config.resume.master_path,
+            template_path=config.resume.template_path,
+        )
         snapshot = fetch_job_snapshot(job_url)
         require_job_posting(snapshot, job_url=job_url)
         source_research = analyze_job_snapshot(snapshot, job_url=job_url)
@@ -1577,7 +1632,11 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             evidence = all_approved
             selection_strategy = "all_approved_baseline" if evidence else "no_approved_evidence"
         tailoring_context = _tailoring_context(source_research, snapshot)
-        project_candidates = _inventory_candidates(config, all_approved)
+        project_candidates = (
+            ()
+            if config.resume.project_selection_mode == "template_only"
+            else _inventory_candidates(config, all_approved)
+        )
         evidence = _include_selected_project_evidence(
             evidence,
             all_approved,
@@ -1617,6 +1676,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 bullet_max_chars=config.resume.bullet_max_chars,
                 project_candidates=project_candidates,
                 project_count=config.resume.project_count,
+                require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
             )
             _require_constraint_valid_proposal(automatic)
             proposal = automatic.proposal
@@ -1632,6 +1692,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 {
                     "job_identity": _job_identity(job_url),
                     "selection_strategy": selection_strategy,
+                    "project_selections": automatic.project_selection.get("selected", []),
                     "status": "complete",
                     "tailoring": {
                         "changed_sections": list(automatic.changed_sections),
@@ -1902,7 +1963,11 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         all_approved = [item for item in store.list_evidence() if item.approved]
         evidence = select_relevant_evidence(snapshot, all_approved)
         tailoring_context = _tailoring_context(research, snapshot)
-        project_candidates = _inventory_candidates(config, all_approved)
+        project_candidates = (
+            ()
+            if config.resume.project_selection_mode == "template_only"
+            else _inventory_candidates(config, all_approved)
+        )
         evidence = _include_selected_project_evidence(
             evidence,
             all_approved,

@@ -193,6 +193,7 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertIn('"package_dir":"/tmp/example"', repeated["context"])
         self.assertIn("Do not call a browser", injected["context"])
         self.assertIn("whether deterministic tailoring made", injected["context"])
+        self.assertIn("selected projects and their matched role terms", injected["context"])
 
     def test_records_provider_usage_for_the_application_intaked_in_the_same_turn(self) -> None:
         context = _FakePluginContext(

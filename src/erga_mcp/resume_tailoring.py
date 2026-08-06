@@ -10,7 +10,7 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 from .models import Evidence
-from .project_inventory import ProjectCandidate, select_projects
+from .project_inventory import ProjectCandidate, select_project_rationales, select_projects
 from .resume import ResumeProposal, latex_to_text, resolve_section_name
 
 _TOKEN = re.compile(r"[a-z0-9+#.]+")
@@ -95,7 +95,7 @@ _RELEVANCE_CLUSTERS = (
     frozenset({"pytorch", "tensorflow", "machine", "ml", "model", "inference"}),
     frozenset({"test", "testing", "pytest", "quality", "reliability"}),
 )
-TAILORING_VERSION = 7
+TAILORING_VERSION = 8
 
 
 @dataclass(frozen=True)
@@ -104,6 +104,7 @@ class AutomaticResumeProposal:
     meaningful_change: bool
     changed_sections: tuple[str, ...]
     constraint_violations: tuple[str, ...]
+    project_selection: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -564,6 +565,9 @@ def create_automatic_resume_proposal(
             selected_projects = select_projects(
                 project_candidates, job_description, max_projects=project_count
             )
+            selected_rationales = select_project_rationales(
+                project_candidates, job_description, max_projects=project_count
+            )
             if not selected_projects:
                 project_selection = {
                     "candidate_count": len(project_candidates),
@@ -582,6 +586,15 @@ def create_automatic_resume_proposal(
                 "mode": "inventory",
                 "selected_ids": [item.id for item in selected_projects],
                 "selected_titles": [item.title for item in selected_projects],
+                "selected": [
+                    {
+                        "id": item.id,
+                        "title": item.title,
+                        "matched_terms": list(item.matched_terms),
+                        "applied_to_resume": True,
+                    }
+                    for item in selected_rationales
+                ],
             }
             project_claims = _project_claim_records(selected_projects)
         tailored, section_claims, changed = tailorer(proposed[start:end], job_description)
@@ -681,6 +694,7 @@ def create_automatic_resume_proposal(
         meaningful_change=meaningful_change,
         changed_sections=tuple(changed_sections),
         constraint_violations=violations,
+        project_selection=project_selection,
     )
 
 
