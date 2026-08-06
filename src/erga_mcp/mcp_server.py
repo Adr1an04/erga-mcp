@@ -1608,6 +1608,11 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 project_candidates=project_candidates,
                 project_count=config.resume.project_count,
             )
+            if automatic.constraint_violations:
+                raise ValueError(
+                    "automatic tailored resume violates hard constraints: "
+                    + "; ".join(automatic.constraint_violations)
+                )
             proposal = automatic.proposal
             validation = _compile_intake_proposal(
                 proposal.proposed_tex_path,
@@ -1921,6 +1926,11 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             project_count=config.resume.project_count,
             require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
         )
+        if automatic.constraint_violations:
+            raise ValueError(
+                "automatic tailored resume violates hard constraints: "
+                + "; ".join(automatic.constraint_violations)
+            )
         proposal = automatic.proposal
         validation = _compile_intake_proposal(
             proposal.proposed_tex_path,
