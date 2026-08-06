@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 from erga_mcp.models import Evidence
 from erga_mcp.project_inventory import ProjectCandidate
 from erga_mcp.resume_tailoring import (
+    TAILORING_VERSION,
     _relevance,
     create_automatic_resume_proposal,
     pdf_page_count,
@@ -56,6 +57,11 @@ _TEMPLATE = r"""
 
 
 class AutomaticResumeTailoringTests(unittest.TestCase):
+    def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
+        self,
+    ) -> None:
+        self.assertEqual(TAILORING_VERSION, 6)
+
     def test_relevance_requires_term_boundaries_and_rejects_substring_collisions(self) -> None:
         for skill, unrelated in (
             ("Java", "JavaScript"),
