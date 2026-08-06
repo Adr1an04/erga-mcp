@@ -24,6 +24,9 @@ bullet_min_chars = 0
 bullet_target_chars = 0
 bullet_max_chars = 0
 max_pages = 0
+# For a one-page resume, require rendered text to occupy at least this fraction of the page height.
+# Erga adds elastic vertical spacing between existing content; it never invents filler claims.
+minimum_page_fill_ratio = 0.82
 output_root = "output"
 # Local JSON arsenal of approved LaTeX project blocks. Onboarding creates and requires one
 # so intake cannot silently fall back to reordering only the template's existing projects.
@@ -32,8 +35,9 @@ project_selection_mode = "inventory_optional"
 project_count = 4
 # Require enough evidence-backed bullets for a project to be considered during selection.
 project_min_bullets = 1
-# Reject a generated proposal when any résumé bullets share the same leading verb.
-require_unique_lead_verbs = false
+# Compatibility key retained for existing local configs. Lead-verb uniqueness is always required
+# for generated resumes, including configs created before this became a pipeline invariant.
+require_unique_lead_verbs = true
 # The filename of every generated local PDF. Configure a real candidate name locally.
 output_pdf_name = "Firstname_Lastname_Resume.pdf"
 latexmk = "latexmk"
@@ -87,6 +91,7 @@ class ResumeSettings:
     bullet_target_chars: int
     bullet_max_chars: int
     max_pages: int
+    minimum_page_fill_ratio: float
     output_root: Path
     project_inventory_path: Path | None
     project_selection_mode: str
@@ -212,7 +217,12 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
     project_min_bullets = int(resume.get("project_min_bullets", 1))
     if project_min_bullets < 1:
         raise ValueError("resume project_min_bullets must be positive")
-    require_unique_lead_verbs = bool(resume.get("require_unique_lead_verbs", False))
+    minimum_page_fill_ratio = float(resume.get("minimum_page_fill_ratio", 0.82))
+    if not 0 <= minimum_page_fill_ratio <= 1:
+        raise ValueError("resume minimum_page_fill_ratio must be between zero and one")
+    # Generated bullets may never repeat lead verbs. Treat the legacy false value as an old
+    # config default rather than an opt-out so existing installations receive the invariant.
+    require_unique_lead_verbs = True
     latexmk = str(resume.get("latexmk", "latexmk")).strip()
     if not latexmk:
         raise ValueError("resume latexmk must be non-empty")
@@ -228,6 +238,7 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
         bullet_target_chars=bullet_lengths[1],
         bullet_max_chars=bullet_lengths[2],
         max_pages=max_pages,
+        minimum_page_fill_ratio=minimum_page_fill_ratio,
         output_root=_path(str(resume.get("output_root", "output")), base_dir),
         project_inventory_path=project_inventory_path,
         project_selection_mode=project_selection_mode,

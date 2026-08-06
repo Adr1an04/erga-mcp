@@ -93,6 +93,7 @@ from .resume_tailoring import (
     classify_wrapped_resume_items,
     create_automatic_resume_proposal,
     pdf_page_count,
+    pdf_page_fill,
     plan_resume_project_selection,
 )
 from .store import ErgaStore, SQLiteStoreFactory, StoreFactory
@@ -269,6 +270,8 @@ class IntakeValidationResult(BaseModel):
     returncode: int | None
     pdf: str | None
     page_count: int | None = None
+    page_fill_ratio: float | None = None
+    minimum_page_fill_ratio: float | None = None
     skipped: str | None = None
 
 
@@ -382,6 +385,9 @@ def _layout_safe_project_selection(
             project_candidates=project_candidates,
             project_count=config.resume.project_count,
             require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+            minimum_page_fill_ratio=(
+                config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
+            ),
             additional_project_quality_rejections=tuple(layout_rejections),
         )
         _require_constraint_valid_proposal(automatic)
@@ -870,8 +876,9 @@ def _compile_intake_proposal(
     latexmk: str,
     output_pdf_name: str,
     max_pages: int,
+    minimum_page_fill_ratio: float = 0,
 ) -> IntakeValidationResult:
-    """Compile, enforce a configured page cap, and select the exact attachment PDF."""
+    """Compile, enforce page geometry constraints, and select the exact attachment PDF."""
     try:
         checked = validate_latex_proposal(proposal_path, latexmk=Path(latexmk))
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -893,7 +900,7 @@ def _compile_intake_proposal(
         )
 
     page_count: int | None = None
-    if max_pages:
+    if max_pages or minimum_page_fill_ratio:
         try:
             page_count = pdf_page_count(proposal_pdf)
         except ValueError as error:
@@ -903,7 +910,7 @@ def _compile_intake_proposal(
                 pdf=None,
                 skipped=f"PDF page validation failed: {error}",
             )
-        if page_count > max_pages:
+        if max_pages and page_count > max_pages:
             proposal_pdf.unlink(missing_ok=True)
             return IntakeValidationResult(
                 returncode=1,
@@ -914,10 +921,44 @@ def _compile_intake_proposal(
                 ),
             )
 
+    page_fill_ratio: float | None = None
+    if minimum_page_fill_ratio:
+        try:
+            fill = pdf_page_fill(proposal_pdf)
+        except ValueError as error:
+            proposal_pdf.unlink(missing_ok=True)
+            return IntakeValidationResult(
+                returncode=1,
+                pdf=None,
+                page_count=page_count,
+                minimum_page_fill_ratio=minimum_page_fill_ratio,
+                skipped=f"PDF page-fill validation failed: {error}",
+            )
+        page_fill_ratio = fill.fill_ratio
+        if page_fill_ratio < minimum_page_fill_ratio:
+            proposal_pdf.unlink(missing_ok=True)
+            return IntakeValidationResult(
+                returncode=1,
+                pdf=None,
+                page_count=page_count,
+                page_fill_ratio=page_fill_ratio,
+                minimum_page_fill_ratio=minimum_page_fill_ratio,
+                skipped=(
+                    f"Tailored resume fills {page_fill_ratio:.1%} of the page; required minimum "
+                    f"is {minimum_page_fill_ratio:.1%}."
+                ),
+            )
+
     output_pdf = proposal_pdf.with_name(output_pdf_name)
     if output_pdf != proposal_pdf:
         proposal_pdf.replace(output_pdf)
-    return IntakeValidationResult(returncode=0, pdf=str(output_pdf), page_count=page_count)
+    return IntakeValidationResult(
+        returncode=0,
+        pdf=str(output_pdf),
+        page_count=page_count,
+        page_fill_ratio=page_fill_ratio,
+        minimum_page_fill_ratio=(minimum_page_fill_ratio or None),
+    )
 
 
 def _require_master_template_parity(*, master_path: Path | None, template_path: Path) -> None:
@@ -1199,6 +1240,20 @@ def _validation_from_manifest(
         if isinstance(raw_page_count, int) and not isinstance(raw_page_count, bool)
         else None
     )
+    raw_page_fill_ratio = raw_validation.get("page_fill_ratio")
+    page_fill_ratio = (
+        float(raw_page_fill_ratio)
+        if isinstance(raw_page_fill_ratio, (int, float))
+        and not isinstance(raw_page_fill_ratio, bool)
+        else None
+    )
+    raw_minimum_page_fill_ratio = raw_validation.get("minimum_page_fill_ratio")
+    minimum_page_fill_ratio = (
+        float(raw_minimum_page_fill_ratio)
+        if isinstance(raw_minimum_page_fill_ratio, (int, float))
+        and not isinstance(raw_minimum_page_fill_ratio, bool)
+        else None
+    )
     raw_pdf = raw_validation.get("pdf")
     pdf: str | None = None
     if isinstance(raw_pdf, str):
@@ -1222,6 +1277,8 @@ def _validation_from_manifest(
         returncode=returncode,
         pdf=pdf,
         page_count=page_count,
+        page_fill_ratio=page_fill_ratio,
+        minimum_page_fill_ratio=minimum_page_fill_ratio,
         skipped=skipped,
     )
 
@@ -1337,6 +1394,9 @@ def _upgrade_existing_tailoring(
         project_candidates=project_candidates,
         project_count=config.resume.project_count,
         require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+        minimum_page_fill_ratio=(
+            config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
+        ),
         additional_project_quality_rejections=enrichment.quality_rejections,
     )
     automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
@@ -1359,6 +1419,9 @@ def _upgrade_existing_tailoring(
         latexmk=config.resume.latexmk,
         output_pdf_name=config.resume.output_pdf_name,
         max_pages=config.resume.max_pages,
+        minimum_page_fill_ratio=(
+            config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
+        ),
     )
     manifest_value.update(
         {
@@ -1376,6 +1439,8 @@ def _upgrade_existing_tailoring(
             },
             "validation": {
                 "page_count": validation.page_count,
+                "page_fill_ratio": validation.page_fill_ratio,
+                "minimum_page_fill_ratio": validation.minimum_page_fill_ratio,
                 "pdf": (
                     Path(validation.pdf).relative_to(package_dir).as_posix()
                     if validation.pdf is not None
@@ -2304,6 +2369,9 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 project_candidates=project_candidates,
                 project_count=config.resume.project_count,
                 require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+                minimum_page_fill_ratio=(
+                    config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
+                ),
                 additional_project_quality_rejections=enrichment.quality_rejections,
             )
             automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
@@ -2327,8 +2395,10 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 latexmk=config.resume.latexmk,
                 output_pdf_name=config.resume.output_pdf_name,
                 max_pages=config.resume.max_pages,
+                minimum_page_fill_ratio=(
+                    config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
+                ),
             )
-
             manifest = json.loads(workspace.package.manifest_path.read_text(encoding="utf-8"))
             manifest.update(
                 {
@@ -2356,6 +2426,8 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                             else None
                         ),
                         "page_count": validation.page_count,
+                        "page_fill_ratio": validation.page_fill_ratio,
+                        "minimum_page_fill_ratio": validation.minimum_page_fill_ratio,
                         "returncode": validation.returncode,
                         "skipped": validation.skipped,
                     },
@@ -2652,6 +2724,9 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             project_candidates=project_candidates,
             project_count=config.resume.project_count,
             require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+            minimum_page_fill_ratio=(
+                config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
+            ),
             additional_project_quality_rejections=enrichment.quality_rejections,
         )
         automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
@@ -2675,6 +2750,9 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             latexmk=config.resume.latexmk,
             output_pdf_name=config.resume.output_pdf_name,
             max_pages=config.resume.max_pages,
+            minimum_page_fill_ratio=(
+                config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
+            ),
         )
         if validation.returncode != 0:
             raise ValueError("automatic tailored resume did not compile")

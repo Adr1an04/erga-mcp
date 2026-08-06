@@ -91,6 +91,8 @@ latexmk = "latexmk"
             self.assertEqual(config.resume.bullet_min_chars, 90)
             self.assertEqual(config.resume.bullet_target_chars, 105)
             self.assertEqual(config.resume.bullet_max_chars, 120)
+            self.assertEqual(config.resume.minimum_page_fill_ratio, 0.82)
+            self.assertTrue(config.resume.require_unique_lead_verbs)
             self.assertEqual(config.resume.output_root, config_path.parent / "applications")
         self.assertEqual(config.resume.output_pdf_name, "Firstname_Lastname_Resume.pdf")
 
@@ -112,6 +114,29 @@ project_count = 3
                 config.resume.project_inventory_path, config_path.parent / "projects.json"
             )
             self.assertEqual(config.resume.project_count, 3)
+
+    def test_legacy_false_lead_verb_setting_is_upgraded_to_required(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(
+                "[resume]\nrequire_unique_lead_verbs = false\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+            self.assertTrue(config.resume.require_unique_lead_verbs)
+
+    def test_rejects_invalid_minimum_page_fill_ratio(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(
+                "[resume]\nminimum_page_fill_ratio = 1.2\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "minimum_page_fill_ratio"):
+                load_config(config_path)
 
     def test_project_inventory_required_mode_needs_a_catalogue_path(self) -> None:
         with TemporaryDirectory() as directory:

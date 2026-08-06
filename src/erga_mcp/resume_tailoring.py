@@ -20,6 +20,16 @@ from .project_inventory import (
 from .resume import ResumeProposal, latex_to_text, resolve_section_name
 
 _TOKEN = re.compile(r"[a-z0-9+#.]+")
+_PAGE_FILL_MARKER = "% ERGA-ADAPTIVE-PAGE-FILL"
+_SECTION_LINE = re.compile(r"(?m)^(?P<indent>[ \t]*)\\section\{")
+_PAGE_FILL_SETUP = r"""
+% ERGA-ADAPTIVE-PAGE-FILL
+\flushbottom
+\let\ergaPageFillOriginalResumeItem\resumeItem
+\renewcommand{\resumeItem}[1]{%
+  \ergaPageFillOriginalResumeItem{#1}\vspace{0pt plus 1fill}%
+}
+"""
 _STOP_WORDS = frozenset(
     {
         "a",
@@ -219,7 +229,7 @@ _LEAD_VERB_ALTERNATIVES = {
     ),
     "won": ("Earned", "Secured", "Captured"),
 }
-TAILORING_VERSION = 16
+TAILORING_VERSION = 17
 
 
 @dataclass(frozen=True)
@@ -238,6 +248,17 @@ class ResumeProjectSelectionPlan:
     selected: tuple[ProjectCandidate, ...]
     rationales: tuple[ProjectSelection, ...]
     quality_rejections: tuple[dict[str, object], ...]
+
+
+@dataclass(frozen=True)
+class PdfPageFill:
+    """Rendered text extent for one PDF page, expressed independently of pixels or font size."""
+
+    page_height: float
+    content_top: float
+    content_bottom: float
+    fill_ratio: float
+    text_run_count: int
 
 
 @dataclass(frozen=True)
@@ -1039,6 +1060,79 @@ def _record_lead_verb_rewrites(
         record["text_changed"] = True
 
 
+def apply_adaptive_single_page_fill(source: str) -> str:
+    """Distribute spare page height without changing claims, fonts, margins, or line widths."""
+    if _PAGE_FILL_MARKER in source:
+        return source
+    document_marker = r"\begin{document}"
+    document_start = source.find(document_marker)
+    if document_start < 0:
+        raise ValueError("resume proposal must contain \\begin{document}")
+
+    document = source[document_start:]
+    if document.count(r"\resumeItem{") < 6:
+        return source
+    sections = list(_SECTION_LINE.finditer(document))
+    additions: list[tuple[int, str]] = []
+    for section in sections[1:]:
+        additions.append(
+            (
+                document_start + section.start(),
+                f"{section.group('indent')}\\vspace{{0pt plus 1fill}}% {_PAGE_FILL_MARKER[2:]}\n",
+            )
+        )
+    for offset, addition in reversed(additions):
+        source = source[:offset] + addition + source[offset:]
+    return source.replace(document_marker, document_marker + _PAGE_FILL_SETUP, 1)
+
+
+def pdf_page_fill(pdf_path: Path) -> PdfPageFill:
+    """Measure rendered text coverage on a one-page PDF using page-relative coordinates."""
+    if pdf_path.suffix.casefold() != ".pdf" or not pdf_path.is_file():
+        raise ValueError("pdf_path must point to an existing PDF")
+    try:
+        reader = PdfReader(pdf_path)
+        if len(reader.pages) != 1:
+            raise ValueError("page-fill validation requires exactly one PDF page")
+        page = reader.pages[0]
+        page_height = float(page.mediabox.height)
+        text_runs: list[tuple[float, float]] = []
+
+        def observe_text(
+            text: str,
+            current_matrix: list[float],
+            text_matrix: list[float],
+            _font: dict[str, object] | None,
+            font_size: float,
+        ) -> None:
+            if not text.strip():
+                return
+            x = float(text_matrix[4])
+            y = float(text_matrix[5])
+            transformed_y = (
+                x * float(current_matrix[1])
+                + y * float(current_matrix[3])
+                + float(current_matrix[5])
+            )
+            scaled_size = abs(float(font_size) * float(current_matrix[3])) or abs(float(font_size))
+            text_runs.append((transformed_y - scaled_size * 0.2, transformed_y + scaled_size))
+
+        page.extract_text(visitor_text=observe_text)
+    except (OSError, PdfReadError) as error:
+        raise ValueError(f"PDF content fill could not be measured: {error}") from error
+    if page_height <= 0 or not text_runs:
+        raise ValueError("PDF contains no measurable rendered text")
+    content_bottom = max(0.0, min(bottom for bottom, _ in text_runs))
+    content_top = min(page_height, max(top for _, top in text_runs))
+    return PdfPageFill(
+        page_height=round(page_height, 3),
+        content_top=round(content_top, 3),
+        content_bottom=round(content_bottom, 3),
+        fill_ratio=round((content_top - content_bottom) / page_height, 4),
+        text_run_count=len(text_runs),
+    )
+
+
 def create_automatic_resume_proposal(
     *,
     resume_path: Path,
@@ -1052,6 +1146,7 @@ def create_automatic_resume_proposal(
     project_candidates: tuple[ProjectCandidate, ...] = (),
     project_count: int = 4,
     require_unique_lead_verbs: bool = False,
+    minimum_page_fill_ratio: float = 0,
     additional_project_quality_rejections: tuple[dict[str, object], ...] = (),
 ) -> AutomaticResumeProposal:
     """Tailor a résumé using only user-provided claims and approved project blocks."""
@@ -1222,6 +1317,9 @@ def create_automatic_resume_proposal(
                     for item in retained_projects
                 ],
             }
+
+    if minimum_page_fill_ratio:
+        proposed = apply_adaptive_single_page_fill(proposed)
 
     meaningful_change = proposed != original
     output_dir.mkdir(parents=True, exist_ok=True)

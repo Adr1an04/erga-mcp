@@ -8,15 +8,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from pypdf import PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
 from erga_mcp.models import Evidence
 from erga_mcp.project_inventory import ProjectCandidate
+from erga_mcp.resume import validate_single_line_resume_items
 from erga_mcp.resume_tailoring import (
     TAILORING_VERSION,
     _record_lead_verb_rewrites,
     _relevance,
+    apply_adaptive_single_page_fill,
     classify_wrapped_resume_items,
     create_automatic_resume_proposal,
     pdf_page_count,
+    pdf_page_fill,
 )
 
 _TEMPLATE = r"""
@@ -57,12 +63,162 @@ _TEMPLATE = r"""
 \end{document}
 """.lstrip()
 
+_SPARSE_TEMPLATE = r"""
+\documentclass[10pt]{article}
+\usepackage[margin=0.8in]{geometry}
+\pagestyle{empty}
+\raggedbottom
+\setlength{\parindent}{0pt}
+\newcommand{\resumeItemListStart}{\begin{itemize}\setlength{\itemsep}{0pt}\setlength{\topsep}{0pt}}
+\newcommand{\resumeItemListEnd}{\end{itemize}}
+\newcommand{\resumeItem}[1]{\item \small #1}
+\begin{document}
+\begin{center}\Large Synthetic Candidate\\\small candidate@example.test\end{center}
+\section{Education}
+Synthetic University \hfill Example, CO\\
+B.S. Computer Science; GPA: 4.0 \hfill Expected May 2028\\
+Relevant Coursework: Algorithms, Operating Systems, Machine Learning
+\section{Experience}
+Synthetic Engineering Laboratory \hfill Example, CO\\
+Software Engineering Intern \hfill May 2026 -- Present
+\resumeItemListStart
+\resumeItem{Engineered a verified service for a synthetic team and documented its operating model.}
+\resumeItem{Validated release behavior with approved test evidence and reproducible checks.}
+\resumeItem{Coordinated delivery milestones across a documented synthetic engineering group.}
+\resumeItem{Reduced a measured processing delay through an approved implementation change.}
+\resumeItemListEnd
+\section{Projects}
+\resumeItemListStart
+\item[] \textbf{Verified Service} $|$ \textit{Python, FastAPI} \hfill Jul 2026
+\resumeItem{Developed a role-relevant application from approved synthetic project evidence.}
+\resumeItem{Optimized a measured workflow while preserving its documented correctness checks.}
+\item[] \textbf{Accessible Interface} $|$ \textit{TypeScript, React} \hfill Jun 2026
+\resumeItem{Designed an accessible interface backed by approved usability observations.}
+\resumeItem{Deployed a containerized service through a reproducible release workflow.}
+\item[] \textbf{Workflow Automator} $|$ \textit{Python, Docker} \hfill Apr 2026
+\resumeItem{Automated a verified manual process while retaining its audit trail.}
+\resumeItem{Tested failure paths with deterministic fixtures and documented expected results.}
+\resumeItemListEnd
+\section{Technical Skills}
+\textbf{Languages:} Python, C++, SQL, TypeScript\\
+\textbf{Frameworks:} FastAPI, React, PyTorch\\
+\textbf{Systems:} Linux, Docker, Kubernetes\\
+\textbf{Tools:} Git, GitHub Actions, PostgreSQL
+\end{document}
+""".lstrip()
+
 
 class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 16)
+        self.assertEqual(TAILORING_VERSION, 17)
+
+    def test_adaptive_page_fill_is_template_agnostic_and_idempotent(self) -> None:
+        compact = _SPARSE_TEMPLATE.replace("[10pt]", "[9pt]")
+
+        filled = apply_adaptive_single_page_fill(compact)
+
+        self.assertIn(r"\flushbottom", filled)
+        self.assertIn(r"\renewcommand{\resumeItem}[1]", filled)
+        self.assertEqual(filled.count(r"\vspace{0pt plus 1fill}"), 4)
+        self.assertEqual(apply_adaptive_single_page_fill(filled), filled)
+
+    def test_page_fill_does_not_create_giant_gaps_for_too_little_content(self) -> None:
+        tiny = _SPARSE_TEMPLATE.replace(
+            _SPARSE_TEMPLATE[_SPARSE_TEMPLATE.index(r"\section{Projects}") :],
+            "\\end{document}\n",
+        )
+
+        self.assertEqual(apply_adaptive_single_page_fill(tiny), tiny)
+
+    def test_page_fill_uses_rendered_page_relative_coordinates(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            sparse = root / "sparse.pdf"
+            filled = root / "filled.pdf"
+            self._write_positioned_text_pdf(sparse, bottom_y=320)
+            self._write_positioned_text_pdf(filled, bottom_y=55)
+
+            sparse_fill = pdf_page_fill(sparse)
+            filled_fill = pdf_page_fill(filled)
+
+            self.assertLess(sparse_fill.fill_ratio, 0.82)
+            self.assertGreater(filled_fill.fill_ratio, 0.82)
+            self.assertGreater(filled_fill.fill_ratio, sparse_fill.fill_ratio)
+
+    def test_sparse_small_font_template_fills_without_rewriting_content(self) -> None:
+        latexmk = shutil.which("latexmk")
+        if latexmk is None:
+            self.skipTest("latexmk is not installed")
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = root / "original.tex"
+            adaptive = root / "adaptive.tex"
+            original.write_text(_SPARSE_TEMPLATE, encoding="utf-8")
+            adaptive.write_text(
+                apply_adaptive_single_page_fill(_SPARSE_TEMPLATE),
+                encoding="utf-8",
+            )
+            for proposal in (original, adaptive):
+                subprocess.run(
+                    [
+                        latexmk,
+                        "-pdf",
+                        "-no-shell-escape",
+                        "-interaction=nonstopmode",
+                        "-halt-on-error",
+                        proposal.name,
+                    ],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+
+            original_fill = pdf_page_fill(original.with_suffix(".pdf"))
+            adaptive_fill = pdf_page_fill(adaptive.with_suffix(".pdf"))
+
+            self.assertLess(original_fill.fill_ratio, 0.82)
+            self.assertGreaterEqual(adaptive_fill.fill_ratio, 0.82)
+            item_layout = validate_single_line_resume_items(
+                adaptive,
+                latexmk=Path(latexmk),
+            )
+            self.assertEqual(item_layout.returncode, 0)
+            self.assertEqual(item_layout.wrapped_item_indices, ())
+            self.assertEqual(
+                _SPARSE_TEMPLATE.count(r"\resumeItem{"),
+                adaptive.read_text(encoding="utf-8").count(r"\resumeItem{"),
+            )
+
+    @staticmethod
+    def _write_positioned_text_pdf(path: Path, *, bottom_y: int) -> None:
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=612, height=792)
+        font = DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Font"),
+                NameObject("/Subtype"): NameObject("/Type1"),
+                NameObject("/BaseFont"): NameObject("/Helvetica"),
+            }
+        )
+        font_ref = writer._add_object(font)
+        page[NameObject("/Resources")] = DictionaryObject(
+            {
+                NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_ref}),
+            }
+        )
+        content = DecodedStreamObject()
+        content.set_data(
+            (
+                f"BT /F1 10 Tf 50 742 Td (Synthetic Header) Tj ET\n"
+                f"BT /F1 10 Tf 50 {bottom_y} Td (Synthetic Final Section) Tj ET\n"
+            ).encode("ascii")
+        )
+        page[NameObject("/Contents")] = writer._add_object(content)
+        with path.open("wb") as stream:
+            writer.write(stream)
 
     def test_classifies_wrapped_bullets_as_project_or_baseline_content(self) -> None:
         candidates = (

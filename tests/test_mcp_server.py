@@ -1422,7 +1422,7 @@ class McpServerTests(unittest.TestCase):
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
             self.assertTrue(result["tailoring_meaningful_change"])
             self.assertEqual(result["tailoring_changed_sections"], ["Experience"])
-            self.assertEqual(result["tailoring_version"], 16)
+            self.assertEqual(result["tailoring_version"], 17)
             self.assertEqual(result["git_project_research"], [])
             output_pdf = Path(result["validation"]["pdf"])
             self.assertEqual(output_pdf.name, "Candidate_Resume.pdf")
@@ -1431,7 +1431,7 @@ class McpServerTests(unittest.TestCase):
                 (Path(result["package_dir"]) / "package.json").read_text(encoding="utf-8")
             )
             self.assertTrue(manifest["tailoring"]["meaningful_change"])
-            self.assertEqual(manifest["tailoring"]["version"], 16)
+            self.assertEqual(manifest["tailoring"]["version"], 17)
 
     def test_rebuilds_an_incomplete_legacy_package_and_preserves_its_files(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1500,7 +1500,7 @@ class McpServerTests(unittest.TestCase):
             )
             manifest = json.loads((repaired / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["legacy_backup"], "legacy-backup")
-            self.assertEqual(manifest["tailoring"]["version"], 16)
+            self.assertEqual(manifest["tailoring"]["version"], 17)
             self.assertIn("Legacy package preserved", result["integration_warnings"][-1])
 
     def test_compile_rejects_a_pdf_over_the_configured_page_cap(self) -> None:
@@ -1530,6 +1530,42 @@ class McpServerTests(unittest.TestCase):
             self.assertEqual(result.page_count, 2)
             self.assertIsNone(result.pdf)
             self.assertIn("configured maximum is 1", result.skipped or "")
+            self.assertFalse(proposal.with_suffix(".pdf").exists())
+
+    def test_compile_rejects_an_underfilled_one_page_resume(self) -> None:
+        with TemporaryDirectory() as directory:
+            proposal = Path(directory) / "proposal.tex"
+            proposal.write_text("synthetic", encoding="utf-8")
+            validation = LatexValidation(command=("latexmk",), returncode=0, stdout="", stderr="")
+
+            def compile_sparse_page(proposal_path: Path, **_: Any) -> LatexValidation:
+                proposal_path.with_suffix(".pdf").write_bytes(
+                    b"%PDF-1.4\n1 0 obj<</Type /Page>>endobj\n%%EOF"
+                )
+                return validation
+
+            with (
+                patch(
+                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    side_effect=compile_sparse_page,
+                ),
+                patch(
+                    "erga_mcp.mcp_server.pdf_page_fill",
+                    return_value=SimpleNamespace(fill_ratio=0.67),
+                ),
+            ):
+                result = _compile_intake_proposal(
+                    proposal,
+                    latexmk="latexmk",
+                    output_pdf_name="Candidate_Resume.pdf",
+                    max_pages=1,
+                    minimum_page_fill_ratio=0.82,
+                )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.page_fill_ratio, 0.67)
+            self.assertEqual(result.minimum_page_fill_ratio, 0.82)
+            self.assertIn("fills 67.0%", result.skipped or "")
             self.assertFalse(proposal.with_suffix(".pdf").exists())
 
     def test_primary_intake_writes_research_application_and_multicycle_obsidian_note(self) -> None:

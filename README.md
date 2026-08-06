@@ -134,8 +134,12 @@ to the connected GitHub identity and inspects all fetched refs. When the MCP cli
 sampling, its connected model receives bounded approved bullets plus authenticated diff evidence
 and returns structured, role-specific project bullets with evidence IDs. Server-side validation
 rejects unsupported numbers, cross-project citations, raw commit/file/line accounting, duplicate
-lead verbs, unsafe LaTeX, and rendered overflow. The deterministic approved-copy path remains the
-fallback when sampling, GitHub, or a selected repository is unavailable.
+lead verbs, unsafe LaTeX, rendered overflow, and one-page PDFs whose text occupies less than the
+configured page-height ratio (82% by default). Lead-verb uniqueness is required even for older
+configs that contain the former `false` default. For a sufficiently populated but compact template,
+Erga distributes existing vertical whitespace before compiling; it does not spend another model
+call, rewrite claims, change margins or fonts, or add filler text. The deterministic approved-copy
+path remains the fallback when sampling, GitHub, or a selected repository is unavailable.
 
 After core setup, optionally connect any number of coding assistants:
 
