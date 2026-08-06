@@ -95,7 +95,15 @@ _RELEVANCE_CLUSTERS = (
     frozenset({"pytorch", "tensorflow", "machine", "ml", "model", "inference"}),
     frozenset({"test", "testing", "pytest", "quality", "reliability"}),
 )
-TAILORING_VERSION = 8
+_LEAD_VERB_ALTERNATIVES = {
+    "built": ("Developed", "Engineered", "Constructed"),
+    "developed": ("Built", "Engineered", "Created"),
+    "earned": ("Won", "Secured", "Captured"),
+    "implemented": ("Integrated", "Delivered", "Deployed"),
+    "optimized": ("Improved", "Accelerated", "Streamlined"),
+    "won": ("Earned", "Secured", "Captured"),
+}
+TAILORING_VERSION = 9
 
 
 @dataclass(frozen=True)
@@ -385,7 +393,7 @@ def _project_claim_records(
 ) -> list[dict[str, object]]:
     """Record explicit approved-evidence provenance for every selected inventory bullet."""
     records: list[dict[str, object]] = []
-    for project in projects:
+    for project_index, project in enumerate(projects):
         bullets = _command_spans(project.latex, "resumeItem")
         if len(bullets) != len(project.bullet_evidence_ids) or any(
             not evidence_ids for evidence_ids in project.bullet_evidence_ids
@@ -397,11 +405,15 @@ def _project_claim_records(
             records.append(
                 {
                     "evidence_ids": list(evidence_ids),
+                    "output_group_index": project_index,
+                    "output_index": index - 1,
                     "project_id": project.id,
                     "project_title": project.title,
+                    "section": "Projects",
                     "source_kind": "project_inventory",
                     "source_ref": f"project_inventory/{project.id}/{index}",
                     "text": latex_to_text(span.content),
+                    "text_changed": False,
                 }
             )
     return records
@@ -450,6 +462,7 @@ def _bullet_constraint_report(
     minimum: int,
     target: int,
     maximum: int,
+    equivalent_originals: dict[str, str] | None = None,
 ) -> tuple[dict[str, object], tuple[str, ...]]:
     configured = bool(minimum or target or maximum)
     original_document = original[original.find("\\begin{document}") :]
@@ -466,15 +479,17 @@ def _bullet_constraint_report(
     legacy: list[dict[str, object]] = []
     introduced: list[dict[str, object]] = []
     seen: dict[str, int] = {}
+    equivalents = equivalent_originals or {}
     if configured:
         for text in proposed_text:
             length = len(text)
             if minimum <= length <= maximum:
                 continue
-            occurrence = seen.get(text, 0)
-            seen[text] = occurrence + 1
+            source_text = equivalents.get(text, text)
+            occurrence = seen.get(source_text, 0)
+            seen[source_text] = occurrence + 1
             item = {"length": length, "text": text}
-            if occurrence < original_counts.get(text, 0):
+            if occurrence < original_counts.get(source_text, 0):
                 legacy.append(item)
             else:
                 introduced.append(item)
@@ -516,6 +531,121 @@ def _lead_verb_report(source: str, *, required: bool) -> tuple[dict[str, object]
         },
         violations,
     )
+
+
+def _resolve_duplicate_lead_verbs(
+    source: str, *, required: bool, editable_sections: tuple[str, ...]
+) -> tuple[str, list[dict[str, object]]]:
+    """Rewrite repeated bullet openers only when a semantics-preserving alternative exists."""
+    if not required:
+        return source, []
+
+    spans = _command_spans(source[source.find("\\begin{document}") :], "resumeItem")
+    document_start = source.find("\\begin{document}")
+    used = {
+        words[0].casefold()
+        for span in spans
+        if (words := re.findall(r"[A-Za-z]+", latex_to_text(span.content)))
+    }
+    requested = {re.sub(r"[^a-z0-9]+", "", item.casefold()) for item in editable_sections}
+    section_ranges: list[tuple[int, int, str]] = []
+    for name in ("Experience", "Projects"):
+        key = re.sub(r"[^a-z0-9]+", "", name.casefold())
+        if key not in requested:
+            continue
+        start, end, canonical = _section_body(source, name)
+        section_ranges.append((start, end, canonical))
+    section_counts: dict[str, int] = {}
+    seen: set[str] = set()
+    rewrites: list[dict[str, object]] = []
+    chunks: list[str] = []
+    cursor = 0
+    for relative_span in spans:
+        span = replace(
+            relative_span,
+            start=relative_span.start + document_start,
+            end=relative_span.end + document_start,
+        )
+        words = re.findall(r"[A-Za-z]+", latex_to_text(span.content))
+        if not words:
+            continue
+        lead = words[0]
+        normalized = lead.casefold()
+        section = next(
+            (name for start, end, name in section_ranges if start <= span.start < end), None
+        )
+        section_index = section_counts.get(section, 0) if section is not None else -1
+        if section is not None:
+            section_counts[section] = section_index + 1
+        if normalized not in seen:
+            seen.add(normalized)
+            continue
+        if section is None:
+            continue
+        candidates = _LEAD_VERB_ALTERNATIVES.get(normalized, ())
+        replacement = next(
+            (candidate for candidate in candidates if candidate.casefold() not in used), None
+        )
+        if replacement is None:
+            continue
+        rewritten_content = re.sub(
+            rf"(?<![A-Za-z]){re.escape(lead)}(?![A-Za-z])",
+            replacement,
+            span.content,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        rewritten_latex = span.latex.replace(span.content, rewritten_content, 1)
+        chunks.extend((source[cursor : span.start], rewritten_latex))
+        cursor = span.end
+        rewritten_text = latex_to_text(rewritten_content)
+        rewrites.append(
+            {
+                "from": lead,
+                "original_text": latex_to_text(span.content),
+                "rewritten_text": rewritten_text,
+                "section": section,
+                "section_bullet_index": section_index,
+                "to": replacement,
+            }
+        )
+        used.add(replacement.casefold())
+    if not rewrites:
+        return source, []
+    chunks.append(source[cursor:])
+    return "".join(chunks), rewrites
+
+
+def _record_lead_verb_rewrites(
+    records: list[dict[str, object]], rewrites: list[dict[str, object]]
+) -> None:
+    """Bind each rewrite to the exact output-position provenance record."""
+    for rewrite in rewrites:
+        section = rewrite["section"]
+        if not isinstance(section, str):
+            continue
+
+        def position(item: dict[str, object], key: str) -> int:
+            value = item.get(key)
+            return value if isinstance(value, int) else 0
+
+        ordered = sorted(
+            (item for item in records if item.get("section") == section),
+            key=lambda item: (
+                position(item, "output_group_index"),
+                position(item, "output_index"),
+            ),
+        )
+        index_value = rewrite["section_bullet_index"]
+        if not isinstance(index_value, int):
+            continue
+        index = index_value
+        if index >= len(ordered):
+            continue
+        record = ordered[index]
+        record["original_text"] = rewrite["original_text"]
+        record["text"] = rewrite["rewritten_text"]
+        record["text_changed"] = True
 
 
 def create_automatic_resume_proposal(
@@ -611,16 +741,36 @@ def create_automatic_resume_proposal(
         if changed:
             changed_sections.append(canonical)
 
+    proposed, lead_verb_rewrites = _resolve_duplicate_lead_verbs(
+        proposed,
+        required=require_unique_lead_verbs,
+        editable_sections=editable_sections,
+    )
+    for rewrite in lead_verb_rewrites:
+        section = rewrite.get("section")
+        if isinstance(section, str) and section not in changed_sections:
+            changed_sections.append(section)
+    _record_lead_verb_rewrites(claims, lead_verb_rewrites)
+    _record_lead_verb_rewrites(project_claims, lead_verb_rewrites)
+    equivalent_originals: dict[str, str] = {}
+    for rewrite in lead_verb_rewrites:
+        rewritten_text = rewrite.get("rewritten_text")
+        original_text = rewrite.get("original_text")
+        if isinstance(rewritten_text, str) and isinstance(original_text, str):
+            equivalent_originals[rewritten_text] = original_text
+
     length_report, violations = _bullet_constraint_report(
         original,
         proposed,
         minimum=bullet_min_chars,
         target=bullet_target_chars,
         maximum=bullet_max_chars,
+        equivalent_originals=equivalent_originals,
     )
     lead_verb_report, lead_verb_violations = _lead_verb_report(
         proposed, required=require_unique_lead_verbs
     )
+    lead_verb_report["rewrites"] = lead_verb_rewrites
     violations = (*violations, *lead_verb_violations)
     if violations:
         proposed = original
@@ -628,6 +778,9 @@ def create_automatic_resume_proposal(
         claims = []
         project_claims = []
         skill_records = []
+        lead_verb_rewrites = []
+        lead_verb_report, _ = _lead_verb_report(proposed, required=require_unique_lead_verbs)
+        lead_verb_report["rewrites"] = []
         if project_candidates:
             project_selection = {
                 "candidate_count": len(project_candidates),
@@ -674,7 +827,12 @@ def create_automatic_resume_proposal(
                     "baseline_fallback": not meaningful_change,
                     "changed_sections": changed_sections,
                     "meaningful_change": meaningful_change,
-                    "method": "deterministic relevance ordering; no claim text changed",
+                    "method": (
+                        "deterministic relevance ordering with semantics-preserving "
+                        "lead-verb rewrites"
+                        if lead_verb_rewrites
+                        else "deterministic relevance ordering; no claim text changed"
+                    ),
                     "reason": (
                         "No meaningful, constraint-valid ordering change was available."
                         if not meaningful_change
