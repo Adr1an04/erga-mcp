@@ -495,6 +495,30 @@ def _bullet_constraint_report(
     )
 
 
+def _lead_verb_report(source: str, *, required: bool) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Check lead-verb uniqueness mechanically across every résumé bullet."""
+    verbs: dict[str, list[str]] = {}
+    document = source[source.find("\\begin{document}") :]
+    for span in _command_spans(document, "resumeItem"):
+        words = re.findall(r"[A-Za-z]+", latex_to_text(span.content))
+        if words:
+            verbs.setdefault(words[0].casefold(), []).append(latex_to_text(span.content))
+    duplicates = {verb: bullets for verb, bullets in verbs.items() if len(bullets) > 1}
+    violations = (
+        tuple(f"duplicate lead verb '{verb}'" for verb in sorted(duplicates))
+        if required
+        else ()
+    )
+    return (
+        {
+            "configured": required,
+            "duplicates": duplicates,
+            "passed": not required or not duplicates,
+        },
+        violations,
+    )
+
+
 def create_automatic_resume_proposal(
     *,
     resume_path: Path,
@@ -507,6 +531,7 @@ def create_automatic_resume_proposal(
     bullet_max_chars: int = 0,
     project_candidates: tuple[ProjectCandidate, ...] = (),
     project_count: int = 4,
+    require_unique_lead_verbs: bool = False,
 ) -> AutomaticResumeProposal:
     """Tailor a résumé using only user-provided claims and approved project blocks."""
     if resume_path.suffix.casefold() != ".tex" or not resume_path.is_file():
@@ -582,6 +607,10 @@ def create_automatic_resume_proposal(
         target=bullet_target_chars,
         maximum=bullet_max_chars,
     )
+    lead_verb_report, lead_verb_violations = _lead_verb_report(
+        proposed, required=require_unique_lead_verbs
+    )
+    violations = (*violations, *lead_verb_violations)
     if violations:
         proposed = original
         changed_sections = []
@@ -621,7 +650,10 @@ def create_automatic_resume_proposal(
                     for item in evidence
                 ],
                 "claims": claims,
-                "constraints": {"bullet_characters": length_report},
+                "constraints": {
+                    "bullet_characters": length_report,
+                    "lead_verbs": lead_verb_report,
+                },
                 "external_sync": "not performed",
                 "project_claims": project_claims,
                 "project_selection": project_selection,

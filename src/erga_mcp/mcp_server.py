@@ -292,7 +292,12 @@ def _inventory_candidates(
 ) -> tuple[ProjectCandidate, ...]:
     """Load the optional local project arsenal; an absent setting preserves legacy behavior."""
     path = config.resume.project_inventory_path
-    return load_project_inventory(path, evidence) if path is not None else ()
+    candidates = load_project_inventory(path, evidence) if path is not None else ()
+    return tuple(
+        candidate
+        for candidate in candidates
+        if len(candidate.bullet_evidence_ids) >= config.resume.project_min_bullets
+    )
 
 
 def _include_selected_project_evidence(
@@ -742,6 +747,7 @@ def _upgrade_existing_tailoring(
         bullet_max_chars=config.resume.bullet_max_chars,
         project_candidates=project_candidates,
         project_count=config.resume.project_count,
+        require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
     )
     validation = _compile_intake_proposal(
         automatic.proposal.proposed_tex_path,

@@ -242,6 +242,37 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
             self.assertEqual(lengths["new_violations"], [])
             self.assertEqual(result.constraint_violations, ())
 
+    def test_duplicate_lead_verbs_are_a_deterministic_constraint_violation(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text(
+                _TEMPLATE.replace(
+                    "Implemented a real-time inference engine", "Built a real-time inference engine"
+                ),
+                encoding="utf-8",
+            )
+
+            result = create_automatic_resume_proposal(
+                resume_path=source,
+                output_dir=root / "artifacts",
+                job_description="Python FastAPI Docker",
+                evidence=[],
+                editable_sections=("experience",),
+                require_unique_lead_verbs=True,
+            )
+
+            self.assertFalse(result.meaningful_change)
+            self.assertTrue(
+                any(
+                    "duplicate lead verb 'built'" in violation
+                    for violation in result.constraint_violations
+                )
+            )
+            report = json.loads(result.proposal.claim_report_path.read_text(encoding="utf-8"))
+            self.assertFalse(report["constraints"]["lead_verbs"]["passed"])
+            self.assertIn("built", report["constraints"]["lead_verbs"]["duplicates"])
+
     def test_inventory_constraint_fallback_resets_selection_and_provenance(self) -> None:
         inventory = (
             ProjectCandidate(

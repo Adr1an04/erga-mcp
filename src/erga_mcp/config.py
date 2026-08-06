@@ -30,6 +30,10 @@ output_root = "output"
 project_inventory_path = ""
 project_selection_mode = "inventory_optional"
 project_count = 4
+# Require enough evidence-backed bullets for a project to be considered during selection.
+project_min_bullets = 1
+# Reject a generated proposal when any résumé bullets share the same leading verb.
+require_unique_lead_verbs = false
 # The filename of every generated local PDF. Configure a real candidate name locally.
 output_pdf_name = "Firstname_Lastname_Resume.pdf"
 latexmk = "latexmk"
@@ -87,6 +91,8 @@ class ResumeSettings:
     project_inventory_path: Path | None
     project_selection_mode: str
     project_count: int
+    project_min_bullets: int
+    require_unique_lead_verbs: bool
     output_pdf_name: str
     latexmk: str
 
@@ -203,6 +209,10 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
     project_count = int(resume.get("project_count", 4))
     if project_count < 1:
         raise ValueError("resume project_count must be positive")
+    project_min_bullets = int(resume.get("project_min_bullets", 1))
+    if project_min_bullets < 1:
+        raise ValueError("resume project_min_bullets must be positive")
+    require_unique_lead_verbs = bool(resume.get("require_unique_lead_verbs", False))
     latexmk = str(resume.get("latexmk", "latexmk")).strip()
     if not latexmk:
         raise ValueError("resume latexmk must be non-empty")
@@ -222,6 +232,8 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
         project_inventory_path=project_inventory_path,
         project_selection_mode=project_selection_mode,
         project_count=project_count,
+        project_min_bullets=project_min_bullets,
+        require_unique_lead_verbs=require_unique_lead_verbs,
         output_pdf_name=output_pdf_name,
         latexmk=latexmk,
     )

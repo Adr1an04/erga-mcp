@@ -113,6 +113,46 @@ class ProjectInventoryTests(unittest.TestCase):
 
         self.assertEqual([candidate.id for candidate in selected], ["kubernetes-platform"])
 
+    def test_select_projects_excludes_candidates_below_configured_bullet_minimum(self) -> None:
+        candidates = (
+            ProjectCandidate(
+                id="one-bullet",
+                title="One Bullet",
+                latex=(
+                    r"\resumeProjectHeading{\textbf{One Bullet}}{}\n"
+                    r"\resumeItemListStart\n"
+                    r"\resumeItem{Built a Python system for testing.}\n"
+                    r"\resumeItemListEnd"
+                ),
+                evidence_ids=("ev_one",),
+                bullet_evidence_ids=(("ev_one",),),
+                tags=("python", "testing"),
+            ),
+            ProjectCandidate(
+                id="two-bullets",
+                title="Two Bullets",
+                latex=(
+                    r"\resumeProjectHeading{\textbf{Two Bullets}}{}\n"
+                    r"\resumeItemListStart\n"
+                    r"\resumeItem{Built a Python system for testing.}\n"
+                    r"\resumeItem{Validated deterministic project selection behavior.}\n"
+                    r"\resumeItemListEnd"
+                ),
+                evidence_ids=("ev_two",),
+                bullet_evidence_ids=(("ev_two",), ("ev_two",)),
+                tags=("python", "testing"),
+            ),
+        )
+
+        selected = select_projects(
+            candidates,
+            "Python testing systems",
+            max_projects=2,
+            minimum_bullets=2,
+        )
+
+        self.assertEqual([candidate.id for candidate in selected], ["two-bullets"])
+
     def test_inventory_rejects_unapproved_or_missing_evidence(self) -> None:
         evidence = [
             Evidence("ev_ok", "Career#Project", "Verified project", True, datetime.now(UTC)),

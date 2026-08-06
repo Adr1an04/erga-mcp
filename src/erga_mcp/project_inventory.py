@@ -202,13 +202,28 @@ def _score(candidate: ProjectCandidate, job_description: str) -> int:
 
 
 def select_projects(
-    candidates: Sequence[ProjectCandidate], job_description: str, *, max_projects: int
+    candidates: Sequence[ProjectCandidate],
+    job_description: str,
+    *,
+    max_projects: int,
+    minimum_bullets: int = 1,
 ) -> tuple[ProjectCandidate, ...]:
-    """Select role-relevant candidates deterministically; zero-match entries remain excluded."""
+    """Select role-relevant, sufficiently substantial candidates deterministically."""
     if max_projects < 1:
         raise ValueError("max_projects must be positive")
+    if minimum_bullets < 1:
+        raise ValueError("minimum_bullets must be positive")
+    eligible = (
+        candidates
+        if minimum_bullets == 1
+        else tuple(
+            candidate
+            for candidate in candidates
+            if len(candidate.bullet_evidence_ids) >= minimum_bullets
+        )
+    )
     ranked = sorted(
-        ((candidate, _score(candidate, job_description)) for candidate in candidates),
+        ((candidate, _score(candidate, job_description)) for candidate in eligible),
         key=lambda item: (-item[1], item[0].id),
     )
     return tuple(candidate for candidate, score in ranked if score > 0)[:max_projects]
