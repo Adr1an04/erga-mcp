@@ -1919,6 +1919,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             bullet_max_chars=config.resume.bullet_max_chars,
             project_candidates=project_candidates,
             project_count=config.resume.project_count,
+            require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
         )
         proposal = automatic.proposal
         validation = _compile_intake_proposal(
