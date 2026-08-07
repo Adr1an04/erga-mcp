@@ -68,7 +68,6 @@ from .job_research import (
     JobResearch,
     analyze_job_snapshot,
     official_job_text,
-    require_job_posting,
     write_job_research,
     write_secondary_research,
     write_stage_research,
@@ -2872,7 +2871,6 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             template_path=config.resume.template_path,
         )
         snapshot = fetch_job_snapshot(job_url)
-        require_job_posting(snapshot, job_url=job_url)
         source_research = analyze_job_snapshot(snapshot, job_url=job_url)
         resolved_cycle, resolved_slug = _metadata_from_research(
             job_url,
@@ -3262,7 +3260,6 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         if config.resume.template_path is None or config.vault_path is None:
             raise ValueError("resume template_path and vault_path must be configured")
         snapshot = fetch_job_snapshot(job_url)
-        require_job_posting(snapshot, job_url=job_url)
         research = analyze_job_snapshot(snapshot, job_url=job_url)
         all_approved = [item for item in store.list_evidence() if item.approved]
         evidence = select_relevant_evidence(snapshot, all_approved)
