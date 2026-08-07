@@ -14,6 +14,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
+
 from .models import Evidence
 
 
@@ -34,7 +37,7 @@ class LatexValidation:
 
 @dataclass(frozen=True)
 class ResumeItemLayoutValidation:
-    """Exact TeX measurement of which rendered resume bullets need another line."""
+    """Exact TeX measurement of wrapped bullets and visually stranded short tails."""
 
     command: tuple[str, ...]
     returncode: int
@@ -42,6 +45,7 @@ class ResumeItemLayoutValidation:
     wrapped_item_indices: tuple[int, ...]
     stdout: str
     stderr: str
+    orphan_item_indices: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -61,7 +65,8 @@ _MACOS_TEXBIN = Path("/Library/TeX/texbin")
 _LATEX_COMMAND_WITH_ARGUMENT = re.compile(r"\\[A-Za-z]+\*?(?:\[[^]]*\])?\{([^{}]*)\}")
 _LATEX_COMMAND = re.compile(r"\\[A-Za-z]+\*?(?:\[[^]]*\])?")
 _SPACE = re.compile(r"\s+")
-_LAYOUT_MARKER = re.compile(r"ERGA-RESUME-ITEM-(?P<state>FIT|WRAP):(?P<index>\d+)")
+_LAYOUT_MARKER = re.compile(r"ERGA-RESUME-ITEM-(?P<state>FIT|WRAP|ORPHAN):(?P<index>\d+)")
+_PDF_BULLET_LINE = re.compile(r"^(?P<indent>\s*)[•●▪◦‣⁃]\s+(?P<text>.*\S)\s*$")
 _SINGLE_LINE_LAYOUT_INSTRUMENT = r"""
 \newlength{\ergaResumeItemWidth}
 \newcounter{ergaResumeItemCounter}
@@ -77,6 +82,43 @@ _SINGLE_LINE_LAYOUT_INSTRUMENT = r"""
   \ergaOriginalResumeItem{#1}%
 }
 """
+
+
+def _pdf_resume_item_lines(pdf_path: Path) -> tuple[tuple[str, ...], ...] | None:
+    """Extract rendered line groupings for bullets from a compiled validation PDF."""
+    try:
+        pages = PdfReader(pdf_path).pages
+        rendered = "\n".join(page.extract_text(extraction_mode="layout") or "" for page in pages)
+    except (OSError, PdfReadError, TypeError, ValueError):
+        return None
+
+    items: list[tuple[str, ...]] = []
+    current: list[str] = []
+    bullet_indent = 0
+
+    def finish() -> None:
+        nonlocal current
+        if current:
+            items.append(tuple(current))
+            current = []
+
+    for line in rendered.splitlines():
+        bullet = _PDF_BULLET_LINE.match(line)
+        if bullet:
+            finish()
+            bullet_indent = len(bullet.group("indent"))
+            current = [bullet.group("text")]
+            continue
+        if not current:
+            continue
+        stripped = line.strip()
+        indentation = len(line) - len(line.lstrip())
+        if stripped and indentation > bullet_indent:
+            current.append(stripped)
+        else:
+            finish()
+    finish()
+    return tuple(items)
 
 
 def _section_key(value: str) -> str:
@@ -612,11 +654,15 @@ def validate_single_line_resume_items(
             temporary.write(instrumented)
             temporary_path = Path(temporary.name)
         command = (
-            str(latexmk_executable),
-            "-pdf",
-            "-no-shell-escape",
-            "-interaction=nonstopmode",
-            temporary_path.name,
+            (str(latexmk_executable), "--keep-logs", temporary_path.name)
+            if latexmk_executable.name.casefold() == "tectonic"
+            else (
+                str(latexmk_executable),
+                "-pdf",
+                "-no-shell-escape",
+                "-interaction=nonstopmode",
+                temporary_path.name,
+            )
         )
         completed = runner(
             command,
@@ -636,15 +682,26 @@ def validate_single_line_resume_items(
             raise ValueError(
                 "single-line layout validation did not observe every rendered resume bullet"
             )
+        pdf_items = _pdf_resume_item_lines(temporary_path.with_suffix(".pdf"))
+        rendered_orphans = (
+            tuple(
+                index
+                for index, lines in enumerate(pdf_items)
+                if len(lines) > 1 and len(lines[-1].split()) <= 2
+            )
+            if pdf_items is not None and len(pdf_items) == item_count
+            else tuple(index - 1 for index, state in sorted(observed.items()) if state == "ORPHAN")
+        )
         return ResumeItemLayoutValidation(
             command=command,
             returncode=completed.returncode,
             item_count=item_count,
             wrapped_item_indices=tuple(
-                index - 1 for index, state in sorted(observed.items()) if state == "WRAP"
+                index - 1 for index, state in sorted(observed.items()) if state != "FIT"
             ),
             stdout=completed.stdout,
             stderr=completed.stderr,
+            orphan_item_indices=rendered_orphans,
         )
     finally:
         if temporary_path is not None:

@@ -191,7 +191,7 @@ class ResumeTemplateTests(unittest.TestCase):
             generated = generate_latex_template(source, data_dir=root / "state")
             template = generated.path.read_text(encoding="utf-8")
 
-            self.assertIn("% Erga semantic resume template version: 15", template)
+            self.assertIn("% Erga semantic resume template version: 16", template)
             self.assertIn(r"\resumeEducationHeading{Example University}{Orlando, FL}", template)
             self.assertIn(r"\resumeEducationDetail{Bachelor of Science}{May 2027}", template)
             self.assertIn(
@@ -352,6 +352,48 @@ class ResumeTemplateTests(unittest.TestCase):
             self.assertNotIn("Tested the approved Alpha deployment", proposed)
             self.assertNotIn("Beta Website", proposed)
 
+    def test_generated_layout_rejection_backfills_with_another_approved_bullet(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            rejected = "Built the approved Alpha Python service with an awkward tail."
+            source = ResumeSource(
+                path=root / "master.pdf",
+                format="pdf",
+                sha256="b" * 64,
+                page_count=1,
+                text=(
+                    "Jane Candidate\nPROJECTS\nAlpha Platform\n"
+                    f"   • {rejected}\n"
+                    "   • Tested the approved Alpha deployment.\n"
+                    "Beta Website\n"
+                    "   • Designed the approved Beta site.\n"
+                    "TECHNICAL SKILLS\nLanguages: Python"
+                ),
+            )
+            generated = generate_latex_template(source, data_dir=root / "state")
+
+            result = create_automatic_resume_proposal(
+                resume_path=generated.path,
+                output_dir=root / "artifacts",
+                job_description="Alpha Python deployment",
+                evidence=[],
+                editable_sections=("Projects",),
+                max_pages=1,
+                generated_section_item_limits={"Projects": 2},
+                layout_rejected_bullet_texts=(rejected,),
+            )
+
+            proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
+            report = json.loads(result.proposal.claim_report_path.read_text(encoding="utf-8"))
+            self.assertNotIn(rejected, proposed)
+            self.assertEqual(proposed.count(r"\resumeItem{"), 2)
+            self.assertTrue(
+                any(
+                    item["action"] == "omitted_for_layout_balance" and item["text"] == rejected
+                    for item in report["page_target_omissions"]
+                )
+            )
+
     def test_generated_project_budget_preserves_template_bullets_per_entry(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -484,8 +526,12 @@ class ResumeTemplateTests(unittest.TestCase):
                         ("Style Person", 220.0, 760.0, 24.8, "/Synthetic-Bold"),
                         ("Education", 36.0, 720.0, 12.0, "/Synthetic-Caps"),
                         ("Example University", 46.8, 700.0, 10.0, "/Synthetic-Bold"),
+                        ("•", 61.53, 686.0, 5.98, "/Synthetic-Math"),
                         ("Example result", 61.5, 686.0, 10.0, "/Synthetic-Regular"),
+                        ("approved", 70.8, 686.0, 10.0, "/Synthetic-Bold"),
+                        ("•", 61.53, 672.0, 5.98, "/Synthetic-Math"),
                         ("Another result", 61.5, 672.0, 10.0, "/Synthetic-Regular"),
+                        ("verified", 70.8, 672.0, 10.0, "/Synthetic-Bold"),
                         ("Projects", 36.0, 650.0, 12.0, "/Synthetic-Caps"),
                         ("Technical Skills", 36.0, 620.0, 12.0, "/Synthetic-Caps"),
                     )
@@ -519,6 +565,9 @@ class ResumeTemplateTests(unittest.TestCase):
             self.assertEqual(generated.profile.project_count, 3)
             self.assertEqual(metadata["style_layout_profile"]["section_item_counts"]["Projects"], 6)
             self.assertEqual(metadata["visual_style_profile"]["body_font_size_pt"], 10.0)
+            self.assertTrue(metadata["visual_style_profile"]["bullet_geometry_measured"])
+            self.assertEqual(metadata["visual_style_profile"]["bullet_text_indent_in"], 0.333)
+            self.assertEqual(metadata["visual_style_profile"]["entry_left_margin_in"], 0.15)
             self.assertTrue(metadata["visual_style_profile"]["section_rule"])
             self.assertIn(r"\fontsize{24.8pt}{29.76pt}\selectfont\bfseries", template)
             self.assertIn(r"\fontsize{10pt}{12pt}\selectfont", template)
@@ -529,7 +578,8 @@ class ResumeTemplateTests(unittest.TestCase):
             )
             self.assertIn(r"\newcommand{\ergasectionrule}{\titlerule[0.4pt]}", template)
             self.assertIn(r"[\ergasectionrule]", template)
-            self.assertIn(r"leftmargin=0.2in", template)
+            self.assertIn(r"leftmargin=0.333in", template)
+            self.assertIn("labelwidth=0.053in,labelsep=0.076in", template)
             self.assertIn("itemsep=2pt,topsep=2pt", template)
 
     def test_generated_generic_items_are_tailorable_without_legacy_macros(self) -> None:

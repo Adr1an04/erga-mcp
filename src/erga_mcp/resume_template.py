@@ -21,7 +21,7 @@ from .resume_settings import update_settings
 from .resume_sources import ResumeSource, load_resume_source
 from .resume_tailoring import latex_to_text
 
-TEMPLATE_GENERATION_VERSION = 15
+TEMPLATE_GENERATION_VERSION = 16
 _PAGE_MARKER = re.compile(r"^\[Page \d+\]$")
 _BULLET_PREFIX = re.compile(r"^(?:[•●▪◦‣⁃*]|[-–—]\s)\s*")
 _SPACE = re.compile(r"\s+")
@@ -29,7 +29,7 @@ _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?;])\s+(?=[A-Z0-9])")
 _SECTION_KEY = re.compile(r"[^a-z0-9]+")
 _LAYOUT_INDENT_MARKER = "[[ERGA-LAYOUT-INDENT]]"
 _LAYOUT_COLUMN_MARKER = "[[ERGA-LAYOUT-COLUMN]]"
-_SEMANTIC_TEMPLATE_MARKER = "% Erga semantic resume template version: 15"
+_SEMANTIC_TEMPLATE_MARKER = "% Erga semantic resume template version: 16"
 _VISUAL_SPACING_MARKER = "% Erga visual spacing is template-controlled."
 _SECTION_ALIASES = {
     "activities": "Activities",
@@ -124,8 +124,14 @@ class ResumeVisualProfile:
 
     body_font_size_pt: float
     body_leading_pt: float
+    bullet_font_size_pt: float
+    bullet_geometry_measured: bool
+    bullet_label_sep_in: float
+    bullet_label_width_in: float
     bullet_left_margin_in: float
+    bullet_text_indent_in: float
     bottom_margin_in: float
+    entry_left_margin_in: float
     entry_spacing_pt: float
     header_font_size_pt: float
     item_spacing_pt: float
@@ -145,8 +151,14 @@ class ResumeVisualProfile:
         return {
             "body_font_size_pt": self.body_font_size_pt,
             "body_leading_pt": self.body_leading_pt,
+            "bullet_font_size_pt": self.bullet_font_size_pt,
+            "bullet_geometry_measured": self.bullet_geometry_measured,
+            "bullet_label_sep_in": self.bullet_label_sep_in,
+            "bullet_label_width_in": self.bullet_label_width_in,
             "bullet_left_margin_in": self.bullet_left_margin_in,
+            "bullet_text_indent_in": self.bullet_text_indent_in,
             "bottom_margin_in": self.bottom_margin_in,
+            "entry_left_margin_in": self.entry_left_margin_in,
             "entry_spacing_pt": self.entry_spacing_pt,
             "header_font_size_pt": self.header_font_size_pt,
             "item_spacing_pt": self.item_spacing_pt,
@@ -636,8 +648,45 @@ def _pdf_visual_profile(source: ResumeSource) -> ResumeVisualProfile | None:
         ),
     )
     entry_x = min((item[1] for item in heading_fragments), default=margin_x + 10.8)
+    entry_left_margin_in = max(0.0, min(0.35, (entry_x - margin_x) / 72.0))
     bullet_x = min((item[1] for item in bullet_fragments), default=entry_x + 13)
     bullet_left_margin_in = max(0.12, min(0.35, (bullet_x - entry_x) / 72.0))
+    bullet_font_size = (
+        float(statistics.median(item[3] for item in bullet_fragments))
+        if bullet_fragments
+        else body_size * 0.6
+    )
+    # pypdf reports the text matrix before a bullet label's horizontal advance for the first
+    # fragment on some TeX PDFs. A later font run on that same baseline exposes the true body
+    # origin, so use the nearest positive aligned x-offset across all observed bullet lines.
+    bullet_body_x: list[float] = []
+    for bullet in bullet_fragments:
+        aligned = [
+            item[1]
+            for item in candidates
+            if abs(item[2] - bullet[2]) <= 2 and item[1] > bullet[1] + 2
+        ]
+        if aligned:
+            bullet_body_x.append(min(aligned))
+    bullet_geometry_measured = bool(bullet_fragments and bullet_body_x)
+    if bullet_geometry_measured:
+        body_x = float(statistics.median(bullet_body_x))
+        bullet_text_indent_in = max(0.18, min(0.55, (body_x - entry_x) / 72.0))
+        # Computer Modern and Latin Modern bullet glyphs are about 0.64 em wide. Capturing the
+        # label box separately lets enumitem reproduce both glyph and text origins exactly.
+        bullet_label_width_in = max(0.035, min(0.09, bullet_font_size * 0.64 / 72.0))
+        bullet_label_sep_in = max(
+            0.02,
+            min(
+                0.16,
+                (body_x - bullet_x) / 72.0 - bullet_label_width_in,
+            ),
+        )
+    else:
+        # Keep the established fallback for PDFs whose extractor does not expose bullet glyphs.
+        bullet_text_indent_in = min(0.55, bullet_left_margin_in + 0.024)
+        bullet_label_width_in = max(0.035, min(0.09, bullet_font_size * 0.64 / 72.0))
+        bullet_label_sep_in = 0.05
     section_rule_matches = sum(
         any(0 <= section[2] - rule[2] <= 8 for rule in broad_rules) for section in section_fragments
     )
@@ -651,8 +700,14 @@ def _pdf_visual_profile(source: ResumeSource) -> ResumeVisualProfile | None:
     return ResumeVisualProfile(
         body_font_size_pt=round(body_size, 2),
         body_leading_pt=round(body_leading, 2),
+        bullet_font_size_pt=round(bullet_font_size, 2),
+        bullet_geometry_measured=bullet_geometry_measured,
+        bullet_label_sep_in=round(bullet_label_sep_in, 3),
+        bullet_label_width_in=round(bullet_label_width_in, 3),
         bullet_left_margin_in=round(bullet_left_margin_in, 3),
+        bullet_text_indent_in=round(bullet_text_indent_in, 3),
         bottom_margin_in=round(margin_in, 2),
+        entry_left_margin_in=round(entry_left_margin_in, 3),
         entry_spacing_pt=round(entry_spacing, 2),
         header_font_size_pt=round(max(body_size * 1.6, min(28.0, header_size)), 2),
         item_spacing_pt=round(item_spacing, 2),
@@ -689,7 +744,8 @@ def _latex_escape(value: str) -> str:
 
 
 def _measure(value: float) -> str:
-    return f"{value:.2f}".rstrip("0").rstrip(".")
+    # A hundredth of an inch is visibly large at resume scale; retain thousandths for geometry.
+    return f"{value:.3f}".rstrip("0").rstrip(".")
 
 
 def _render_header(lines: list[str], visual: ResumeVisualProfile | None) -> str:
@@ -834,9 +890,9 @@ def _render_section(name: str, lines: list[str]) -> str:
         return "\n".join(rendered)
     rendered.extend(
         [
-            r"\begin{itemize}[leftmargin=0.18in,label=\textbullet]",
+            r"\resumeStandaloneItemListStart",
             *[rf"  \resumeItem{{{_latex_escape(_flatten_columns(line))}}}" for line in lines],
-            r"\end{itemize}",
+            r"\resumeStandaloneItemListEnd",
         ]
     )
     return "\n".join(rendered)
@@ -855,11 +911,32 @@ def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
         else "margin=0.50in"
     )
     item_spacing = _measure(visual.item_spacing_pt) if visual is not None else "1"
-    # enumitem positions the bullet glyph slightly inside its configured left margin. Compensate
-    # for that label box so the rendered glyph offset matches the measured reference PDF.
-    bullet_left_margin = (
-        _measure(visual.bullet_left_margin_in + 0.024) if visual is not None else "0.18"
+    measured_bullet_geometry = False
+    bullet_left_margin = "0.18"
+    if visual is not None:
+        measured_bullet_geometry = visual.bullet_geometry_measured
+        bullet_left_margin = _measure(
+            visual.bullet_text_indent_in
+            if measured_bullet_geometry
+            else visual.bullet_left_margin_in + 0.024
+        )
+    entry_left_margin = _measure(visual.entry_left_margin_in) if visual is not None else "0"
+    standalone_bullet_margin = (
+        _measure(visual.entry_left_margin_in + float(bullet_left_margin))
+        if visual is not None
+        else bullet_left_margin
     )
+    bullet_label_options = "label=\\textbullet"
+    if visual is not None and measured_bullet_geometry:
+        bullet_label_options = (
+            "label={\\fontsize{"
+            f"{_measure(visual.bullet_font_size_pt)}pt"
+            "}{"
+            f"{_measure(visual.bullet_font_size_pt)}pt"
+            "}\\selectfont$\\bullet$},"
+            f"labelwidth={_measure(visual.bullet_label_width_in)}in,"
+            f"labelsep={_measure(visual.bullet_label_sep_in)}in"
+        )
     entry_spacing = _measure(visual.entry_spacing_pt) if visual is not None else "0"
     section_before_spacing = (
         _measure(visual.section_before_spacing_pt) if visual is not None else "5"
@@ -934,15 +1011,21 @@ def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
         "\n"
         r"\newcommand{\resumeEducationDetail}[2]{\textit{#1}\hfill\textit{#2}\\[-1pt]}"
         "\n"
-        r"\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0in,label={},nosep]}"
+        rf"\newcommand{{\resumeSubHeadingListStart}}{{\begin{{itemize}}[leftmargin={entry_left_margin}in,label={{}},nosep]}}"
         "\n"
         r"\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}"
         "\n"
         rf"\newcommand{{\resumeItemListStart}}{{\begin{{itemize}}[leftmargin={bullet_left_margin}in,"
-        r"label=\textbullet,"
+        rf"{bullet_label_options},"
         rf"itemsep={item_spacing}pt,topsep={item_spacing}pt,parsep=0pt,partopsep=0pt]}}"
         "\n"
         rf"\newcommand{{\resumeItemListEnd}}{{\end{{itemize}}\vspace{{{entry_spacing}pt}}}}"
+        "\n"
+        rf"\newcommand{{\resumeStandaloneItemListStart}}{{\begin{{itemize}}[leftmargin={standalone_bullet_margin}in,"
+        rf"{bullet_label_options},"
+        rf"itemsep={item_spacing}pt,topsep={item_spacing}pt,parsep=0pt,partopsep=0pt]}}"
+        "\n"
+        r"\newcommand{\resumeStandaloneItemListEnd}{\end{itemize}}"
         "\n"
         r"\newcommand{\resumeSubheading}[4]{\item[] \textbf{#1}\hfill #2\\[-1pt]"
         r"\textit{#3}\hfill\textit{#4}}"

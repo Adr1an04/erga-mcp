@@ -6,9 +6,10 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from erga_mcp.resume import (
+    _pdf_resume_item_lines,
     resolve_latexmk_executable,
     validate_latex_proposal,
     validate_single_line_resume_items,
@@ -16,6 +17,37 @@ from erga_mcp.resume import (
 
 
 class ResumeValidationTests(unittest.TestCase):
+    def test_extracts_rendered_bullet_lines_without_mistaking_headings_for_continuations(
+        self,
+    ) -> None:
+        page = Mock()
+        page.extract_text.return_value = (
+            "Experience\n"
+            " • Built a synthetic service across a deliberately long first line\n"
+            "    two words\n"
+            "Synthetic Project Heading\n"
+            " • Built another synthetic service across its first rendered line\n"
+            "    with a healthy and readable continuation line\n"
+        )
+        reader = Mock(pages=[page])
+
+        with patch("erga_mcp.resume.PdfReader", return_value=reader):
+            lines = _pdf_resume_item_lines(Path("synthetic.pdf"))
+
+        self.assertEqual(
+            lines,
+            (
+                (
+                    "Built a synthetic service across a deliberately long first line",
+                    "two words",
+                ),
+                (
+                    "Built another synthetic service across its first rendered line",
+                    "with a healthy and readable continuation line",
+                ),
+            ),
+        )
+
     def test_measures_exact_resume_item_width_without_modifying_the_proposal(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -40,7 +72,7 @@ class ResumeValidationTests(unittest.TestCase):
             completed = subprocess.CompletedProcess(
                 args=[],
                 returncode=0,
-                stdout="ERGA-RESUME-ITEM-FIT:1\nERGA-RESUME-ITEM-WRAP:2\n",
+                stdout="ERGA-RESUME-ITEM-FIT:1\nERGA-RESUME-ITEM-ORPHAN:2\n",
                 stderr="",
             )
 
@@ -52,6 +84,7 @@ class ResumeValidationTests(unittest.TestCase):
 
             self.assertEqual(result.item_count, 2)
             self.assertEqual(result.wrapped_item_indices, (1,))
+            self.assertEqual(result.orphan_item_indices, (1,))
             self.assertIn("-no-shell-escape", result.command)
             self.assertEqual(proposal.read_text(encoding="utf-8"), source)
             self.assertEqual(tuple(root.glob("erga-layout-*")), ())

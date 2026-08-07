@@ -121,8 +121,9 @@ section order, and visual quality never affect the generated layout. The templat
 the master and reads only section presence,
 order, density, project slots, and the exact bullets-per-entry pattern from the selected file. For
 PDF templates it also measures each page margin, body/header/section typography, small-caps
-treatment, section-rule presence and weight, line height, bullet indentation, section gaps, entry
-gaps, and item spacing. These visual constraints survive the one-page packing pass; Erga does not
+treatment, section-rule presence and weight, line height, entry inset, bullet-glyph size, label gap,
+bullet-text indentation, section gaps, entry gaps, and item spacing. These visual constraints survive
+the one-page packing pass; Erga does not
 stretch a supplied template's gaps to fill the page, and template wording can never introduce
 résumé claims. A template with one bullet per project therefore produces one bullet per selected
 project; a template with a two/three/two pattern preserves and repeats that pattern across selected
@@ -179,12 +180,14 @@ to the connected GitHub identity and inspects all fetched refs. When the MCP cli
 sampling, its connected model receives bounded approved bullets plus authenticated diff evidence
 and returns structured, role-specific project bullets with evidence IDs. Server-side validation
 rejects unsupported numbers, cross-project citations, raw commit/file/line accounting, duplicate
-lead verbs, unsafe LaTeX, rendered overflow, and one-page PDFs whose text occupies less than the
-configured page-height ratio (82% by default). Lead-verb uniqueness is required even for older
+lead verbs, unsafe LaTeX, one- or two-word final bullet lines, and one-page PDFs whose text occupies
+less than the configured page-height ratio (82% by default). Lead-verb uniqueness is required even for older
 configs that contain the former `false` default. Project bullet count is automatic rather than a
 setup choice: the model produces one bounded pool of up to four evidence-backed bullets per project,
 then local PDF trials begin with one bullet per project and add every supported bullet that still
-fits without wrapping or creating a second page, rather than stopping at the minimum fill threshold.
+fits cleanly without creating a second page. Balanced multi-line bullets are allowed; candidates
+that strand only one or two words on the final line are replaced from approved evidence before
+publication.
 PDF/DOCX-derived templates use the same agent-independent render search across semantic experience,
 project, open-source, and skills groups. Layout-preserving PDF extraction keeps wrapped source
 bullets attached to their headings, and a binary render search retains the fullest valid one-page

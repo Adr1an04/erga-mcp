@@ -6,7 +6,7 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
@@ -83,8 +83,10 @@ from .project_inventory import (
 )
 from .project_metrics import propose_git_project_metrics
 from .resume import (
+    ResumeItemLayoutValidation,
     create_section_resume_proposal,
     normalize_cycle,
+    resume_item_texts,
     validate_latex_proposal,
     validate_single_line_resume_items,
 )
@@ -376,7 +378,7 @@ def _layout_safe_project_selection(
     project_candidates: tuple[ProjectCandidate, ...],
     config: ErgaConfig,
 ) -> tuple[tuple[str, ...], tuple[dict[str, object], ...]]:
-    """Reject wrapped project blocks and deterministically select the next approved projects."""
+    """Reject short-tail project blocks and select the next approved projects."""
     candidates_by_id = {candidate.id: candidate for candidate in project_candidates}
     layout_rejections: list[dict[str, object]] = []
     rejected_ids: set[str] = set()
@@ -406,26 +408,27 @@ def _layout_safe_project_selection(
         )
         if layout.returncode != 0:
             raise ValueError("single-line resume layout preflight did not compile")
-        wrapped_project_ids, non_project_indices = classify_wrapped_resume_items(
+        orphaned_project_ids, non_project_indices = classify_wrapped_resume_items(
             automatic.proposal.proposed_tex_path.read_text(encoding="utf-8"),
             project_candidates,
-            layout.wrapped_item_indices,
+            layout.orphan_item_indices,
         )
         if non_project_indices:
             rendered = ", ".join(str(index + 1) for index in non_project_indices)
             raise ValueError(
-                "configured baseline resume bullets render beyond one line "
+                "configured baseline resume bullets leave only one or two words "
+                "on their final line "
                 f"(document bullet indexes: {rendered})"
             )
         selected_ids = set(_selected_project_ids(automatic.project_selection))
         newly_rejected = [
             project_id
-            for project_id in wrapped_project_ids
+            for project_id in orphaned_project_ids
             if project_id in selected_ids and project_id not in rejected_ids
         ]
         if not newly_rejected:
-            if wrapped_project_ids:
-                raise ValueError("single-line project fallback could not resolve wrapped bullets")
+            if orphaned_project_ids:
+                raise ValueError("project fallback could not resolve short final bullet lines")
             return _selected_project_ids(automatic.project_selection), tuple(layout_rejections)
         for project_id in newly_rejected:
             candidate = candidates_by_id[project_id]
@@ -434,10 +437,10 @@ def _layout_safe_project_selection(
                 {
                     "id": candidate.id,
                     "title": candidate.title,
-                    "reasons": ["project bullet renders beyond one line"],
+                    "reasons": ["project bullet leaves a one/two-word final line"],
                 }
             )
-    raise ValueError("single-line project fallback exhausted the approved project inventory")
+    raise ValueError("short-tail project fallback exhausted the approved project inventory")
 
 
 def _project_density_trial(
@@ -474,7 +477,7 @@ def _project_density_trial(
         automatic.proposal.proposed_tex_path,
         latexmk=Path(config.resume.latexmk),
     )
-    if layout.returncode != 0 or layout.wrapped_item_indices:
+    if layout.returncode != 0 or layout.orphan_item_indices:
         return False, 0
     checked = validate_latex_proposal(
         automatic.proposal.proposed_tex_path,
@@ -491,6 +494,32 @@ def _project_density_trial(
         return False, 0
 
 
+def _layout_balanced_generated_proposal(
+    factory: Callable[[tuple[str, ...]], AutomaticResumeProposal],
+    *,
+    latexmk: str,
+) -> tuple[AutomaticResumeProposal, ResumeItemLayoutValidation]:
+    """Backfill around bullets whose compiled final line contains only one/two words."""
+    rejected: list[str] = []
+    while True:
+        automatic = factory(tuple(rejected))
+        layout = validate_single_line_resume_items(
+            automatic.proposal.proposed_tex_path,
+            latexmk=Path(latexmk),
+        )
+        if layout.returncode != 0 or not layout.orphan_item_indices:
+            return automatic, layout
+        texts = resume_item_texts(automatic.proposal.proposed_tex_path.read_text(encoding="utf-8"))
+        newly_rejected = [
+            texts[index]
+            for index in layout.orphan_item_indices
+            if index < len(texts) and texts[index] not in rejected
+        ]
+        if not newly_rejected:
+            return automatic, layout
+        rejected.extend(newly_rejected)
+
+
 def _generated_density_trial(
     *,
     resume_path: Path,
@@ -502,22 +531,28 @@ def _generated_density_trial(
     config: ErgaConfig,
 ) -> tuple[bool, float]:
     """Render one generated-template content budget without model calls or persistent writes."""
-    automatic = create_automatic_resume_proposal(
-        resume_path=resume_path,
-        output_dir=output_dir,
-        job_description=job_description,
-        evidence=evidence,
-        editable_sections=config.resume.editable_sections,
-        bullet_min_chars=config.resume.bullet_min_chars,
-        bullet_target_chars=config.resume.bullet_target_chars,
-        bullet_max_chars=config.resume.bullet_max_chars,
-        project_count=config.resume.project_count,
-        require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
-        max_pages=1,
-        generated_section_item_limits=section_item_limits,
-        generated_section_entry_item_limits=section_entry_item_limits,
+    automatic, layout = _layout_balanced_generated_proposal(
+        lambda rejected: create_automatic_resume_proposal(
+            resume_path=resume_path,
+            output_dir=output_dir,
+            job_description=job_description,
+            evidence=evidence,
+            editable_sections=config.resume.editable_sections,
+            bullet_min_chars=config.resume.bullet_min_chars,
+            bullet_target_chars=config.resume.bullet_target_chars,
+            bullet_max_chars=config.resume.bullet_max_chars,
+            project_count=config.resume.project_count,
+            require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+            max_pages=1,
+            generated_section_item_limits=section_item_limits,
+            generated_section_entry_item_limits=section_entry_item_limits,
+            layout_rejected_bullet_texts=rejected,
+        ),
+        latexmk=config.resume.latexmk,
     )
     if automatic.constraint_violations:
+        return False, 0
+    if layout.returncode != 0 or layout.orphan_item_indices:
         return False, 0
     checked = validate_latex_proposal(
         automatic.proposal.proposed_tex_path,
@@ -727,14 +762,28 @@ def _create_render_packed_automatic_resume_proposal(
         and not project_candidates
     )
     if not should_pack:
-        return create_automatic_resume_proposal(
-            output_dir=output_dir,
-            generated_section_entry_item_limits=style_entry_caps,
-            minimum_page_fill_ratio=(
-                config.resume.minimum_page_fill_ratio if spacing_fallback_requested else 0
+        if not item_counts:
+            return create_automatic_resume_proposal(
+                output_dir=output_dir,
+                generated_section_entry_item_limits=style_entry_caps,
+                minimum_page_fill_ratio=(
+                    config.resume.minimum_page_fill_ratio if spacing_fallback_requested else 0
+                ),
+                **common,
+            )
+        automatic, _ = _layout_balanced_generated_proposal(
+            lambda rejected: create_automatic_resume_proposal(
+                output_dir=output_dir,
+                generated_section_entry_item_limits=style_entry_caps,
+                minimum_page_fill_ratio=(
+                    config.resume.minimum_page_fill_ratio if spacing_fallback_requested else 0
+                ),
+                layout_rejected_bullet_texts=rejected,
+                **common,
             ),
-            **common,
+            latexmk=config.resume.latexmk,
         )
+        return automatic
 
     # The reference provides a visual target, not a hard factual-section quota. Search all
     # approved content so a user with fewer experiences can fill the same geometry with projects,
@@ -773,12 +822,18 @@ def _create_render_packed_automatic_resume_proposal(
 
     requires_spacing = not style_caps and best_fill < config.resume.minimum_page_fill_ratio
     final_entry_limits = _entry_limits_for_item_state(style_entry_caps, states[best_index])
-    automatic = create_automatic_resume_proposal(
-        output_dir=output_dir,
-        minimum_page_fill_ratio=(config.resume.minimum_page_fill_ratio if requires_spacing else 0),
-        generated_section_item_limits=states[best_index],
-        generated_section_entry_item_limits=final_entry_limits,
-        **common,
+    automatic, _ = _layout_balanced_generated_proposal(
+        lambda rejected: create_automatic_resume_proposal(
+            output_dir=output_dir,
+            minimum_page_fill_ratio=(
+                config.resume.minimum_page_fill_ratio if requires_spacing else 0
+            ),
+            generated_section_item_limits=states[best_index],
+            generated_section_entry_item_limits=final_entry_limits,
+            layout_rejected_bullet_texts=rejected,
+            **common,
+        ),
+        latexmk=config.resume.latexmk,
     )
     packing: dict[str, object] = {
         "agent_independent": True,
@@ -892,16 +947,20 @@ def _require_single_line_resume_layout(
     latexmk: str,
     enabled: bool,
 ) -> None:
-    """Refuse publication when the exact final proposal contains a wrapped resume bullet."""
+    """Refuse publication when a rendered bullet strands only one or two final-line words."""
     if not enabled:
+        return
+    # Some adapter/unit-test fixtures intentionally use opaque non-LaTeX proposal payloads; the
+    # normal compiler remains their validation authority. Layout inspection applies to documents.
+    if r"\begin{document}" not in proposal_path.read_text(encoding="utf-8"):
         return
     layout = validate_single_line_resume_items(proposal_path, latexmk=Path(latexmk))
     if layout.returncode != 0:
         raise ValueError("single-line resume layout validation did not compile")
-    if layout.wrapped_item_indices:
-        rendered = ", ".join(str(index + 1) for index in layout.wrapped_item_indices)
+    if layout.orphan_item_indices:
+        rendered = ", ".join(str(index + 1) for index in layout.orphan_item_indices)
         raise ValueError(
-            "tailored resume still contains bullets that render beyond one line "
+            "tailored resume contains bullets with only one or two words on the final line "
             f"(document bullet indexes: {rendered})"
         )
 
@@ -1924,7 +1983,7 @@ def _upgrade_existing_tailoring(
     _require_single_line_resume_layout(
         automatic.proposal.proposed_tex_path,
         latexmk=config.resume.latexmk,
-        enabled=bool(config.resume.bullet_max_chars),
+        enabled=True,
     )
     validation = _compile_intake_proposal(
         automatic.proposal.proposed_tex_path,
@@ -2906,7 +2965,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             _require_single_line_resume_layout(
                 proposal.proposed_tex_path,
                 latexmk=config.resume.latexmk,
-                enabled=bool(config.resume.bullet_max_chars),
+                enabled=True,
             )
             validation = _compile_intake_proposal(
                 proposal.proposed_tex_path,
@@ -3253,7 +3312,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         _require_single_line_resume_layout(
             proposal.proposed_tex_path,
             latexmk=config.resume.latexmk,
-            enabled=bool(config.resume.bullet_max_chars),
+            enabled=True,
         )
         validation = _compile_intake_proposal(
             proposal.proposed_tex_path,

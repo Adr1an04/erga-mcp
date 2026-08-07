@@ -39,9 +39,9 @@ The wizard separates résumé input into three explicit decisions:
    one or two example bullets to calibrate the numeric range. Calibration discards the examples
    and stores only the resulting numbers. Maximum pages are enforced during compilation; the
    character range is enforced when CLI or MCP workflows author new `\resumeItem{...}` bullets.
-   Automatic intake also measures each rendered bullet with the configured LaTeX template: a
-   wrapping project is replaced by the next approved relevant project, and a package is never
-   published while any bullet still needs a second line.
+   Automatic intake also inspects the compiled PDF's real line breaks. Balanced multi-line bullets
+   are allowed, while a candidate that strands only one or two words on its final line is replaced
+   by another approved relevant bullet or project before publication.
 
 For a PDF or DOCX master, Erga preserves visual PDF line boundaries, reconstructs semantic
 experience/project groups, and generates the private editable template itself. One-page intake then
@@ -111,7 +111,8 @@ is the sole factual source and never contributes page geometry, typography, spac
 section order. A visual template controls section presence, order, density, project slots, and the
 exact bullet count for each experience or project entry, but cannot authorize claims. PDF templates
 additionally contribute measured per-edge margins, typography, small-caps treatment, section-rule
-presence and weight, line height, bullet indentation, and section/entry/item spacing. Rendered
+presence and weight, line height, entry inset, bullet-glyph size, label gap, bullet-text indentation,
+and section/entry/item spacing. Rendered
 packing keeps those template-owned gaps fixed instead of elastically stretching them to fill the
 page. For example, a template with one bullet per project keeps one bullet per selected project;
 mixed patterns such as two/three/two are preserved entry by entry and repeated when more approved
@@ -390,8 +391,9 @@ must cite evidence IDs belonging to that project. Erga rejects unsupported numbe
 citations, raw Git accounting prose, duplicate lead verbs, unsafe LaTeX, and excessive length.
 Without sampling, intake keeps the deterministic approved-copy behavior. All output records
 per-claim provenance in `claim-report.json`. An exact TeX width preflight selects another approved
-project or retries model wording when a candidate would wrap; a final width check prevents
-publication if any bullet still needs a second line. A configured `max_pages` is enforced with the
+project or retries model wording when a candidate overflows. A compiled-PDF check permits readable
+multi-line bullets but prevents publication when a final line contains only one or two words. A
+configured `max_pages` is enforced with the
 same pure-Python PDF parser on macOS, Linux, and Windows.
 Before ranking, the fetcher keeps visible official job text and bounded structured job metadata but
 removes scripts, styles, navigation, and footer content. Relevance matching is boundary-aware and

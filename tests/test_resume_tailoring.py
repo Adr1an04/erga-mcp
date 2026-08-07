@@ -145,7 +145,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 23)
+        self.assertEqual(TAILORING_VERSION, 24)
 
     def test_semantic_layout_gate_rejects_flattened_generated_resume(self) -> None:
         flattened = r"""
