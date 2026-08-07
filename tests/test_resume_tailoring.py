@@ -191,7 +191,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 27)
+        self.assertEqual(TAILORING_VERSION, 28)
 
     def test_semantic_layout_gate_rejects_flattened_generated_resume(self) -> None:
         flattened = r"""
@@ -277,21 +277,10 @@ Synthetic University
 
         self.assertEqual(apply_adaptive_single_page_fill(tiny), tiny)
 
-    def test_page_fill_preserves_base_visual_style_spacing_and_uses_spare_height(self) -> None:
+    def test_page_fill_preserves_user_template_spacing(self) -> None:
         controlled = "% Erga visual spacing is template-controlled.\n" + _SPARSE_TEMPLATE
 
-        filled = apply_adaptive_single_page_fill(controlled)
-
-        self.assertIn(r"\flushbottom", filled)
-        self.assertEqual(filled.count(r"\vspace{0pt plus 1fill}"), 5)
-        self.assertEqual(apply_adaptive_single_page_fill(filled), filled)
-
-    def test_page_fill_can_use_a_measured_bounded_amount_of_spare_height(self) -> None:
-        filled = apply_adaptive_single_page_fill(_SPARSE_TEMPLATE, additional_space_pt=50)
-
-        self.assertIn("% ERGA-ADAPTIVE-PAGE-FILL", filled)
-        self.assertNotIn(r"\flushbottom", filled)
-        self.assertEqual(filled.count(r"\vspace{10.00pt}"), 5)
+        self.assertEqual(apply_adaptive_single_page_fill(controlled), controlled)
 
     def test_page_fill_uses_rendered_page_relative_coordinates(self) -> None:
         with TemporaryDirectory() as directory:
@@ -352,36 +341,6 @@ Synthetic University
                 _SPARSE_TEMPLATE.count(r"\resumeItem{"),
                 adaptive.read_text(encoding="utf-8").count(r"\resumeItem{"),
             )
-
-    @unittest.skipUnless(shutil.which("latexmk"), "latexmk is required to compile layout fixtures")
-    def test_visual_style_marker_still_meets_the_page_fill_target(self) -> None:
-        latexmk = shutil.which("latexmk")
-        assert latexmk is not None
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            proposal = root / "proposal.tex"
-            proposal.write_text(
-                apply_adaptive_single_page_fill(
-                    "% Erga visual spacing is template-controlled.\n" + _SPARSE_TEMPLATE
-                ),
-                encoding="utf-8",
-            )
-            subprocess.run(
-                [
-                    latexmk,
-                    "-pdf",
-                    "-no-shell-escape",
-                    "-interaction=nonstopmode",
-                    "-halt-on-error",
-                    proposal.name,
-                ],
-                cwd=root,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-
-            self.assertGreaterEqual(pdf_page_fill(proposal.with_suffix(".pdf")).fill_ratio, 0.82)
 
     @staticmethod
     def _write_positioned_text_pdf(path: Path, *, bottom_y: int) -> None:

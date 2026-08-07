@@ -124,10 +124,10 @@ PDF templates it also measures each page margin, body/header/section typography,
 treatment, section-rule presence and weight, line height, entry inset, bullet-glyph size, label gap,
 bullet-text indentation, section gaps, entry gaps, and item spacing. These visual constraints survive
 the one-page packing pass, and template wording can never introduce résumé claims. Erga first uses
-all approved, layout-safe content that fits. If the resulting one-page PDF is still under the configured
-fill target, it adds only the measured amount of whitespace between completed semantic groups (never inside a line,
-bullet, margin, or measured base gap) so the page uses its vertical space without changing the template's
-typography or claims. A template with one bullet per project therefore produces one bullet per selected
+all approved, layout-safe content that fits, including a final project entry with the supported bullets
+that remain when a full repeated pattern will not fit. It never stretches a supplied template's line,
+item, entry, or section gaps to manufacture density. A template with one bullet per project therefore
+produces one bullet per selected
 project; a template with a two/three/two pattern preserves and repeats that pattern across selected
 approved entries. Observed section totals guide density rather than acting as hard quotas, so Erga
 can use additional approved projects when the master has fewer experiences than the style example.

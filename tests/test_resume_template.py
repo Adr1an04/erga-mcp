@@ -520,6 +520,51 @@ class ResumeTemplateTests(unittest.TestCase):
             self.assertEqual(proposed[alpha_start:beta_start].count(r"\resumeItem{"), 1)
             self.assertEqual(proposed[beta_start:section_end].count(r"\resumeItem{"), 2)
 
+    def test_generated_project_budget_uses_a_supported_partial_tail_entry_before_blank_space(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = ResumeSource(
+                path=root / "master.pdf",
+                format="pdf",
+                sha256="e" * 64,
+                page_count=1,
+                text=(
+                    "Jane Candidate\nPROJECTS\nAlpha Platform\n"
+                    "   • Built the approved Alpha service.\n"
+                    "   • Tested the approved Alpha deployment.\n"
+                    "Beta Platform\n"
+                    "   • Built the approved Beta service.\n"
+                    "   • Tested the approved Beta deployment.\n"
+                    "Gamma Platform\n"
+                    "   • Built the approved Gamma service.\n"
+                    "   • Tested the approved Gamma deployment.\n"
+                    "TECHNICAL SKILLS\nLanguages: Python"
+                ),
+            )
+            generated = generate_latex_template(source, data_dir=root / "state")
+
+            result = create_automatic_resume_proposal(
+                resume_path=generated.path,
+                output_dir=root / "artifacts",
+                job_description="Alpha Beta Gamma Python service deployment",
+                evidence=[],
+                editable_sections=("Projects",),
+                max_pages=1,
+                generated_section_item_limits={"Projects": 5},
+                generated_section_entry_item_limits={"Projects": (2, 2, 1)},
+            )
+
+            proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
+            alpha_start = proposed.index(r"\resumeProjectHeading{\textbf{Alpha Platform}}")
+            beta_start = proposed.index(r"\resumeProjectHeading{\textbf{Beta Platform}}")
+            gamma_start = proposed.index(r"\resumeProjectHeading{\textbf{Gamma Platform}}")
+            section_end = proposed.index(r"\section{Technical Skills}")
+            self.assertEqual(proposed[alpha_start:beta_start].count(r"\resumeItem{"), 2)
+            self.assertEqual(proposed[beta_start:gamma_start].count(r"\resumeItem{"), 2)
+            self.assertEqual(proposed[gamma_start:section_end].count(r"\resumeItem{"), 1)
+
     def test_pdf_master_generates_standalone_template_without_style_claims(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

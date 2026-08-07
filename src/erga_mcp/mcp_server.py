@@ -113,13 +113,13 @@ from .tracker_view import (
 from .versioning import capabilities
 from .web_scraping import extract_page, scrape_page
 
+_VISUAL_SPACING_MARKER = "% Erga visual spacing is template-controlled."
 _READ_ONLY = ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
 )
 _NETWORK_READ = ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True
 )
-_GENERATED_RESUME_PAGE_HEIGHT_PT = 792.0
 _LOCAL_WRITE = ToolAnnotations(
     read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
 )
@@ -592,14 +592,6 @@ def _generated_density_states(item_counts: Mapping[str, int]) -> tuple[dict[str,
     return tuple(states)
 
 
-def _page_fill_extra_points(*, current_fill_ratio: float, target_fill_ratio: float) -> float:
-    """Return a small fixed vertical expansion that reaches the configured Letter-page target."""
-    return round(
-        max(0.0, (target_fill_ratio - current_fill_ratio) * _GENERATED_RESUME_PAGE_HEIGHT_PT + 4),
-        2,
-    )
-
-
 def _style_section_item_caps(resume_path: Path) -> dict[str, int]:
     """Read positive, non-factual content budgets measured from the active style reference."""
     metadata_path = resume_path.with_name("template.json")
@@ -700,6 +692,12 @@ def _entry_limits_for_item_state(
             if remaining >= cap:
                 counts.append(cap)
                 remaining -= cap
+            elif remaining:
+                # Preserve the template's spacing and hierarchy by admitting one final factual
+                # entry with the approved bullets that remain, rather than leaving usable page
+                # height empty solely because a full visual pattern will not fit.
+                counts.append(remaining)
+                remaining = 0
             else:
                 counts.append(0)
         fitted[section] = tuple(counts)
@@ -830,23 +828,11 @@ def _create_render_packed_automatic_resume_proposal(
     if best_index < 0:
         raise ValueError("minimum approved resume content did not fit the one-page layout")
 
-    # A visual template controls type, margins, and base gaps, but it does not opt a sparse
-    # generated page out of the configured one-page fill target. Bounded inter-group spacing is
-    # applied only after the render search has exhausted approved content.
-    requires_spacing = best_fill < config.resume.minimum_page_fill_ratio
-    page_fill_extra_pt = (
-        _page_fill_extra_points(
-            current_fill_ratio=best_fill,
-            target_fill_ratio=config.resume.minimum_page_fill_ratio,
-        )
-        if requires_spacing
-        else None
-    )
+    requires_spacing = not style_caps and best_fill < config.resume.minimum_page_fill_ratio
     final_entry_limits = _entry_limits_for_item_state(style_entry_caps, states[best_index])
     automatic = create_automatic_resume_proposal(
         output_dir=output_dir,
         minimum_page_fill_ratio=(config.resume.minimum_page_fill_ratio if requires_spacing else 0),
-        page_fill_extra_pt=page_fill_extra_pt,
         generated_section_item_limits=states[best_index],
         generated_section_entry_item_limits=final_entry_limits,
         layout_rejected_bullet_texts=best_layout_rejections,
@@ -855,7 +841,6 @@ def _create_render_packed_automatic_resume_proposal(
     packing: dict[str, object] = {
         "agent_independent": True,
         "natural_page_fill_ratio": best_fill,
-        "page_fill_extra_pt": page_fill_extra_pt,
         "section_entry_item_limits": final_entry_limits,
         "section_item_limits": states[best_index],
         "spacing_fallback": requires_spacing,
@@ -954,7 +939,7 @@ def _select_rendered_project_bullet_density(
             tier += 1
     return (
         current,
-        fill_ratio < config.resume.minimum_page_fill_ratio,
+        style_limits is None and fill_ratio < config.resume.minimum_page_fill_ratio,
         fill_ratio,
     )
 
@@ -1458,9 +1443,11 @@ def _compile_intake_proposal(
                 ),
             )
 
-    # The measured style remains intact; when approved content cannot reach the configured density,
-    # the proposal adds only flexible space between semantic groups and still must meet the target.
-    effective_minimum_fill = minimum_page_fill_ratio
+    # A user-supplied visual reference owns its measured section, entry, and line spacing. Erga
+    # expands with approved content before rendering but never stretches those template gaps.
+    effective_minimum_fill = (
+        0 if _VISUAL_SPACING_MARKER in proposal_source else minimum_page_fill_ratio
+    )
     page_fill_ratio: float | None = None
     if effective_minimum_fill:
         try:
