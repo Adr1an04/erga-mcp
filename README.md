@@ -218,6 +218,7 @@ Discord usernames such as `emperor_sai` or stable numeric user IDs, stores the b
 the operating-system credential store, and never makes the selected backend a requirement for
 Erga's local core. Codex-backed Discord turns run noninteractively with Codex approvals and
 sandboxing bypassed so write-capable Erga tools cannot be canceled while no terminal is present.
+They use ephemeral `gpt-5.6-terra` sessions, so turns do not share conversation memory.
 Keep the bot private and the Discord allowlist minimal; the bridge can access everything available
 to its OS account. See the [Discord bridge guide](docs/discord.md).
 

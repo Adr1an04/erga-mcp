@@ -188,6 +188,7 @@ class DiscordBridgeTests(unittest.TestCase):
 
             self.assertEqual(codex[1], "exec")
             self.assertIn("--ephemeral", codex)
+            self.assertEqual(codex[codex.index("--model") + 1], "gpt-5.6-terra")
             self.assertIn("--dangerously-bypass-approvals-and-sandbox", codex)
             self.assertNotIn("workspace-write", codex)
             self.assertIn("--output-last-message", codex)
@@ -203,6 +204,10 @@ class DiscordBridgeTests(unittest.TestCase):
                 self._settings(root, "codex"), "prompt", output, probe=True
             )
             self.assertIn("--ephemeral", codex_probe)
+            self.assertEqual(
+                codex_probe[codex_probe.index("--model") + 1],
+                "gpt-5.6-terra",
+            )
             self.assertIn("read-only", codex_probe)
 
     def test_backend_processes_receive_only_allowlisted_runtime_environment(self) -> None:

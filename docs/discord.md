@@ -94,7 +94,8 @@ Codex-backed turns use `--dangerously-bypass-approvals-and-sandbox` because a ba
 cannot answer MCP approval prompts. An allowlisted Discord identity therefore has the permissions
 of the OS account running Erga, not merely access to the configured project. Use a private bot and
 the smallest possible allowlist. Each invocation also uses `--ephemeral`, so Codex does not persist
-session rollout files and no Discord turn is resumed by a later message.
+session rollout files and no Discord turn is resumed by a later message. Both readiness checks and
+real bridge turns explicitly select `gpt-5.6-terra` for predictable everyday latency and tool use.
 
 ## Failure boundaries
 

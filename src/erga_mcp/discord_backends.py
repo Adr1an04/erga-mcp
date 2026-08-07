@@ -39,6 +39,8 @@ DISCORD_BACKENDS: dict[DiscordBackendName, DiscordBackend] = {
         probe_arguments=(
             "exec",
             "--ephemeral",
+            "--model",
+            "gpt-5.6-terra",
             "--cd",
             "{project_dir}",
             "--sandbox",
@@ -53,6 +55,8 @@ DISCORD_BACKENDS: dict[DiscordBackendName, DiscordBackend] = {
         run_arguments=(
             "exec",
             "--ephemeral",
+            "--model",
+            "gpt-5.6-terra",
             "--cd",
             "{project_dir}",
             "--dangerously-bypass-approvals-and-sandbox",
