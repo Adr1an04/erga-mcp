@@ -86,19 +86,30 @@ uv run erga resume settings set \
   --max-pages 1
 ```
 
-Advanced or scripted installations may still use the lower-level commands:
+After initialization, replace the master independently with:
 
 ```bash
 uv run erga init --config ~/.config/erga-mcp/config.toml
-uv run erga resume sources import \
-  --config ~/.config/erga-mcp/config.toml \
-  --master /absolute/path/to/complete-master-resume.pdf
-uv run erga resume template ensure --config ~/.config/erga-mcp/config.toml
+uv run erga resume master set /absolute/path/to/complete-master-resume.pdf \
+  --config ~/.config/erga-mcp/config.toml
 ```
 
-Pass `--style /absolute/path/to/preferred-resume.pdf` only when intentionally overriding Erga's
-recommended one-page style. Importing an updated master deactivates prior master-résumé evidence,
-leaving exactly one current master approved.
+Replace the master at any time with the same command. Erga preserves the current visual-template
+choice, deactivates prior master-résumé evidence, leaves exactly one current master approved, and
+regenerates the private editable template.
+
+Set or replace the optional visual template independently when intentionally overriding the
+recommended one-page style:
+
+```bash
+uv run erga resume template set /absolute/path/to/preferred-resume.pdf \
+  --config ~/.config/erga-mcp/config.toml
+```
+
+Both commands accept PDF, DOCX, or `.tex` input and snapshot it into private local state. The master
+is the sole factual source. A visual template controls section presence, order, density, and project
+slots but cannot authorize claims. `erga resume sources import --master ... --style ...` remains
+available for scripts that need to replace both sources together.
 
 To discard the configured style/custom template while preserving the approved master and all
 career evidence, regenerate Erga's default Jake-style template:

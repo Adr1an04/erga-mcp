@@ -645,12 +645,23 @@ def ensure_resume_template(config_path: Path) -> Path:
         ):
             return existing
     generated = generate_latex_template(master, data_dir=config.data_dir, style=style)
+    projects_enabled = any(
+        _SECTION_KEY.sub("", section.casefold()) == "projects"
+        for section in generated.profile.editable_sections
+    )
     update_settings(
         config_path,
         {
             "template_path": str(generated.path),
             "editable_sections": list(generated.profile.editable_sections),
             "project_count": generated.profile.project_count,
+            "project_selection_mode": (
+                "inventory_required"
+                if projects_enabled and config.resume.project_inventory_path is not None
+                else "inventory_optional"
+                if projects_enabled
+                else "template_only"
+            ),
         },
     )
     return generated.path
@@ -669,21 +680,4 @@ def reset_resume_template(config_path: Path) -> Path:
         },
     )
     template_path = ensure_resume_template(config_path)
-    settings = load_config(config_path).resume
-    projects_enabled = any(
-        _SECTION_KEY.sub("", section.casefold()) == "projects"
-        for section in settings.editable_sections
-    )
-    update_settings(
-        config_path,
-        {
-            "project_selection_mode": (
-                "inventory_required"
-                if projects_enabled and settings.project_inventory_path is not None
-                else "inventory_optional"
-                if projects_enabled
-                else "template_only"
-            )
-        },
-    )
     return template_path

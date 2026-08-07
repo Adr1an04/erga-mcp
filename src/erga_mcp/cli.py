@@ -359,6 +359,28 @@ def _parser() -> argparse.ArgumentParser:
         help="clear the style/custom template and regenerate Erga's default Jake-style template",
     )
     _config_argument(resume_template_reset)
+    resume_template_set = resume_template_commands.add_parser(
+        "set",
+        help="add or replace the visual template while preserving the approved master",
+    )
+    _config_argument(resume_template_set)
+    resume_template_set.add_argument(
+        "source", type=Path, metavar="PATH", help="PDF, DOCX, or .tex visual reference"
+    )
+    resume_master = resume_commands.add_parser(
+        "master", help="add or replace the factual master resume"
+    )
+    resume_master_commands = resume_master.add_subparsers(
+        dest="resume_master_command", required=True
+    )
+    resume_master_set = resume_master_commands.add_parser(
+        "set",
+        help="add or replace the master and regenerate the current visual template",
+    )
+    _config_argument(resume_master_set)
+    resume_master_set.add_argument(
+        "source", type=Path, metavar="PATH", help="PDF, DOCX, or .tex factual master"
+    )
     resume_settings = resume_commands.add_parser("settings", help="manage generic resume settings")
     resume_settings_commands = resume_settings.add_subparsers(
         dest="resume_settings_command", required=True
@@ -1089,6 +1111,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             {
                 "master_path": str(master.path),
                 "reference_path": str(style_source.path) if style_source is not None else "",
+                "template_path": "",
             },
         )
         template_path = ensure_resume_template(args.config)
@@ -1097,6 +1120,36 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 "evidence_id": evidence.id,
                 "master_path": str(settings.master_path),
                 "style_path": str(settings.reference_path) if settings.reference_path else None,
+                "template_path": str(template_path),
+            }
+        )
+        return 0
+    if args.command == "resume" and args.resume_command == "master":
+        config = load_config(args.config)
+        original_master_name = args.source.expanduser().name
+        master = snapshot_resume_source(
+            load_resume_source(args.source),
+            data_dir=config.data_dir,
+            role="master",
+        )
+        evidence = import_master_resume(
+            store,
+            master,
+            source_name=original_master_name,
+        )
+        settings = update_settings(
+            args.config,
+            {
+                "master_path": str(master.path),
+                "template_path": "",
+            },
+        )
+        template_path = ensure_resume_template(args.config)
+        _print_json(
+            {
+                "evidence_id": evidence.id,
+                "master_path": str(settings.master_path),
+                "style_path": (str(settings.reference_path) if settings.reference_path else None),
                 "template_path": str(template_path),
             }
         )
@@ -1110,6 +1163,31 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     "master_path": str(master_path),
                     "reset": True,
                     "style_path": None,
+                    "template_path": str(template_path),
+                }
+            )
+            return 0
+        if args.resume_template_command == "set":
+            config = load_config(args.config)
+            if config.resume.master_path is None or not config.resume.master_path.is_file():
+                raise ValueError("set a master resume before setting a visual template")
+            style_source = snapshot_resume_source(
+                load_resume_source(args.source),
+                data_dir=config.data_dir,
+                role="style",
+            )
+            settings = update_settings(
+                args.config,
+                {
+                    "reference_path": str(style_source.path),
+                    "template_path": "",
+                },
+            )
+            template_path = ensure_resume_template(args.config)
+            _print_json(
+                {
+                    "master_path": str(settings.master_path),
+                    "style_path": str(settings.reference_path),
                     "template_path": str(template_path),
                 }
             )

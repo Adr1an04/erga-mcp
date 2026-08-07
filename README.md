@@ -102,18 +102,23 @@ Complete source context and derived style-reference metadata remain behind the e
 
 ### Change or reset the résumé template
 
-Use another PDF, DOCX, or `.tex` résumé as a style template while keeping the master as the only
-factual source:
+Add or replace the factual master with one direct command. The current visual-template choice is
+preserved and regenerated against the new source of truth:
 
 ```bash
-uv run erga resume sources import \
-  --master "/absolute/path/to/master-resume.pdf" \
-  --style "/absolute/path/to/preferred-template.pdf"
+uv run erga resume master set "/absolute/path/to/master-resume.pdf"
 ```
 
-Erga reads section presence, order, density, and project slots from `--style`; wording from that
-file cannot introduce résumé claims. To remove the style/custom template and return to Erga's
-default Jake-style layout, run:
+Add or replace the optional visual template independently:
+
+```bash
+uv run erga resume template set "/absolute/path/to/preferred-template.pdf"
+```
+
+Both commands accept PDF, DOCX, and `.tex` files. Erga copies the selected file into private local
+state before using it. The template command preserves the master and reads only section presence,
+order, density, and project slots from the selected file; its wording cannot introduce résumé
+claims. To remove the style/custom template and return to Erga's default Jake-style layout, run:
 
 ```bash
 uv run erga resume template reset
@@ -122,7 +127,9 @@ uv run erga resume template reset
 Reset preserves the approved master résumé, evidence, and application history. It clears only the
 configured style/template pointers, generates a new private template from the master, and keeps
 the previous content-addressed template files recoverable. Use `--config /path/to/config.toml` with
-either command when not using the default configuration.
+any command when not using the default configuration. The lower-level
+`erga resume sources import --master ... --style ...` command remains available when a script needs
+to replace both sources together.
 
 By default Erga's private machine state is independent of any optional vault:
 
