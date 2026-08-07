@@ -77,7 +77,7 @@ class DiscordBridgeTests(unittest.TestCase):
         self.assertEqual(warning[0].color, ERGA_SUN)
         self.assertEqual(neutral[0].color, ERGA_INK)
 
-    def test_discord_turn_attaches_validated_resume_and_first_page_preview(self) -> None:
+    def test_discord_turn_never_attaches_a_model_reported_resume_path(self) -> None:
         class FakeIntents:
             message_content = False
 
@@ -164,41 +164,25 @@ class DiscordBridgeTests(unittest.TestCase):
 
         first_embed = reply.await_args_list[0].kwargs["embed"]
         final_embed = status_message.edit.await_args_list[-1].kwargs["embed"]
-        attachments = status_message.edit.await_args_list[-1].kwargs["attachments"]
         self.assertEqual(reply.await_count, 1)
         self.assertEqual(first_embed.title, "✦ Tailoring your résumé")
         self.assertEqual(first_embed.color, ERGA_ORBIT_VIOLET)
         self.assertEqual(final_embed.title, "✓ Résumé ready for review")
         self.assertEqual(final_embed.color, ERGA_LEAF)
-        self.assertEqual(final_embed.image, "attachment://erga-resume-preview.png")
-        self.assertEqual(
-            [file.filename for file in attachments], ["erga-resume-preview.png", "resume.pdf"]
-        )
-        self.assertEqual(final_embed.fields[-1]["value"], "Validated PDF attached")
+        self.assertIsNone(final_embed.image)
+        self.assertNotIn("attachments", status_message.edit.await_args_list[-1].kwargs)
+        self.assertNotEqual(final_embed.fields[-1]["value"], "Validated PDF attached")
 
-    def test_resume_attachment_must_be_an_erga_artifact_inside_a_configured_root(self) -> None:
+    def test_model_reported_pdf_paths_are_never_auto_attached(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             artifact = root / "cycle" / "role" / "artifacts" / "resume.pdf"
             artifact.parent.mkdir(parents=True)
             artifact.write_bytes(b"%PDF-1.4 synthetic fixture")
-            outside = root.parent / "resume.pdf"
-            outside.write_bytes(b"%PDF-1.4 synthetic fixture")
-            try:
-                self.assertEqual(
-                    _managed_resume_pdf(
-                        f"Validated PDF ready at {outside}", attachment_roots=(root,)
-                    ),
-                    None,
-                )
-                self.assertEqual(
-                    _managed_resume_pdf(
-                        f"Validated PDF ready at {artifact}", attachment_roots=(root,)
-                    ),
-                    artifact.resolve(),
-                )
-            finally:
-                outside.unlink(missing_ok=True)
+
+            self.assertIsNone(
+                _managed_resume_pdf(f"Validated PDF ready at {artifact}", attachment_roots=(root,))
+            )
 
     @unittest.skipUnless(shutil.which("pdftoppm"), "pdftoppm is required to render previews")
     def test_resume_preview_renders_the_validated_pdf_first_page(self) -> None:
@@ -379,8 +363,8 @@ class DiscordBridgeTests(unittest.TestCase):
             self.assertEqual(codex[1], "exec")
             self.assertIn("--ephemeral", codex)
             self.assertEqual(codex[codex.index("--model") + 1], "gpt-5.6-terra")
-            self.assertIn("--dangerously-bypass-approvals-and-sandbox", codex)
-            self.assertNotIn("workspace-write", codex)
+            self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", codex)
+            self.assertIn("workspace-write", codex)
             self.assertIn("--output-last-message", codex)
             self.assertIn("--print", claude)
             self.assertIn("acceptEdits", claude)

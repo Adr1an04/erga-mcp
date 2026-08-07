@@ -187,6 +187,50 @@ def _greenhouse_job_posting(snapshot: str) -> dict[str, Any] | None:
     )
 
 
+def require_job_posting(snapshot: str, *, job_url: str) -> None:
+    """Reject generic public pages before intake can create an application package."""
+    parsed = urlsplit(job_url)
+    hostname = (parsed.hostname or "").casefold()
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if hostname == "github.com" or hostname.endswith(".github.com"):
+        raise ValueError(
+            "page does not contain enough evidence of a specific job posting; "
+            "use scrape_public_page for non-job research links"
+        )
+    ats_suffixes = (
+        "ashbyhq.com",
+        "greenhouse.io",
+        "lever.co",
+        "myworkdayjobs.com",
+        "smartrecruiters.com",
+    )
+    if len(path_parts) >= 2 and any(
+        hostname == suffix or hostname.endswith(f".{suffix}") for suffix in ats_suffixes
+    ):
+        return
+    posting = _structured_job_posting(snapshot)
+    if (
+        posting is not None
+        and str(posting.get("title", "")).strip()
+        and str(posting.get("description", "")).strip()
+    ):
+        return
+    content = official_job_text(snapshot)
+    has_detail_path = any(
+        marker in {part.casefold() for part in parsed.path.split("/") if part}
+        for marker in ("job", "jobs", "career", "careers", "position", "positions", "roles")
+    )
+    has_sections = all(
+        marker in content.casefold() for marker in ("responsibilities", "requirements", "apply")
+    )
+    if has_detail_path and _JOB_ROLE_SIGNAL.search(content) and has_sections:
+        return
+    raise ValueError(
+        "page does not contain enough evidence of a specific job posting; "
+        "use scrape_public_page for non-job research links"
+    )
+
+
 def build_job_snapshot(page: str) -> str:
     """Create a stable snapshot from visible text plus bounded structured job metadata."""
     visible = " ".join(_visible_job_text(page).split())
