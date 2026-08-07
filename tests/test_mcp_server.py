@@ -174,10 +174,10 @@ class McpServerTests(unittest.TestCase):
             )
             config = load_config(config_path)
 
-            def rendered_trial(**kwargs: Any) -> tuple[bool, float]:
+            def rendered_trial(**kwargs: Any) -> tuple[bool, float, tuple[str, ...]]:
                 limits = kwargs["section_item_limits"]
                 selected = sum(limits.values())
-                return selected <= 9, selected / 10
+                return selected <= 9, selected / 10, ()
 
             with patch(
                 "erga_mcp.mcp_server._generated_density_trial",
@@ -250,7 +250,7 @@ class McpServerTests(unittest.TestCase):
 
             with patch(
                 "erga_mcp.mcp_server._generated_density_trial",
-                return_value=(True, 0.6),
+                return_value=(True, 0.6, ()),
             ):
                 result = _create_render_packed_automatic_resume_proposal(
                     resume_path=resume,

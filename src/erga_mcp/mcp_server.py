@@ -498,7 +498,7 @@ def _layout_balanced_generated_proposal(
     factory: Callable[[tuple[str, ...]], AutomaticResumeProposal],
     *,
     latexmk: str,
-) -> tuple[AutomaticResumeProposal, ResumeItemLayoutValidation]:
+) -> tuple[AutomaticResumeProposal, ResumeItemLayoutValidation, tuple[str, ...]]:
     """Backfill around bullets whose compiled final line contains only one/two words."""
     rejected: list[str] = []
     while True:
@@ -508,7 +508,7 @@ def _layout_balanced_generated_proposal(
             latexmk=Path(latexmk),
         )
         if layout.returncode != 0 or not layout.orphan_item_indices:
-            return automatic, layout
+            return automatic, layout, tuple(rejected)
         texts = resume_item_texts(automatic.proposal.proposed_tex_path.read_text(encoding="utf-8"))
         newly_rejected = [
             texts[index]
@@ -516,7 +516,7 @@ def _layout_balanced_generated_proposal(
             if index < len(texts) and texts[index] not in rejected
         ]
         if not newly_rejected:
-            return automatic, layout
+            return automatic, layout, tuple(rejected)
         rejected.extend(newly_rejected)
 
 
@@ -529,9 +529,9 @@ def _generated_density_trial(
     section_item_limits: Mapping[str, int],
     section_entry_item_limits: Mapping[str, tuple[int, ...]],
     config: ErgaConfig,
-) -> tuple[bool, float]:
+) -> tuple[bool, float, tuple[str, ...]]:
     """Render one generated-template content budget without model calls or persistent writes."""
-    automatic, layout = _layout_balanced_generated_proposal(
+    automatic, layout, rejected = _layout_balanced_generated_proposal(
         lambda rejected: create_automatic_resume_proposal(
             resume_path=resume_path,
             output_dir=output_dir,
@@ -551,22 +551,22 @@ def _generated_density_trial(
         latexmk=config.resume.latexmk,
     )
     if automatic.constraint_violations:
-        return False, 0
+        return False, 0, rejected
     if layout.returncode != 0 or layout.orphan_item_indices:
-        return False, 0
+        return False, 0, rejected
     checked = validate_latex_proposal(
         automatic.proposal.proposed_tex_path,
         latexmk=Path(config.resume.latexmk),
     )
     proposal_pdf = automatic.proposal.proposed_tex_path.with_suffix(".pdf")
     if checked.returncode != 0 or not proposal_pdf.is_file():
-        return False, 0
+        return False, 0, rejected
     try:
         if pdf_page_count(proposal_pdf) != 1:
-            return False, 0
-        return True, pdf_page_fill(proposal_pdf).fill_ratio
+            return False, 0, rejected
+        return True, pdf_page_fill(proposal_pdf).fill_ratio, rejected
     except ValueError:
-        return False, 0
+        return False, 0, rejected
 
 
 def _generated_density_states(item_counts: Mapping[str, int]) -> tuple[dict[str, int], ...]:
@@ -771,7 +771,7 @@ def _create_render_packed_automatic_resume_proposal(
                 ),
                 **common,
             )
-        automatic, _ = _layout_balanced_generated_proposal(
+        automatic, _, _ = _layout_balanced_generated_proposal(
             lambda rejected: create_automatic_resume_proposal(
                 output_dir=output_dir,
                 generated_section_entry_item_limits=style_entry_caps,
@@ -792,6 +792,7 @@ def _create_render_packed_automatic_resume_proposal(
     states = _generated_density_states(state_item_counts)
     best_index = -1
     best_fill = 0.0
+    best_layout_rejections: tuple[str, ...] = ()
     with TemporaryDirectory(prefix="erga-generated-density-") as density_directory:
         root = Path(density_directory)
         low = 0
@@ -799,7 +800,7 @@ def _create_render_packed_automatic_resume_proposal(
         trial_number = 0
         while low <= high:
             middle = (low + high) // 2
-            valid, fill_ratio = _generated_density_trial(
+            valid, fill_ratio, layout_rejections = _generated_density_trial(
                 resume_path=resume_path,
                 output_dir=root / f"trial-{trial_number}",
                 job_description=job_description,
@@ -814,6 +815,7 @@ def _create_render_packed_automatic_resume_proposal(
             if valid:
                 best_index = middle
                 best_fill = fill_ratio
+                best_layout_rejections = layout_rejections
                 low = middle + 1
             else:
                 high = middle - 1
@@ -822,18 +824,13 @@ def _create_render_packed_automatic_resume_proposal(
 
     requires_spacing = not style_caps and best_fill < config.resume.minimum_page_fill_ratio
     final_entry_limits = _entry_limits_for_item_state(style_entry_caps, states[best_index])
-    automatic, _ = _layout_balanced_generated_proposal(
-        lambda rejected: create_automatic_resume_proposal(
-            output_dir=output_dir,
-            minimum_page_fill_ratio=(
-                config.resume.minimum_page_fill_ratio if requires_spacing else 0
-            ),
-            generated_section_item_limits=states[best_index],
-            generated_section_entry_item_limits=final_entry_limits,
-            layout_rejected_bullet_texts=rejected,
-            **common,
-        ),
-        latexmk=config.resume.latexmk,
+    automatic = create_automatic_resume_proposal(
+        output_dir=output_dir,
+        minimum_page_fill_ratio=(config.resume.minimum_page_fill_ratio if requires_spacing else 0),
+        generated_section_item_limits=states[best_index],
+        generated_section_entry_item_limits=final_entry_limits,
+        layout_rejected_bullet_texts=best_layout_rejections,
+        **common,
     )
     packing: dict[str, object] = {
         "agent_independent": True,
