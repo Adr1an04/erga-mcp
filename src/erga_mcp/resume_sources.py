@@ -320,6 +320,7 @@ def resume_source_context(
             "page count",
             "section order",
             "content density",
+            "typography and margins",
         ]
         preferences["rendered_layout_control"] = "editable-latex-template"
         preferences["not_automatically_transformed"] = []
@@ -329,6 +330,8 @@ def resume_source_context(
             automatically_applied.insert(0, "maximum page count")
         preferences["automatically_applied"] = automatically_applied
     layout_profile: dict[str, object] | None = None
+    style_layout_profile: dict[str, object] | None = None
+    visual_style_profile: dict[str, object] | None = None
     if template_path is not None:
         metadata_path = template_path.with_name("template.json")
         try:
@@ -346,6 +349,17 @@ def resume_source_context(
                     for value in ("section presence", "section order", "project count")
                     if value not in profile_applied
                 )
+        if isinstance(metadata, dict) and isinstance(metadata.get("style_layout_profile"), dict):
+            style_layout_profile = metadata["style_layout_profile"]
+        if isinstance(metadata, dict) and isinstance(metadata.get("visual_style_profile"), dict):
+            visual_style_profile = metadata["visual_style_profile"]
+            profile_applied = preferences.setdefault("automatically_applied", [])
+            if isinstance(profile_applied, list):
+                profile_applied.extend(
+                    value
+                    for value in ("content density", "typography and margins")
+                    if value not in profile_applied
+                )
     return {
         "master": {
             "format": master.format,
@@ -356,5 +370,7 @@ def resume_source_context(
         },
         "style_reference": _style_profile(reference) if reference is not None else None,
         "layout_profile": layout_profile,
+        "style_layout_profile": style_layout_profile,
+        "visual_style_profile": visual_style_profile,
         "preferences": preferences,
     }

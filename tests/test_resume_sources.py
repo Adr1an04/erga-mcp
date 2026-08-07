@@ -166,7 +166,12 @@ class ResumeSourceTests(unittest.TestCase):
             self.assertTrue(context["preferences"]["style_override_confirmed"])  # type: ignore[index]
             self.assertEqual(
                 context["preferences"]["reference_metadata"],  # type: ignore[index]
-                ["page count", "section order", "content density"],
+                [
+                    "page count",
+                    "section order",
+                    "content density",
+                    "typography and margins",
+                ],
             )
             self.assertEqual(
                 context["preferences"]["rendered_layout_control"],  # type: ignore[index]
@@ -218,7 +223,21 @@ class ResumeSourceTests(unittest.TestCase):
                 "section_item_counts": {"Projects": 9, "Technical Skills": 0},
                 "section_order": ["Projects", "Technical Skills"],
             }
-            metadata.write_text(json.dumps({"layout_profile": profile}), encoding="utf-8")
+            style_profile = {
+                "project_count": 3,
+                "section_item_counts": {"Projects": 6},
+            }
+            visual_profile = {"body_font_size_pt": 10.0, "margin_in": 0.5}
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "layout_profile": profile,
+                        "style_layout_profile": style_profile,
+                        "visual_style_profile": visual_profile,
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             context = resume_source_context(
                 master_path=master,
@@ -227,13 +246,21 @@ class ResumeSourceTests(unittest.TestCase):
             )
 
             self.assertEqual(context["layout_profile"], profile)
+            self.assertEqual(context["style_layout_profile"], style_profile)
+            self.assertEqual(context["visual_style_profile"], visual_profile)
             self.assertEqual(
                 context["preferences"]["section_order"],  # type: ignore[index]
                 ["Projects", "Technical Skills"],
             )
             self.assertEqual(
                 context["preferences"]["automatically_applied"],  # type: ignore[index]
-                ["section presence", "section order", "project count"],
+                [
+                    "section presence",
+                    "section order",
+                    "project count",
+                    "content density",
+                    "typography and margins",
+                ],
             )
 
     def test_pdf_style_reference_applies_only_its_page_count_automatically(self) -> None:

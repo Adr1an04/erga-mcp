@@ -554,6 +554,75 @@ def _generated_density_states(item_counts: Mapping[str, int]) -> tuple[dict[str,
     return tuple(states)
 
 
+def _style_section_item_caps(resume_path: Path) -> dict[str, int]:
+    """Read positive, non-factual content budgets measured from the active style reference."""
+    metadata_path = resume_path.with_name("template.json")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(metadata, dict) or not metadata.get("style_sha256"):
+        return {}
+    style_profile = metadata.get("style_layout_profile")
+    if not isinstance(style_profile, dict):
+        return {}
+    raw_counts = style_profile.get("section_item_counts")
+    if not isinstance(raw_counts, dict):
+        return {}
+    return {
+        str(section): count
+        for section, count in raw_counts.items()
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0
+    }
+
+
+def _effective_style_item_caps(
+    style_caps: Mapping[str, int], item_counts: Mapping[str, int]
+) -> dict[str, int]:
+    """Preserve section allocations, transferring only capacity a master cannot use."""
+    effective = {
+        section: min(total, style_caps.get(section, total))
+        for section, total in item_counts.items()
+    }
+    transferable = sum(
+        max(0, cap - item_counts.get(section, 0)) for section, cap in style_caps.items()
+    )
+    priorities = sorted(
+        effective,
+        key=lambda section: (
+            {"Projects": 0, "Experience": 1, "Education": 2}.get(section, 3),
+            section.casefold(),
+        ),
+    )
+    for section in priorities:
+        available = item_counts[section] - effective[section]
+        added = min(transferable, available)
+        effective[section] += added
+        transferable -= added
+        if not transferable:
+            break
+    return effective
+
+
+def _style_project_bullet_cap(resume_path: Path, *, project_count: int) -> int | None:
+    if project_count < 1:
+        return None
+    style_counts = _style_section_item_caps(resume_path)
+    style_projects = style_counts.get("Projects")
+    if style_projects is None:
+        return None
+    try:
+        generated_counts = generated_resume_item_counts(resume_path.read_text(encoding="utf-8"))
+    except OSError:
+        generated_counts = {}
+    generated_non_projects = sum(
+        count for section, count in generated_counts.items() if section != "Projects"
+    )
+    total_style_budget = sum(style_counts.values())
+    transferable_budget = max(style_projects, total_style_budget - generated_non_projects)
+    return max(1, (transferable_budget + project_count - 1) // project_count)
+
+
 def _create_render_packed_automatic_resume_proposal(
     *,
     resume_path: Path,
@@ -581,6 +650,7 @@ def _create_render_packed_automatic_resume_proposal(
         "additional_project_quality_rejections": additional_project_quality_rejections,
     }
     item_counts = generated_resume_item_counts(resume_path.read_text(encoding="utf-8"))
+    style_caps = _style_section_item_caps(resume_path)
     should_pack = (
         config.resume.max_pages == 1
         and bool(config.resume.minimum_page_fill_ratio)
@@ -596,7 +666,17 @@ def _create_render_packed_automatic_resume_proposal(
             **common,
         )
 
-    states = _generated_density_states(item_counts)
+    state_item_counts = (
+        _effective_style_item_caps(style_caps, item_counts) if style_caps else item_counts
+    )
+    states = _generated_density_states(state_item_counts)
+    if style_caps:
+        total_style_budget = sum(style_caps.values())
+        bounded_states = tuple(
+            state for state in states if sum(state.values()) <= total_style_budget
+        )
+        if bounded_states:
+            states = bounded_states
     best_index = -1
     best_fill = 0.0
     with TemporaryDirectory(prefix="erga-generated-density-") as density_directory:
@@ -631,13 +711,16 @@ def _create_render_packed_automatic_resume_proposal(
         generated_section_item_limits=states[best_index],
         **common,
     )
-    automatic.project_selection["rendered_content_packing"] = {
+    packing: dict[str, object] = {
         "agent_independent": True,
         "natural_page_fill_ratio": best_fill,
         "section_item_limits": states[best_index],
         "spacing_fallback": requires_spacing,
         "strategy": "fullest_valid_one_page_render",
     }
+    if style_caps:
+        packing["style_reference_item_budget"] = sum(style_caps.values())
+    automatic.project_selection["rendered_content_packing"] = packing
     report_path = automatic.proposal.claim_report_path
     report = json.loads(report_path.read_text(encoding="utf-8"))
     if isinstance(report, dict):
@@ -663,12 +746,24 @@ def _select_rendered_project_bullet_density(
     if len(selected_candidates) != config.resume.project_count:
         raise ValueError("adaptive bullet density requires the exact selected project count")
 
-    counts = [1 for _ in selected_candidates]
+    style_cap = _style_project_bullet_cap(
+        resume_path,
+        project_count=config.resume.project_count,
+    )
+    density_candidates = (
+        tuple(
+            limit_project_candidate_bullets(candidate, style_cap)
+            for candidate in selected_candidates
+        )
+        if style_cap is not None
+        else selected_candidates
+    )
+    counts = [1 for _ in density_candidates]
 
     def candidates_for_counts() -> tuple[ProjectCandidate, ...]:
         return tuple(
             limit_project_candidate_bullets(candidate, counts[index])
-            for index, candidate in enumerate(selected_candidates)
+            for index, candidate in enumerate(density_candidates)
         )
 
     with TemporaryDirectory(prefix="erga-project-density-") as density_directory:
@@ -688,12 +783,10 @@ def _select_rendered_project_bullet_density(
         blocked_indices: set[int] = set()
         while any(
             index not in blocked_indices and count < len(candidate.bullet_evidence_ids)
-            for index, (count, candidate) in enumerate(
-                zip(counts, selected_candidates, strict=True)
-            )
+            for index, (count, candidate) in enumerate(zip(counts, density_candidates, strict=True))
         ):
             accepted_in_tier = False
-            for index, candidate in enumerate(selected_candidates):
+            for index, candidate in enumerate(density_candidates):
                 if index in blocked_indices or counts[index] >= len(candidate.bullet_evidence_ids):
                     continue
                 counts[index] += 1

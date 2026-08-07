@@ -113,7 +113,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 22)
+        self.assertEqual(TAILORING_VERSION, 23)
 
     def test_semantic_layout_gate_rejects_flattened_generated_resume(self) -> None:
         flattened = r"""
@@ -179,8 +179,16 @@ Synthetic University
         filled = apply_adaptive_single_page_fill(compact)
 
         self.assertIn(r"\flushbottom", filled)
-        self.assertIn(r"\renewcommand{\resumeItem}[1]", filled)
-        self.assertEqual(filled.count(r"\vspace{0pt plus 1fill}"), 4)
+        self.assertNotIn(r"\renewcommand{\resumeItem}[1]", filled)
+        self.assertEqual(filled.count(r"\vspace{0pt plus 1fill}"), 5)
+        self.assertNotIn(r"\ergaPageFillOriginalResumeItem", filled)
+        self.assertTrue(
+            all(
+                "ERGA-ADAPTIVE-PAGE-FILL" not in line
+                for line in filled.splitlines()
+                if r"\resumeItem{" in line
+            )
+        )
         self.assertEqual(apply_adaptive_single_page_fill(filled), filled)
 
     def test_page_fill_does_not_create_giant_gaps_for_too_little_content(self) -> None:

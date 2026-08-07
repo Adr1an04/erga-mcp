@@ -107,9 +107,13 @@ uv run erga resume template set /absolute/path/to/preferred-resume.pdf \
 ```
 
 Both commands accept PDF, DOCX, or `.tex` input and snapshot it into private local state. The master
-is the sole factual source. A visual template controls section presence, order, density, and project
-slots but cannot authorize claims. `erga resume sources import --master ... --style ...` remains
-available for scripts that need to replace both sources together.
+is the sole factual source and never contributes page geometry, typography, spacing, density, or
+section order. A visual template controls section presence, order, density, and project
+slots but cannot authorize claims. PDF templates additionally contribute measured margins,
+typography, small-caps treatment, line height, and grouped-item spacing. Rendered packing keeps
+bullets compact within each entry and distributes unavoidable spare height between semantic groups.
+`erga resume sources import --master ... --style ...` remains available for scripts that need to
+replace both sources together.
 
 To discard the configured style/custom template while preserving the approved master and all
 career evidence, regenerate Erga's default Jake-style template:

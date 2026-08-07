@@ -6,9 +6,14 @@ import hashlib
 import json
 import os
 import re
+import statistics
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
+
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
 from .config import load_config
 from .private_files import restrict_private_directory, restrict_private_file
@@ -16,7 +21,7 @@ from .resume_settings import update_settings
 from .resume_sources import ResumeSource, load_resume_source
 from .resume_tailoring import latex_to_text
 
-TEMPLATE_GENERATION_VERSION = 11
+TEMPLATE_GENERATION_VERSION = 13
 _PAGE_MARKER = re.compile(r"^\[Page \d+\]$")
 _BULLET_PREFIX = re.compile(r"^(?:[•●▪◦‣⁃*]|[-–—]\s)\s*")
 _SPACE = re.compile(r"\s+")
@@ -24,7 +29,7 @@ _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?;])\s+(?=[A-Z0-9])")
 _SECTION_KEY = re.compile(r"[^a-z0-9]+")
 _LAYOUT_INDENT_MARKER = "[[ERGA-LAYOUT-INDENT]]"
 _LAYOUT_COLUMN_MARKER = "[[ERGA-LAYOUT-COLUMN]]"
-_SEMANTIC_TEMPLATE_MARKER = "% Erga semantic resume template version: 11"
+_SEMANTIC_TEMPLATE_MARKER = "% Erga semantic resume template version: 13"
 _SECTION_ALIASES = {
     "activities": "Activities",
     "awards": "Awards",
@@ -108,6 +113,32 @@ class ResumeLayoutProfile:
         }
 
 
+@dataclass(frozen=True)
+class ResumeVisualProfile:
+    """Measured presentation characteristics from a user-supplied PDF reference."""
+
+    body_font_size_pt: float
+    body_leading_pt: float
+    header_font_size_pt: float
+    item_spacing_pt: float
+    margin_in: float
+    section_bold: bool
+    section_font_size_pt: float
+    section_small_caps: bool
+
+    def as_json(self) -> dict[str, object]:
+        return {
+            "body_font_size_pt": self.body_font_size_pt,
+            "body_leading_pt": self.body_leading_pt,
+            "header_font_size_pt": self.header_font_size_pt,
+            "item_spacing_pt": self.item_spacing_pt,
+            "margin_in": self.margin_in,
+            "section_bold": self.section_bold,
+            "section_font_size_pt": self.section_font_size_pt,
+            "section_small_caps": self.section_small_caps,
+        }
+
+
 def _section_name(line: str) -> str | None:
     line = line.removeprefix(_LAYOUT_INDENT_MARKER).replace(_LAYOUT_COLUMN_MARKER, "")
     normalized = _SECTION_KEY.sub("", line.casefold().rstrip(":").strip())
@@ -134,17 +165,23 @@ def _is_layout_indented(line: str) -> bool:
 def _source_lines(source: ResumeSource) -> list[str]:
     raw_lines = source.text.splitlines()
     if source.format == "pdf":
+        explicit_bullets = any(_BULLET_PREFIX.match(raw.strip()) is not None for raw in raw_lines)
         folded: list[str] = []
         pending = ""
         pending_indent = -1
+        pending_is_bullet = False
         for raw in raw_lines:
             if not raw.strip() or _PAGE_MARKER.fullmatch(raw.strip()):
                 if pending:
                     folded.append(pending)
                     pending = ""
                     pending_indent = -1
+                    pending_is_bullet = False
                 continue
             indent = len(raw) - len(raw.lstrip())
+            is_bullet = (
+                _BULLET_PREFIX.match(raw.strip()) is not None if explicit_bullets else indent > 0
+            )
             columns = [
                 _SPACE.sub(" ", part).strip()
                 for part in re.split(r"\s{2,}", raw.strip())
@@ -153,8 +190,11 @@ def _source_lines(source: ResumeSource) -> list[str]:
             line = _LAYOUT_COLUMN_MARKER.join(columns)
             continuation = (
                 bool(pending)
-                and indent > 0
-                and indent == pending_indent
+                and pending_is_bullet
+                and (
+                    (explicit_bullets and not is_bullet and indent >= pending_indent)
+                    or (not explicit_bullets and is_bullet and indent == pending_indent)
+                )
                 and not pending.endswith((".", "!", "?"))
             )
             if continuation:
@@ -162,8 +202,9 @@ def _source_lines(source: ResumeSource) -> list[str]:
                 continue
             if pending:
                 folded.append(pending)
-            pending = f"{_LAYOUT_INDENT_MARKER}{line}" if indent > 0 else line
+            pending = f"{_LAYOUT_INDENT_MARKER}{line}" if is_bullet else line
             pending_indent = indent
+            pending_is_bullet = is_bullet
         if pending:
             folded.append(pending)
         raw_lines = folded
@@ -252,11 +293,11 @@ def _ordered_sections(
     sections: list[tuple[str, list[str]]], style: ResumeSource | None
 ) -> list[tuple[str, list[str]]]:
     content = {name: lines for name, lines in sections}
-    source_order = [name for name, _ in sections]
     preferred = _style_order(style)
     # A supplied style resume defines the desired section shape. Its wording remains excluded;
-    # only matching factual sections from the master are eligible for the generated resume.
-    order = preferred if preferred else [*source_order, *_DEFAULT_ORDER]
+    # only matching factual sections from the master are eligible for the generated resume. When
+    # no style exists, the built-in Jake layout owns ordering; master layout never becomes style.
+    order = preferred if preferred else list(_DEFAULT_ORDER)
     unique_order = list(dict.fromkeys(name for name in order if name in content))
     return [(name, content[name]) for name in unique_order]
 
@@ -296,6 +337,45 @@ def infer_resume_layout_profile(source: str) -> ResumeLayoutProfile:
     )
 
 
+def infer_source_layout_profile(source: ResumeSource) -> ResumeLayoutProfile:
+    """Infer the visible content budget of a PDF, DOCX, or TeX style reference."""
+    if source.format == "tex" and r"\section{" in source.text:
+        return infer_resume_layout_profile(source.text)
+    _, sections = _partition_master(source)
+    section_order = tuple(name for name, _ in sections)
+    item_counts = {
+        name: sum(_is_layout_indented(line) for line in lines) for name, lines in sections
+    }
+    repeatable = tuple(name for name in section_order if item_counts[name])
+    editable = tuple(
+        name
+        for name in section_order
+        if _SECTION_KEY.sub("", name.casefold()) in {"experience", "projects", "technicalskills"}
+    )
+    project_lines = next((lines for name, lines in sections if name == "Projects"), [])
+    return ResumeLayoutProfile(
+        section_order=section_order,
+        editable_sections=editable,
+        repeatable_sections=repeatable,
+        section_item_counts=item_counts,
+        project_count=max(1, _grouped_entry_count(project_lines)),
+    )
+
+
+def _grouped_entry_count(lines: list[str]) -> int:
+    groups = 0
+    has_bullets = False
+    for line in lines:
+        if _is_layout_indented(line):
+            has_bullets = True
+        elif has_bullets:
+            groups += 1
+            has_bullets = False
+    if has_bullets:
+        groups += 1
+    return groups
+
+
 def _observed_project_count(source: ResumeSource) -> int:
     """Count project groups from a user's explicit layout source without using its claims."""
     if source.format == "tex":
@@ -306,17 +386,103 @@ def _observed_project_count(source: ResumeSource) -> int:
     project_lines = next((lines for name, lines in sections if name == "Projects"), [])
     if not project_lines:
         return 0
-    groups = 0
-    has_bullets = False
-    for line in project_lines:
-        if _is_layout_indented(line):
-            has_bullets = True
-        elif has_bullets:
-            groups += 1
-            has_bullets = False
-    if has_bullets:
-        groups += 1
-    return groups
+    return _grouped_entry_count(project_lines)
+
+
+def _pdf_visual_profile(source: ResumeSource) -> ResumeVisualProfile | None:
+    """Measure typography and margins from the first page of a PDF style reference."""
+    if source.format != "pdf" or not source.path.is_file():
+        return None
+    try:
+        page = PdfReader(source.path).pages[0]
+    except (OSError, PdfReadError, IndexError):
+        return None
+
+    fragments: list[tuple[str, float, float, float, str]] = []
+
+    def visitor(
+        text: str,
+        current_transform: Any,
+        text_matrix: Any,
+        font: Any,
+        font_size: float,
+    ) -> None:
+        rendered = _SPACE.sub(" ", text).strip()
+        if not rendered:
+            return
+        try:
+            text_x = float(text_matrix[4])
+            text_y = float(text_matrix[5])
+            x = (
+                text_x * float(current_transform[0])
+                + text_y * float(current_transform[2])
+                + float(current_transform[4])
+            )
+            y = (
+                text_x * float(current_transform[1])
+                + text_y * float(current_transform[3])
+                + float(current_transform[5])
+            )
+            size = float(font_size)
+        except (IndexError, TypeError, ValueError):
+            try:
+                x = float(text_matrix[4])
+                y = float(text_matrix[5])
+                size = float(font_size)
+            except (IndexError, TypeError, ValueError):
+                return
+        font_name = str(font.get("/BaseFont", "")) if isinstance(font, dict) else ""
+        fragments.append((rendered, x, y, size, font_name))
+
+    try:
+        page.extract_text(visitor_text=visitor)
+    except (KeyError, TypeError, ValueError):
+        return None
+    candidates = [item for item in fragments if 8 <= item[3] <= 14]
+    if not candidates:
+        return None
+    weighted_sizes = [item[3] for item in candidates for _ in range(max(1, min(len(item[0]), 80)))]
+    body_size = float(statistics.median(weighted_sizes))
+    section_fragments = [item for item in candidates if _section_name(item[0]) is not None]
+    section_size = (
+        float(statistics.median(item[3] for item in section_fragments))
+        if section_fragments
+        else min(14.0, body_size * 1.2)
+    )
+    section_fonts = [item[4].casefold() for item in section_fragments]
+    margin_x = min(
+        (item[1] for item in section_fragments), default=min(item[1] for item in candidates)
+    )
+    margin_in = max(0.4, min(1.0, margin_x / 72.0))
+
+    body_baselines = sorted(
+        (item[2] for item in candidates if abs(item[3] - body_size) <= 0.35), reverse=True
+    )
+    clustered: list[float] = []
+    for baseline in body_baselines:
+        if clustered and abs(clustered[-1] - baseline) <= 2:
+            clustered[-1] = (clustered[-1] + baseline) / 2
+        else:
+            clustered.append(baseline)
+    gaps = [
+        first - second
+        for first, second in zip(clustered, clustered[1:], strict=False)
+        if 8 <= first - second <= 18
+    ]
+    body_leading = max(body_size + 1, min(body_size + 3, body_size * 1.2))
+    observed_gap = float(statistics.median(gaps)) if gaps else body_leading
+    item_spacing = max(0.0, min(3.0, observed_gap - body_leading))
+    header_size = max((item[3] for item in fragments), default=body_size * 2)
+    return ResumeVisualProfile(
+        body_font_size_pt=round(body_size, 2),
+        body_leading_pt=round(body_leading, 2),
+        header_font_size_pt=round(max(body_size * 1.6, min(28.0, header_size)), 2),
+        item_spacing_pt=round(item_spacing, 2),
+        margin_in=round(margin_in, 2),
+        section_bold=any("bold" in name for name in section_fonts),
+        section_font_size_pt=round(section_size, 2),
+        section_small_caps=any("caps" in name for name in section_fonts),
+    )
 
 
 def _latex_escape(value: str) -> str:
@@ -337,16 +503,34 @@ def _latex_escape(value: str) -> str:
     return "".join(replacements.get(character, character) for character in value)
 
 
-def _render_header(lines: list[str]) -> str:
+def _measure(value: float) -> str:
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _render_header(lines: list[str], visual: ResumeVisualProfile | None) -> str:
     if not lines:
         return ""
+    if visual is None:
+        name = rf"{{\LARGE \textbf{{{_latex_escape(_flatten_columns(lines[0]))}}}}}\\[2pt]"
+        contact_prefix = r"\small "
+    else:
+        header_size = _measure(visual.header_font_size_pt)
+        header_leading = _measure(visual.header_font_size_pt * 1.2)
+        name = (
+            rf"{{\fontsize{{{header_size}pt}}{{{header_leading}pt}}\selectfont\bfseries "
+            rf"{_latex_escape(_flatten_columns(lines[0]))}}}\\[2pt]"
+        )
+        contact_prefix = (
+            rf"\fontsize{{{_measure(visual.body_font_size_pt)}pt}}"
+            rf"{{{_measure(visual.body_leading_pt)}pt}}\selectfont "
+        )
     rendered = [
         r"\begin{center}",
-        rf"{{\LARGE \textbf{{{_latex_escape(_flatten_columns(lines[0]))}}}}}\\[2pt]",
+        name,
     ]
     if len(lines) > 1:
         rendered.append(
-            r"\small "
+            contact_prefix
             + r" \enspace\textbar\enspace ".join(
                 _latex_escape(_flatten_columns(line)) for line in lines[1:]
             )
@@ -476,12 +660,23 @@ def _render_section(name: str, lines: list[str]) -> str:
 def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
     header, parsed_sections = _partition_master(master)
     sections = _ordered_sections(parsed_sections, style)
-    layout_source = style or master
-    compact = (layout_source.page_count or 1) <= 1
+    visual = _pdf_visual_profile(style) if style is not None else None
     font_size = "10pt"
-    margin = "0.50in" if compact else "0.60in"
+    margin = f"{_measure(visual.margin_in)}in" if visual is not None else "0.50in"
+    item_spacing = _measure(visual.item_spacing_pt) if visual is not None else "1"
+    if visual is None:
+        section_style = r"\large\bfseries"
+    else:
+        section_style = (
+            rf"\fontsize{{{_measure(visual.section_font_size_pt)}pt}}"
+            rf"{{{_measure(visual.section_font_size_pt * 1.2)}pt}}\selectfont"
+        )
+        if visual.section_small_caps:
+            section_style += r"\scshape"
+        if visual.section_bold:
+            section_style += r"\bfseries"
     body = "\n\n".join(_render_section(name, lines) for name, lines in sections)
-    rendered_header = _render_header(header)
+    rendered_header = _render_header(header, visual)
     preamble = (
         f"% Generated by Erga from approved master resume SHA-256: {master.sha256}\n"
         "% Factual text below comes only from that approved master source.\n"
@@ -512,7 +707,7 @@ def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
         "\n"
         r"\setlist[itemize]{nosep}"
         "\n"
-        r"\titleformat{\section}{\large\bfseries}{}{0em}{}[\titlerule]"
+        rf"\titleformat{{\section}}{{{section_style}}}{{}}{{0em}}{{}}[\titlerule]"
         "\n"
         r"\titlespacing*{\section}{0pt}{5pt}{2pt}"
         "\n"
@@ -529,7 +724,7 @@ def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
         r"\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}"
         "\n"
         r"\newcommand{\resumeItemListStart}{\begin{itemize}[leftmargin=0.18in,label=\textbullet,"
-        r"itemsep=1pt,topsep=1pt,parsep=0pt,partopsep=0pt]}"
+        rf"itemsep={item_spacing}pt,topsep={item_spacing}pt,parsep=0pt,partopsep=0pt]}}"
         "\n"
         r"\newcommand{\resumeItemListEnd}{\end{itemize}}"
         "\n"
@@ -541,8 +736,14 @@ def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
         r"\begin{document}"
         "\n"
     )
-    if compact:
-        preamble += r"\fontsize{9pt}{10.4pt}\selectfont" "\n"
+    if visual is not None:
+        preamble += (
+            rf"\fontsize{{{_measure(visual.body_font_size_pt)}pt}}"
+            rf"{{{_measure(visual.body_leading_pt)}pt}}\selectfont"
+            "\n"
+        )
+    elif style is None:
+        preamble += r"\fontsize{10pt}{12pt}\selectfont" "\n"
     if rendered_header:
         preamble += f"{rendered_header}\n\n"
     return preamble + body + "\n\n" + r"\end{document}" + "\n"
@@ -565,6 +766,8 @@ def generate_latex_template(
     metadata_path = target_dir / "template.json"
     rendered = _render_template(master, style)
     profile = infer_resume_layout_profile(rendered)
+    style_profile = infer_source_layout_profile(style) if style is not None else None
+    visual_profile = _pdf_visual_profile(style) if style is not None else None
     if "Projects" in profile.editable_sections:
         # An explicit style/template owns its observed number of project slots. Without one,
         # Erga's one-page default starts at four and lets rendered packing decide bullet density.
@@ -575,9 +778,12 @@ def generate_latex_template(
         "generation_version": TEMPLATE_GENERATION_VERSION,
         "master_sha256": master.sha256,
         "style_sha256": style.sha256 if style else None,
+        "styling_source": "user-template" if style else "erga-default-jake",
         "style_used_for_facts": False,
         "template_path": str(target),
         "layout_profile": profile.as_json(),
+        "style_layout_profile": style_profile.as_json() if style_profile else None,
+        "visual_style_profile": visual_profile.as_json() if visual_profile else None,
     }
 
     for path, content in (
@@ -668,7 +874,7 @@ def ensure_resume_template(config_path: Path) -> Path:
 
 
 def reset_resume_template(config_path: Path) -> Path:
-    """Clear custom style/template choices and regenerate the default from the master."""
+    """Clear custom style choices and apply the default Jake layout to approved master facts."""
     config = load_config(config_path)
     if config.resume.master_path is None or not config.resume.master_path.is_file():
         raise ValueError("import a master resume before resetting the template")

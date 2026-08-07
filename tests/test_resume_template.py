@@ -5,6 +5,8 @@ import unittest
 import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from erga_mcp.config import DEFAULT_CONFIG, load_config
 from erga_mcp.resume_settings import update_settings
@@ -14,10 +16,56 @@ from erga_mcp.resume_template import (
     ensure_resume_template,
     generate_latex_template,
     infer_resume_layout_profile,
+    infer_source_layout_profile,
 )
 
 
 class ResumeTemplateTests(unittest.TestCase):
+    def test_default_jake_style_is_independent_of_master_layout(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = ResumeSource(
+                path=root / "crowded-master.pdf",
+                format="pdf",
+                sha256="1" * 64,
+                page_count=7,
+                text=(
+                    "Jane Candidate\njane@example.test\nPROJECTS\nCompiler\n"
+                    "   • Built an approved compiler.\nEDUCATION\nExample University\n"
+                    "TECHNICAL SKILLS\nLanguages: Python"
+                ),
+            )
+            second = ResumeSource(
+                path=root / "sparse-master.pdf",
+                format="pdf",
+                sha256="2" * 64,
+                page_count=1,
+                text=(
+                    "Jane Candidate\njane@example.test\nTECHNICAL SKILLS\nLanguages: Python\n"
+                    "EDUCATION\nExample University\nPROJECTS\nCompiler\n"
+                    "   • Built an approved compiler."
+                ),
+            )
+
+            first_generated = generate_latex_template(first, data_dir=root / "first")
+            second_generated = generate_latex_template(second, data_dir=root / "second")
+            first_template = first_generated.path.read_text(encoding="utf-8").replace(
+                first.sha256, "MASTER"
+            )
+            second_template = second_generated.path.read_text(encoding="utf-8").replace(
+                second.sha256, "MASTER"
+            )
+            metadata = json.loads(first_generated.metadata_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(first_template, second_template)
+            self.assertIn(r"\usepackage[margin=0.50in]{geometry}", first_template)
+            self.assertIn(r"\fontsize{10pt}{12pt}\selectfont", first_template)
+            self.assertEqual(
+                first_generated.profile.section_order,
+                ("Education", "Projects", "Technical Skills"),
+            )
+            self.assertEqual(metadata["styling_source"], "erga-default-jake")
+
     def test_layout_profile_supports_project_only_resumes_without_inventing_experience(
         self,
     ) -> None:
@@ -143,7 +191,7 @@ class ResumeTemplateTests(unittest.TestCase):
             generated = generate_latex_template(source, data_dir=root / "state")
             template = generated.path.read_text(encoding="utf-8")
 
-            self.assertIn("% Erga semantic resume template version: 11", template)
+            self.assertIn("% Erga semantic resume template version: 13", template)
             self.assertIn(r"\resumeEducationHeading{Example University}{Orlando, FL}", template)
             self.assertIn(r"\resumeEducationDetail{Bachelor of Science}{May 2027}", template)
             self.assertIn(
@@ -337,7 +385,7 @@ class ResumeTemplateTests(unittest.TestCase):
             metadata = json.loads(generated.metadata_path.read_text(encoding="utf-8"))
             self.assertIn(r"\documentclass[letterpaper,10pt]{article}", template)
             self.assertIn(r"\usepackage[margin=0.50in]{geometry}", template)
-            self.assertIn(r"\fontsize{9pt}{10.4pt}\selectfont", template)
+            self.assertNotIn(r"\fontsize{9pt}{10.4pt}\selectfont", template)
             self.assertIn("Jane Candidate", template)
             self.assertNotIn(r"\section{Education}", template)
             self.assertNotIn(r"\section{Technical Skills}", template)
@@ -348,7 +396,80 @@ class ResumeTemplateTests(unittest.TestCase):
             self.assertNotIn("Style-only secret", template)
             self.assertNotIn("Style Person", template)
             self.assertFalse(metadata["style_used_for_facts"])
+            self.assertEqual(metadata["styling_source"], "user-template")
             self.assertEqual(metadata["master_sha256"], "a" * 64)
+
+    def test_pdf_style_controls_project_density_and_measured_typography(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master = ResumeSource(
+                path=root / "master.pdf",
+                format="pdf",
+                sha256="3" * 64,
+                page_count=1,
+                text=(
+                    "Jane Candidate\nEducation\nExample University\nExperience\nExample Role\n"
+                    "   • Built an approved service.\nProjects\nAlpha\n"
+                    "   • Built approved alpha one.\n   • Built approved alpha two.\nBeta\n"
+                    "   • Built approved beta one.\n   • Built approved beta two.\nGamma\n"
+                    "   • Built approved gamma one.\n   • Built approved gamma two.\n"
+                    "Technical Skills\nLanguages: Python"
+                ),
+            )
+            style_path = root / "style.pdf"
+            style_path.write_bytes(b"%PDF synthetic style")
+            style = ResumeSource(
+                path=style_path,
+                format="pdf",
+                sha256="4" * 64,
+                page_count=1,
+                text=(
+                    "Style Person\nEducation\nExample University\nExperience\nExample Role\n"
+                    "   • Example result.\nProjects\nOne\n   • First.\n   • Second.\n"
+                    "Two\n   • First.\n   • Second.\nThree\n   • First.\n   • Second.\n"
+                    "Technical Skills\nLanguages: Python"
+                ),
+            )
+
+            class Page:
+                def extract_text(self, *, visitor_text: object) -> str:
+                    visit = visitor_text  # type: ignore[assignment]
+                    fragments = (
+                        ("Style Person", 220.0, 760.0, 24.8, "/Synthetic-Bold"),
+                        ("Education", 36.0, 720.0, 12.0, "/Synthetic-Caps"),
+                        ("Example University", 46.8, 700.0, 10.0, "/Synthetic-Bold"),
+                        ("Example result", 61.5, 686.0, 10.0, "/Synthetic-Regular"),
+                        ("Another result", 61.5, 672.0, 10.0, "/Synthetic-Regular"),
+                        ("Projects", 36.0, 650.0, 12.0, "/Synthetic-Caps"),
+                        ("Technical Skills", 36.0, 620.0, 12.0, "/Synthetic-Caps"),
+                    )
+                    for text, x, y, size, font in fragments:
+                        visit(
+                            text,
+                            (1, 0, 0, 1, 0, 0),
+                            (0, 0, 0, 0, x, y),
+                            {"/BaseFont": font},
+                            size,
+                        )
+                    return ""
+
+            reader = SimpleNamespace(pages=[Page()])
+            with patch("erga_mcp.resume_template.PdfReader", return_value=reader):
+                generated = generate_latex_template(master, data_dir=root / "state", style=style)
+
+            template = generated.path.read_text(encoding="utf-8")
+            metadata = json.loads(generated.metadata_path.read_text(encoding="utf-8"))
+            style_profile = infer_source_layout_profile(style)
+
+            self.assertEqual(style_profile.project_count, 3)
+            self.assertEqual(style_profile.section_item_counts["Projects"], 6)
+            self.assertEqual(generated.profile.project_count, 3)
+            self.assertEqual(metadata["style_layout_profile"]["section_item_counts"]["Projects"], 6)
+            self.assertEqual(metadata["visual_style_profile"]["body_font_size_pt"], 10.0)
+            self.assertIn(r"\fontsize{24.8pt}{29.76pt}\selectfont\bfseries", template)
+            self.assertIn(r"\fontsize{10pt}{12pt}\selectfont", template)
+            self.assertIn(r"\fontsize{12pt}{14.4pt}\selectfont\scshape", template)
+            self.assertIn("itemsep=2pt,topsep=2pt", template)
 
     def test_generated_generic_items_are_tailorable_without_legacy_macros(self) -> None:
         with TemporaryDirectory() as directory:

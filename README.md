@@ -116,9 +116,14 @@ uv run erga resume template set "/absolute/path/to/preferred-template.pdf"
 ```
 
 Both commands accept PDF, DOCX, and `.tex` files. Erga copies the selected file into private local
-state before using it. The template command preserves the master and reads only section presence,
-order, density, and project slots from the selected file; its wording cannot introduce résumé
-claims. To remove the style/custom template and return to Erga's default Jake-style layout, run:
+state before using it. The master is facts only: its page count, margins, typography, spacing,
+section order, and visual quality never affect the generated layout. The template command preserves
+the master and reads only section presence,
+order, density, project slots, and bullet capacity from the selected file. For PDF templates it also
+measures margins, body/header/section typography, small-caps treatment, line height, and item
+spacing. These visual constraints survive the one-page packing pass; template wording can never
+introduce résumé claims. To remove the style/custom template and return to Erga's default
+Jake-style layout, run:
 
 ```bash
 uv run erga resume template reset
