@@ -89,7 +89,12 @@ Erga acknowledges an accepted request immediately with one live Discord card. Fo
 card shows the evidence/tailoring/validation pipeline, a truthful current status, elapsed time, and
 the review-only safety boundary. It refreshes in place every 12 seconds while the local backend
 works, then becomes the final result card. This avoids both a silent multi-minute wait and a channel
-full of disposable progress messages. Long results continue in matching detail cards.
+full of disposable progress messages. When Erga returns a validated PDF artifact, that same final
+card shows a rendered first-page preview and carries the PDF as a Discord attachment, so the result
+can be reviewed or downloaded without finding a local path. Erga only attaches regular PDF files
+inside its configured data or résumé output directories and only from an `artifacts` package; a path
+merely mentioned by an untrusted job page or reasoning response is never uploaded. Long results
+continue in matching detail cards.
 
 The visual system follows a 60–30–10 hierarchy derived from Erga's existing wordmark, onboarding,
 and orbit mark:
