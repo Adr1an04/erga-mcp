@@ -21,7 +21,7 @@ from .resume_settings import update_settings
 from .resume_sources import ResumeSource, load_resume_source
 from .resume_tailoring import latex_to_text
 
-TEMPLATE_GENERATION_VERSION = 16
+TEMPLATE_GENERATION_VERSION = 17
 _PAGE_MARKER = re.compile(r"^\[Page \d+\]$")
 _BULLET_PREFIX = re.compile(r"^(?:[•●▪◦‣⁃*]|[-–—]\s)\s*")
 _SPACE = re.compile(r"\s+")
@@ -29,7 +29,7 @@ _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?;])\s+(?=[A-Z0-9])")
 _SECTION_KEY = re.compile(r"[^a-z0-9]+")
 _LAYOUT_INDENT_MARKER = "[[ERGA-LAYOUT-INDENT]]"
 _LAYOUT_COLUMN_MARKER = "[[ERGA-LAYOUT-COLUMN]]"
-_SEMANTIC_TEMPLATE_MARKER = "% Erga semantic resume template version: 16"
+_SEMANTIC_TEMPLATE_MARKER = "% Erga semantic resume template version: 17"
 _VISUAL_SPACING_MARKER = "% Erga visual spacing is template-controlled."
 _SECTION_ALIASES = {
     "activities": "Activities",
@@ -770,12 +770,10 @@ def _render_header(lines: list[str], visual: ResumeVisualProfile | None) -> str:
         name,
     ]
     if len(lines) > 1:
-        rendered.append(
-            contact_prefix
-            + r" \enspace\textbar\enspace ".join(
-                _latex_escape(_flatten_columns(line)) for line in lines[1:]
-            )
+        contacts = r" \enspace\textbar\enspace ".join(
+            _latex_escape(_flatten_columns(line)) for line in lines[1:]
         )
+        rendered.append(r"\resumeContactLine{" + contact_prefix + rf"\mbox{{{contacts}}}" + "}")
     rendered.append(r"\end{center}")
     return "\n".join(rendered)
 
@@ -863,7 +861,7 @@ def _render_section(name: str, lines: list[str]) -> str:
             for line in lines:
                 category, values = _split_skill(line)
                 rendered.append(
-                    rf"\textbf{{{_latex_escape(category)}:}} {_latex_escape(values)} \\"
+                    rf"\resumeSkillRow{{{_latex_escape(category)}}}{{{_latex_escape(values)}}}"
                 )
         return "\n".join(rendered)
 
@@ -983,6 +981,8 @@ def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
         "\n"
         r"\usepackage{enumitem}"
         "\n"
+        r"\usepackage{graphicx}"
+        "\n"
         r"\usepackage{titlesec}"
         "\n"
         r"\pagestyle{empty}"
@@ -1004,6 +1004,32 @@ def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
         rf"{{{section_after_spacing}pt}}"
         "\n"
         r"\newcommand{\resumeItem}[1]{\item #1}"
+        "\n"
+        r"\newlength{\ergaContactWidth}"
+        "\n"
+        r"\newlength{\ergaSkillLabelWidth}"
+        "\n"
+        r"\newcommand{\resumeContactLine}[1]{%"
+        "\n"
+        r"  \settowidth{\ergaContactWidth}{#1}%"
+        "\n"
+        r"  \ifdim\ergaContactWidth>\textwidth"
+        "\n"
+        r"    \resizebox{\textwidth}{!}{#1}%"
+        "\n"
+        r"  \else #1\fi"
+        "\n"
+        r"}"
+        "\n"
+        r"\newcommand{\resumeSkillRow}[2]{%"
+        "\n"
+        r"  \settowidth{\ergaSkillLabelWidth}{\textbf{#1:}}%"
+        "\n"
+        r"  \noindent\textbf{#1:}\hspace{0.35em}%"
+        "\n"
+        r"  \parbox[t]{\dimexpr\linewidth-\ergaSkillLabelWidth-0.35em\relax}{\raggedright #2}\par"
+        "\n"
+        r"}"
         "\n"
         r"\newcommand{\resumeDetail}[1]{\noindent #1\\[-1pt]}"
         "\n"
@@ -1030,7 +1056,15 @@ def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
         r"\newcommand{\resumeSubheading}[4]{\item[] \textbf{#1}\hfill #2\\[-1pt]"
         r"\textit{#3}\hfill\textit{#4}}"
         "\n"
-        r"\newcommand{\resumeProjectHeading}[2]{\item[] #1\hfill #2}"
+        r"\newcommand{\resumeProjectHeading}[2]{%"
+        "\n"
+        r"  \item[]\begin{tabular*}{\linewidth}{@{}p{0.78\linewidth}@{\extracolsep{\fill}}r@{}}"
+        "\n"
+        r"    \raggedright #1 & \mbox{#2}\\[-1pt]"
+        "\n"
+        r"  \end{tabular*}%"
+        "\n"
+        r"}"
         "\n"
         r"\begin{document}"
         "\n"

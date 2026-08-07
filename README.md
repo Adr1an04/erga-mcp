@@ -129,6 +129,11 @@ résumé claims. A template with one bullet per project therefore produces one b
 project; a template with a two/three/two pattern preserves and repeats that pattern across selected
 approved entries. Observed section totals guide density rather than acting as hard quotas, so Erga
 can use additional approved projects when the master has fewer experiences than the style example.
+Generated templates also enforce fit rules that do not depend on an AI host: contact details remain
+one centered row (scaling only when necessary), project dates reserve a right-hand column while a
+long title or technology list wraps on the left, and technical-skill labels reserve their own width
+so skill values wrap cleanly instead of crossing the right margin. Existing generated templates are
+refreshed automatically when this layout schema changes.
 If the chosen template is intentionally spacious, its fixed geometry also takes precedence over
 Erga's default page-fill threshold. To remove the style/custom template and return to Erga's default
 Jake-style layout, run:

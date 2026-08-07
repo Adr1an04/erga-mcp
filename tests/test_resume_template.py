@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import unittest
 import zipfile
 from pathlib import Path
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from erga_mcp.config import DEFAULT_CONFIG, load_config
+from erga_mcp.resume import validate_latex_proposal
 from erga_mcp.resume_settings import update_settings
 from erga_mcp.resume_sources import ResumeSource, load_resume_source
 from erga_mcp.resume_tailoring import create_automatic_resume_proposal
@@ -191,7 +193,7 @@ class ResumeTemplateTests(unittest.TestCase):
             generated = generate_latex_template(source, data_dir=root / "state")
             template = generated.path.read_text(encoding="utf-8")
 
-            self.assertIn("% Erga semantic resume template version: 16", template)
+            self.assertIn("% Erga semantic resume template version: 17", template)
             self.assertIn(r"\resumeEducationHeading{Example University}{Orlando, FL}", template)
             self.assertIn(r"\resumeEducationDetail{Bachelor of Science}{May 2027}", template)
             self.assertIn(
@@ -200,6 +202,83 @@ class ResumeTemplateTests(unittest.TestCase):
                 template,
             )
             self.assertIn(r"\resumeProjectHeading{\textbf{Compiler Project}}{Feb 2026}", template)
+
+    def test_generated_template_keeps_header_dates_and_skill_rows_within_the_text_width(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = ResumeSource(
+                path=root / "master.pdf",
+                format="pdf",
+                sha256="b" * 64,
+                page_count=1,
+                text=(
+                    "Jane Candidate\n555-010-0100\njane.candidate@example.test\n"
+                    "linkedin.com/in/jane-candidate\ngithub.com/jane-candidate\n"
+                    "janecandidate.example\nPROJECTS\n"
+                    "A Long Systems Project Title | Python, CUDA, Distributed Systems, "
+                    "Machine Learning, Observability                    Summer 2027\n"
+                    "   • Built an approved project result.\nTECHNICAL SKILLS\n"
+                    "Languages and Developer Tools: Python, C++, TypeScript, JavaScript, Bash, "
+                    "Git, Docker, Kubernetes, GitHub Actions\n"
+                    "Systems and Infrastructure: Linux, CUDA, CMake, Bazel, AWS, GCP, Terraform, "
+                    "Ansible, GitLab CI, CircleCI, Prometheus, Grafana, PostgreSQL, Redis"
+                ),
+            )
+
+            generated = generate_latex_template(source, data_dir=root / "state")
+            template = generated.path.read_text(encoding="utf-8")
+
+            self.assertIn(r"\usepackage{graphicx}", template)
+            self.assertIn(r"\newcommand{\resumeContactLine}[1]", template)
+            self.assertIn(r"\resizebox{\textwidth}{!}{#1}", template)
+            self.assertIn(r"\resumeContactLine{\small \mbox{", template)
+            self.assertIn(r"\newcommand{\resumeProjectHeading}[2]", template)
+            self.assertIn(r"p{0.78\linewidth}", template)
+            self.assertIn(r"\raggedright #1 & \mbox{#2}", template)
+            self.assertIn(r"\newcommand{\resumeSkillRow}[2]", template)
+            self.assertIn(
+                r"\parbox[t]{\dimexpr\linewidth-\ergaSkillLabelWidth-0.35em\relax}"
+                r"{\raggedright #2}",
+                template,
+            )
+            self.assertIn(
+                r"\resumeSkillRow{Languages and Developer Tools}{Python, C++, TypeScript, "
+                r"JavaScript, Bash, Git, Docker, Kubernetes, GitHub Actions}",
+                template,
+            )
+
+    @unittest.skipUnless(
+        shutil.which("tectonic"), "tectonic is required to compile layout fixtures"
+    )
+    def test_long_header_project_and_skills_fixture_compiles_without_overfull_boxes(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = ResumeSource(
+                path=root / "master.pdf",
+                format="pdf",
+                sha256="d" * 64,
+                page_count=1,
+                text=(
+                    "Jane Candidate\n555-010-0100\njane.candidate@example.test\n"
+                    "linkedin.com/in/jane-candidate\ngithub.com/jane-candidate\n"
+                    "janecandidate.example\nPROJECTS\n"
+                    "A Long Systems Project Title | Python, CUDA, Distributed Systems, "
+                    "Machine Learning, Observability                    Summer 2027\n"
+                    "   • Built an approved project result.\nTECHNICAL SKILLS\n"
+                    "Languages and Developer Tools: Python, C++, TypeScript, JavaScript, Bash, "
+                    "Git, Docker, Kubernetes, GitHub Actions\n"
+                    "Systems and Infrastructure: Linux, CUDA, CMake, Bazel, AWS, GCP, Terraform, "
+                    "Ansible, GitLab CI, CircleCI, Prometheus, Grafana, PostgreSQL, Redis"
+                ),
+            )
+            generated = generate_latex_template(source, data_dir=root / "state")
+
+            validation = validate_latex_proposal(generated.path, latexmk=Path("tectonic"))
+
+            self.assertEqual(validation.returncode, 0, validation.stderr)
+            self.assertNotIn("Overfull \\hbox", validation.stdout + validation.stderr)
 
     def test_pdf_layout_lines_fold_wrapped_bullets_and_preserve_open_source_section(self) -> None:
         with TemporaryDirectory() as directory:
@@ -231,7 +310,7 @@ class ResumeTemplateTests(unittest.TestCase):
             self.assertIn(r"\resumeSubheading{Role heading}", template)
             self.assertIn(r"\section{Open Source}", template)
             self.assertIn("Merged an approved compiler correction", template)
-            self.assertIn(r"\textbf{Languages:} Python, Rust", template)
+            self.assertIn(r"\resumeSkillRow{Languages}{Python, Rust}", template)
             self.assertNotIn(r"\textbf{Skills:} Rust", template)
 
     def test_docx_master_generates_the_same_standalone_editable_template(self) -> None:
@@ -261,7 +340,7 @@ class ResumeTemplateTests(unittest.TestCase):
             template = generated.path.read_text(encoding="utf-8")
             self.assertIn("Built approved Python services", template)
             self.assertIn("Created an approved compiler project", template)
-            self.assertIn(r"\textbf{Languages:} Python, Rust", template)
+            self.assertIn(r"\resumeSkillRow{Languages}{Python, Rust}", template)
 
     def test_one_page_proposal_selects_relevant_approved_items_and_reports_omissions(self) -> None:
         with TemporaryDirectory() as directory:
@@ -611,7 +690,7 @@ class ResumeTemplateTests(unittest.TestCase):
             proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
             self.assertTrue(result.meaningful_change)
             self.assertLess(proposed.index("Built Python"), proposed.index("Designed visual"))
-            self.assertIn(r"\textbf{Languages:} Python, JavaScript", proposed)
+            self.assertIn(r"\resumeSkillRow{Languages}{Python, JavaScript}", proposed)
 
     def test_ensure_backfills_missing_template_once_and_updates_private_config(self) -> None:
         with TemporaryDirectory() as directory:
