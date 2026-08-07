@@ -45,10 +45,7 @@ _PROGRESS_REFRESH_SECONDS = 12.0
 _ALLOWED_ARGUMENT_FIELDS = ("{prompt}", "{project_dir}", "{output_path}")
 _RESUME_PREVIEW_ATTACHMENT_NAME = "erga-resume-preview.png"
 _MAX_RESUME_PREVIEW_BYTES = 8 * 1024 * 1024
-_PDF_PATH_PATTERN = re.compile(
-    r"(?P<path>(?:[A-Za-z]:[\\/]|/)[^`<>\"'\r\n]+?\.pdf)(?=[\s`<>\"'\]\[(){}.,;:!?]|$)",
-    re.IGNORECASE,
-)
+_URL_PATTERN = re.compile(r"https?://[^\s<>`]+", re.IGNORECASE)
 
 # Erga's 60–30–10 system: Ink is the structural foundation, Orbit Violet carries active states,
 # and the orbit colors are reserved for outcomes. Discord controls the canvas itself, so these
@@ -662,10 +659,31 @@ def _discord_embed(discord: Any, card: DiscordCard) -> Any:
     return embed
 
 
-def _managed_resume_pdf(response: str, *, attachment_roots: tuple[Path, ...]) -> Path | None:
-    """Disable model-directed attachments until Erga exposes a typed validated-artifact handoff."""
-    del response, attachment_roots
-    return None
+def _managed_resume_pdf(message: str, *, attachment_roots: tuple[Path, ...]) -> Path | None:
+    """Attach only a validated package artifact bound to a URL in this Discord request."""
+    urls = {match.rstrip(".,;:!?) ]") for match in _URL_PATTERN.findall(message)}
+    candidates: list[Path] = []
+    for root in attachment_roots:
+        if not root.is_dir():
+            continue
+        for manifest_path in root.rglob("package.json"):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                validation = manifest.get("validation", {})
+                relative_pdf = validation.get("pdf") if isinstance(validation, dict) else None
+                if (
+                    manifest.get("status") == "complete"
+                    and manifest.get("job_url") in urls
+                    and validation.get("returncode") == 0
+                    and isinstance(relative_pdf, str)
+                    and relative_pdf.startswith("artifacts/")
+                ):
+                    candidate = (manifest_path.parent / relative_pdf).resolve(strict=True)
+                    if candidate.is_file() and candidate.suffix.casefold() == ".pdf":
+                        candidates.append(candidate)
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+    return max(candidates, key=lambda path: path.stat().st_mtime) if candidates else None
 
 
 def _render_resume_preview(pdf_path: Path, destination: Path) -> Path | None:
@@ -856,7 +874,7 @@ def _create_discord_client(
             completed.set()
             await progress_task
             resume_pdf = (
-                _managed_resume_pdf(response, attachment_roots=attachment_roots)
+                _managed_resume_pdf(content, attachment_roots=attachment_roots)
                 if resume_request and _response_state(response) == "success"
                 else None
             )

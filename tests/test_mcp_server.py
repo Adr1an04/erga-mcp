@@ -1775,7 +1775,7 @@ class McpServerTests(unittest.TestCase):
             self.assertEqual(archive.suffix, ".zip")
             self.assertEqual(archive.parent, Path(str(exported["export_root"])))
 
-    def test_intake_rejects_a_non_posting_url_before_creating_a_package(self) -> None:
+    def test_intake_accepts_the_public_url_explicitly_supplied_by_the_user(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "resume.tex").write_text(
@@ -1793,27 +1793,30 @@ class McpServerTests(unittest.TestCase):
                 proposal_path.with_suffix(".pdf").write_bytes(b"synthetic pdf")
                 return validation
 
-            with self.assertRaisesRegex(Exception, "specific job posting"):
-                with (
-                    patch(
-                        "erga_mcp.mcp_server.fetch_job_snapshot",
-                        return_value="GitHub repository and source code for a project.",
-                    ),
-                    patch(
-                        "erga_mcp.mcp_server.validate_latex_proposal",
-                        side_effect=compile_success,
-                    ),
-                ):
-                    asyncio.run(
-                        server.call_tool(
-                            "intake_job_url",
-                            {
-                                "job_url": "https://github.com/example/project",
-                                "cycle": "fall-2026",
-                                "application_slug": "user-supplied-link",
-                            },
-                        )
+            with (
+                patch(
+                    "erga_mcp.mcp_server.fetch_job_snapshot",
+                    return_value="GitHub repository and source code for a project.",
+                ),
+                patch(
+                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    side_effect=compile_success,
+                ),
+            ):
+                call: Any = asyncio.run(
+                    server.call_tool(
+                        "intake_job_url",
+                        {
+                            "job_url": "https://github.com/example/project",
+                            "cycle": "fall-2026",
+                            "application_slug": "user-supplied-link",
+                        },
                     )
+                )
+
+            result = cast(dict[str, Any], call.structured_content)
+            self.assertFalse(result["reused"])
+            self.assertTrue(Path(result["package_dir"]).is_dir())
 
     def test_intakes_one_url_end_to_end_and_safely_reuses_an_exact_repeat(self) -> None:
         with TemporaryDirectory() as directory:
