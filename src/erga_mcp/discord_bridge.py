@@ -663,25 +663,8 @@ def _discord_embed(discord: Any, card: DiscordCard) -> Any:
 
 
 def _managed_resume_pdf(response: str, *, attachment_roots: tuple[Path, ...]) -> Path | None:
-    """Find a PDF artifact that Erga itself created inside an explicitly configured root."""
-    resolved_roots = tuple(root.expanduser().resolve() for root in attachment_roots)
-    for match in _PDF_PATH_PATTERN.finditer(response):
-        candidate = Path(match.group("path")).expanduser()
-        if not candidate.is_absolute():
-            continue
-        try:
-            resolved = candidate.resolve(strict=True)
-        except OSError:
-            continue
-        if not resolved.is_file() or resolved.suffix.casefold() != ".pdf":
-            continue
-        for root in resolved_roots:
-            try:
-                relative_path = resolved.relative_to(root)
-            except ValueError:
-                continue
-            if "artifacts" in relative_path.parts:
-                return resolved
+    """Disable model-directed attachments until Erga exposes a typed validated-artifact handoff."""
+    del response, attachment_roots
     return None
 
 
