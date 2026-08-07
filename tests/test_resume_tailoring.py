@@ -19,6 +19,7 @@ from erga_mcp.resume_tailoring import (
     _compact_generated_entry_section,
     _record_lead_verb_rewrites,
     _relevance,
+    _tailor_projects,
     apply_adaptive_single_page_fill,
     classify_wrapped_resume_items,
     create_automatic_resume_proposal,
@@ -142,10 +143,37 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
         self.assertEqual(compacted[alpha_start:beta_start].count(r"\resumeItem{"), 1)
         self.assertEqual(compacted[beta_start:].count(r"\resumeItem{"), 2)
 
+    def test_project_categories_stay_attached_when_projects_are_ranked(self) -> None:
+        section = r"""
+\resumeSubHeadingListStart
+\resumeProjectHeading{\textit{Product Systems}}{}
+\resumeProjectHeading{\textbf{Visual Client}}{2026}
+\resumeItemListStart
+\resumeItem{Built an approved visual interface.}
+\resumeItemListEnd
+\resumeProjectHeading{\textit{Research Systems}}{}
+\resumeProjectHeading{\textbf{Inference Engine}}{2026}
+\resumeItemListStart
+\resumeItem{Built an approved Python inference engine.}
+\resumeItemListEnd
+\resumeSubHeadingListEnd
+"""
+
+        tailored, _, changed = _tailor_projects(section, "Python inference")
+
+        research = tailored.index(r"\resumeProjectHeading{\textit{Research Systems}}{}")
+        inference = tailored.index(r"\resumeProjectHeading{\textbf{Inference Engine}}{2026}")
+        product = tailored.index(r"\resumeProjectHeading{\textit{Product Systems}}{}")
+        visual = tailored.index(r"\resumeProjectHeading{\textbf{Visual Client}}{2026}")
+        self.assertTrue(changed)
+        self.assertLess(research, inference)
+        self.assertLess(inference, product)
+        self.assertLess(product, visual)
+
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 25)
+        self.assertEqual(TAILORING_VERSION, 26)
 
     def test_semantic_layout_gate_rejects_flattened_generated_resume(self) -> None:
         flattened = r"""
