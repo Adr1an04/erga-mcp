@@ -11,6 +11,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 _CYCLE = re.compile(r"\b(Spring|Summer|Fall|Winter)\s+(20\d{2})\b", re.IGNORECASE)
+_REVERSED_CYCLE = re.compile(r"\b(20\d{2})\s+(Spring|Summer|Fall|Winter)\b", re.IGNORECASE)
 _TAG = re.compile(r"<[^>]+>")
 _SPACE = re.compile(r"\s+")
 _SECONDARY_START = "<!-- erga-mcp:secondary-research:start -->"
@@ -21,80 +22,12 @@ _IGNORED_HTML = frozenset(
 _BLOCK_HTML = frozenset(
     {"article", "br", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "main", "p", "section"}
 )
-_JOB_HOST_SUFFIXES = (
-    "applytojob.com",
-    "ashbyhq.com",
-    "bamboohr.com",
-    "breezy.hr",
-    "careers-page.com",
-    "eightfold.ai",
-    "greenhouse.io",
-    "icims.com",
-    "jobvite.com",
-    "lever.co",
-    "myworkdayjobs.com",
-    "myworkdaysite.com",
-    "oraclecloud.com",
-    "phenompeople.com",
-    "pinpointhq.com",
-    "recruitee.com",
-    "rippling-ats.com",
-    "smartrecruiters.com",
-    "successfactors.com",
-    "teamtailor.com",
-    "workable.com",
-)
-_NON_JOB_HOST_SUFFIXES = (
-    "calendly.com",
-    "github.com",
-    "modelcontextprotocol.io",
-    "playwright.dev",
-    "reddit.com",
-)
-_JOB_HOST_LABELS = frozenset({"apply", "career", "careers", "jobs", "recruiting"})
-_JOB_PATH_SEGMENTS = frozenset(
-    {
-        "apply",
-        "career",
-        "career-opportunities",
-        "careers",
-        "job",
-        "job-detail",
-        "job-details",
-        "job-openings",
-        "jobs",
-        "join-us",
-        "open-roles",
-        "opening",
-        "openings",
-        "opportunities",
-        "opportunity",
-        "position",
-        "positions",
-        "roles",
-        "vacancies",
-        "vacancy",
-    }
-)
 _JOB_QUERY_KEYS = frozenset({"gh_jid", "jk", "job", "job_id", "jobid", "posting_id", "position"})
 _JOB_ROLE_SIGNAL = re.compile(
     r"\b(?:intern(?:ship)?|engineer|developer|designer|analyst|manager|specialist|"
     r"associate|coordinator|scientist|architect|administrator|recruiter|director|"
     r"owner|writer|counsel|technician|representative|fellow|trader)\b",
     re.IGNORECASE,
-)
-_JOB_CONTENT_SIGNALS = (
-    re.compile(
-        r"\b(?:job description|responsibilities|what you(?:'|’)ll do|you will\s*:)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:qualifications|requirements|what we(?:'|’)re looking for|you are\s*:)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:apply now|apply for this (?:job|role|position)|submit application)\b", re.IGNORECASE
-    ),
 )
 
 
@@ -254,88 +187,6 @@ def _greenhouse_job_posting(snapshot: str) -> dict[str, Any] | None:
     )
 
 
-def _hostname_matches(hostname: str, suffixes: tuple[str, ...]) -> bool:
-    return any(hostname == suffix or hostname.endswith(f".{suffix}") for suffix in suffixes)
-
-
-def _is_non_job_host(job_url: str) -> bool:
-    return _hostname_matches((urlsplit(job_url).hostname or "").casefold(), _NON_JOB_HOST_SUFFIXES)
-
-
-def _is_specific_ats_url(job_url: str) -> bool:
-    parsed = urlsplit(job_url)
-    hostname = (parsed.hostname or "").casefold()
-    path_parts = [part.casefold() for part in parsed.path.split("/") if part]
-    return len(path_parts) >= 2 and _hostname_matches(hostname, _JOB_HOST_SUFFIXES)
-
-
-def _has_career_host_and_detail_path(job_url: str) -> bool:
-    parsed = urlsplit(job_url)
-    hostname_parts = set((parsed.hostname or "").casefold().split("."))
-    path_parts = {part.casefold() for part in parsed.path.split("/") if part}
-    return bool(hostname_parts & _JOB_HOST_LABELS) and bool(path_parts & _JOB_PATH_SEGMENTS)
-
-
-def _is_shopify_career_detail_url(job_url: str) -> bool:
-    parsed = urlsplit(job_url)
-    hostname = (parsed.hostname or "").casefold()
-    path_parts = [part for part in parsed.path.split("/") if part]
-    return (
-        (hostname == "shopify.com" or hostname.endswith(".shopify.com"))
-        and len(path_parts) >= 2
-        and path_parts[0].casefold() == "careers"
-    )
-
-
-def _credible_structured_job_posting(snapshot: str) -> bool:
-    posting = _structured_job_posting(snapshot)
-    if posting is None:
-        return False
-    title = posting.get("title")
-    description = posting.get("description")
-    organization = posting.get("hiringOrganization")
-    has_organization = isinstance(organization, dict) and bool(
-        str(organization.get("name", "")).strip()
-    )
-    has_identifier = bool(str(posting.get("identifier", "")).strip())
-    return bool(str(title or "").strip() and str(description or "").strip()) and (
-        has_organization or has_identifier
-    )
-
-
-def require_job_posting(snapshot: str, *, job_url: str) -> None:
-    """Reject generic public pages before intake can create an application package."""
-    if _is_non_job_host(job_url):
-        raise ValueError(
-            "page does not contain enough evidence of a specific job posting; "
-            "use scrape_public_page for non-job research links"
-        )
-    if _credible_structured_job_posting(snapshot) or _greenhouse_job_posting(snapshot) is not None:
-        return
-    if _is_specific_ats_url(job_url):
-        return
-    content = official_job_text(snapshot)
-    has_role = _JOB_ROLE_SIGNAL.search(content) is not None
-    if (
-        _is_shopify_career_detail_url(job_url)
-        and has_role
-        and all(
-            marker in content
-            for marker in ("Being a Shopify Intern", "Qualifications:", "Compensation:")
-        )
-    ):
-        return
-    has_all_posting_sections = all(
-        signal.search(content) is not None for signal in _JOB_CONTENT_SIGNALS
-    )
-    if _has_career_host_and_detail_path(job_url) and has_role and has_all_posting_sections:
-        return
-    raise ValueError(
-        "page does not contain enough evidence of a specific job posting; "
-        "use scrape_public_page for non-job research links"
-    )
-
-
 def build_job_snapshot(page: str) -> str:
     """Create a stable snapshot from visible text plus bounded structured job metadata."""
     visible = " ".join(_visible_job_text(page).split())
@@ -368,6 +219,10 @@ def official_job_text(snapshot: str) -> str:
 def _cycles(text: str) -> tuple[str, ...]:
     found: list[str] = []
     for season, year in _CYCLE.findall(text):
+        cycle = f"{season.title()} {year}"
+        if cycle not in found:
+            found.append(cycle)
+    for year, season in _REVERSED_CYCLE.findall(text):
         cycle = f"{season.title()} {year}"
         if cycle not in found:
             found.append(cycle)
@@ -426,6 +281,31 @@ def _fallback_title_and_company(snapshot: str) -> tuple[str, str]:
     return "", ""
 
 
+def _is_lifeattiktok_job_detail(job_url: str, content: str) -> bool:
+    """Identify TikTok's numeric detail route for title extraction, not intake authorization."""
+    parsed = urlsplit(job_url)
+    hostname = (parsed.hostname or "").casefold()
+    return bool(
+        hostname in {"lifeattiktok.com", "www.lifeattiktok.com"}
+        and re.fullmatch(r"/search/\d+/?", parsed.path)
+        and re.search(r"\bJob Code:\s*[A-Z0-9-]+\b", content, re.IGNORECASE)
+        and re.search(r"\bResponsibilities\b", content, re.IGNORECASE)
+        and re.search(r"\bMinimum Qualifications\b", content, re.IGNORECASE)
+    )
+
+
+def _lifeattiktok_title_and_company(snapshot: str, *, job_url: str) -> tuple[str, str]:
+    """Extract TikTok's visible title while keeping page chrome out of role metadata."""
+    content = official_job_text(snapshot)
+    if not _is_lifeattiktok_job_detail(job_url, content):
+        return "", ""
+    title = re.split(r"#LifeAtTikTok|Diversity\s*&\s*Inclusion", content, maxsplit=1)[0]
+    title = _clean_text(title).strip(" -–—")
+    if not title or len(title) > 180 or _JOB_ROLE_SIGNAL.search(title) is None:
+        return "", ""
+    return title, "TikTok"
+
+
 def _display_role(title: str) -> str:
     without_cohorts = re.sub(
         r"^\s*\[(?:Spring|Summer|Fall|Winter)\s+20\d{2}\]\s*",
@@ -435,6 +315,12 @@ def _display_role(title: str) -> str:
     )
     without_cohorts = re.sub(
         r"\s*\([^)]*(?:Spring|Summer|Fall|Winter)\s+20\d{2}[^)]*\)",
+        "",
+        without_cohorts,
+        flags=re.IGNORECASE,
+    )
+    without_cohorts = re.sub(
+        r"\s*[-–—]\s*20\d{2}\s+(?:Spring|Summer|Fall|Winter)\s*$",
         "",
         without_cohorts,
         flags=re.IGNORECASE,
@@ -776,7 +662,9 @@ def analyze_job_snapshot(snapshot: str, *, job_url: str) -> JobResearch:
         }
     posting = posting or {}
 
-    fallback_title, fallback_company = _fallback_title_and_company(snapshot)
+    fallback_title, fallback_company = _lifeattiktok_title_and_company(snapshot, job_url=job_url)
+    if not fallback_title:
+        fallback_title, fallback_company = _fallback_title_and_company(snapshot)
     title = _clean_text(posting.get("title")) or fallback_title or "Job Opportunity"
     organization = posting.get("hiringOrganization")
     company = _clean_text(organization.get("name")) if isinstance(organization, dict) else ""

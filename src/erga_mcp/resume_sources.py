@@ -81,10 +81,18 @@ def _pdf_text(path: Path) -> tuple[str, int]:
         raise ValueError(f"could not read resume PDF: {path}") from error
     if reader.is_encrypted:
         raise ValueError("encrypted resume PDFs are not supported")
-    pages = [
-        f"[Page {index}]\n{(page.extract_text() or '').strip()}"
-        for index, page in enumerate(reader.pages, start=1)
-    ]
+    pages: list[str] = []
+    for index, page in enumerate(reader.pages, start=1):
+        try:
+            # Layout extraction preserves visual line boundaries. Resume PDFs frequently encode
+            # an entire project or job as one plain extraction line, which prevents deterministic
+            # bullet selection and page packing.
+            extracted = page.extract_text(extraction_mode="layout") or ""
+        except TypeError:
+            # Lightweight test doubles and older pypdf-compatible readers may expose only the
+            # no-argument API; keeping this fallback does not weaken production extraction.
+            extracted = page.extract_text() or ""
+        pages.append(f"[Page {index}]\n{extracted.rstrip()}")
     return "\n\n".join(pages).strip(), len(reader.pages)
 
 
@@ -299,6 +307,7 @@ def resume_source_context(
     *,
     master_path: Path,
     reference_path: Path | None,
+    template_path: Path | None = None,
 ) -> dict[str, object]:
     """Return factual master text and non-factual style metadata for an MCP host."""
     master = load_resume_source(master_path)
@@ -311,14 +320,55 @@ def resume_source_context(
             "page count",
             "section order",
             "content density",
+            "typography, rules, spacing, and margins",
+            "bullets per entry",
         ]
         preferences["rendered_layout_control"] = "editable-latex-template"
-        preferences["not_automatically_transformed"] = ["section order", "content density"]
+        preferences["not_automatically_transformed"] = []
+        automatically_applied = ["section presence", "section order"]
         if reference.page_count:
             preferences["max_pages"] = reference.page_count
-            preferences["automatically_applied"] = ["maximum page count"]
-        else:
-            preferences["automatically_applied"] = []
+            automatically_applied.insert(0, "maximum page count")
+        preferences["automatically_applied"] = automatically_applied
+    layout_profile: dict[str, object] | None = None
+    style_layout_profile: dict[str, object] | None = None
+    visual_style_profile: dict[str, object] | None = None
+    if template_path is not None:
+        metadata_path = template_path.with_name("template.json")
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            metadata = None
+        if isinstance(metadata, dict) and isinstance(metadata.get("layout_profile"), dict):
+            layout_profile = metadata["layout_profile"]
+            preferences["section_order"] = layout_profile.get("section_order", [])
+            preferences["layout_profile_source"] = "inferred-from-approved-template"
+            profile_applied = preferences.setdefault("automatically_applied", [])
+            if isinstance(profile_applied, list):
+                profile_applied.extend(
+                    value
+                    for value in (
+                        "section presence",
+                        "section order",
+                        "project count",
+                        "bullets per entry",
+                    )
+                    if value not in profile_applied
+                )
+        if isinstance(metadata, dict) and isinstance(metadata.get("style_layout_profile"), dict):
+            style_layout_profile = metadata["style_layout_profile"]
+        if isinstance(metadata, dict) and isinstance(metadata.get("visual_style_profile"), dict):
+            visual_style_profile = metadata["visual_style_profile"]
+            profile_applied = preferences.setdefault("automatically_applied", [])
+            if isinstance(profile_applied, list):
+                profile_applied.extend(
+                    value
+                    for value in (
+                        "content density",
+                        "typography, rules, spacing, and margins",
+                    )
+                    if value not in profile_applied
+                )
     return {
         "master": {
             "format": master.format,
@@ -328,5 +378,8 @@ def resume_source_context(
             "user_approved_source": True,
         },
         "style_reference": _style_profile(reference) if reference is not None else None,
+        "layout_profile": layout_profile,
+        "style_layout_profile": style_layout_profile,
+        "visual_style_profile": visual_style_profile,
         "preferences": preferences,
     }

@@ -32,16 +32,22 @@ The wizard separates résumé input into three explicit decisions:
    every page of a PDF.
 2. **Optional style résumé — non-factual reference.** Supply one only when you are confident it is
    useful layout guidance. A PDF page count prefills the maximum-page setting; observed section
-   order and density are descriptive metadata. The editable `.tex` template—not the reference
-   file—controls rendered layout, and reference wording is never evidence.
+   order and density guide a private standalone `.tex` template generated from the master. The
+   reference file contributes no factual text, and users do not need to supply LaTeX.
 3. **Resume shape.** Keep the recommended one-page and 90/105/120-character bullet settings,
    enter page and minimum/target/maximum bullet limits directly, disable bullet limits, or paste
    one or two example bullets to calibrate the numeric range. Calibration discards the examples
    and stores only the resulting numbers. Maximum pages are enforced during compilation; the
    character range is enforced when CLI or MCP workflows author new `\resumeItem{...}` bullets.
-   Automatic intake also measures each rendered bullet with the configured LaTeX template: a
-   wrapping project is replaced by the next approved relevant project, and a package is never
-   published while any bullet still needs a second line.
+   Automatic intake also inspects the compiled PDF's real line breaks. Balanced multi-line bullets
+   are allowed, while a candidate that strands only one or two words on its final line is replaced
+   by another approved relevant bullet or project before publication.
+
+For a PDF or DOCX master, Erga preserves visual PDF line boundaries, reconstructs semantic
+experience/project groups, and generates the private editable template itself. One-page intake then
+searches rendered content budgets locally and keeps the fullest valid page, not whichever amount of
+content an initiating agent happened to select. The minimum fill ratio remains a hard publication
+gate; spacing is used only if every supported content candidate that fits has already been included.
 
 The résumé/evidence workflow and private application database are the ready-to-use career core.
 Obsidian is an optional human-readable workspace and tracker view. Coding assistants, Hermes,
@@ -57,11 +63,12 @@ without overwriting an existing note, and recommends `Erga/Generated Resumes` fo
 
 The dragged PDF, DOCX, or `.tex` master becomes approved factual knowledge. Erga creates a
 hash-verified private copy, so moving or deleting the original later does not break the workflow.
-An optional style résumé or template contributes only layout metadata; it can never add factual
-claims. Erga can copy a PDF's page count into the configured maximum and records observed section
-order and density for an explicitly trusted private workflow. It does not transform those
-observations into a new layout. To compile a tailored PDF, configure the editable LaTeX `.tex`
-template that should control the output.
+An optional style résumé contributes only layout metadata; it can never add factual claims. Erga
+can copy a PDF's page count into the configured maximum and automatically infers section presence,
+order, repeatable content pools, and project slots when generating a content-addressed, standalone
+`.tex` template from the approved master. A template with no Experience or Open Source section will
+not acquire one; a project-heavy template retains that shape. An
+advanced user may still explicitly configure a trusted standalone template override.
 
 Derived style-reference metadata remains part of `resume_source_context`, which is available only
 through the explicit `career-private` profile. Ordinary `career` connections receive neither the
@@ -79,18 +86,52 @@ uv run erga resume settings set \
   --max-pages 1
 ```
 
-Advanced or scripted installations may still use the lower-level commands:
+After initialization, replace the master independently with:
 
 ```bash
 uv run erga init --config ~/.config/erga-mcp/config.toml
-uv run erga resume sources import \
-  --config ~/.config/erga-mcp/config.toml \
-  --master /absolute/path/to/complete-master-resume.pdf
+uv run erga resume master set /absolute/path/to/complete-master-resume.pdf \
+  --config ~/.config/erga-mcp/config.toml
 ```
 
-Pass `--style /absolute/path/to/preferred-resume.pdf` only when intentionally overriding Erga's
-recommended one-page style. Importing an updated master deactivates prior master-résumé evidence,
-leaving exactly one current master approved.
+Replace the master at any time with the same command. Erga preserves the current visual-template
+choice, deactivates prior master-résumé evidence, leaves exactly one current master approved, and
+regenerates the private editable template.
+
+Set or replace the optional visual template independently when intentionally overriding the
+recommended one-page style:
+
+```bash
+uv run erga resume template set /absolute/path/to/preferred-resume.pdf \
+  --config ~/.config/erga-mcp/config.toml
+```
+
+Both commands accept PDF, DOCX, or `.tex` input and snapshot it into private local state. The master
+is the sole factual source and never contributes page geometry, typography, spacing, density, or
+section order. A visual template controls section presence, order, density, project slots, and the
+exact bullet count for each experience or project entry, but cannot authorize claims. PDF templates
+additionally contribute measured per-edge margins, typography, small-caps treatment, section-rule
+presence and weight, line height, entry inset, bullet-glyph size, label gap, bullet-text indentation,
+and section/entry/item spacing. Rendered
+packing keeps those template-owned gaps fixed instead of elastically stretching them to fill the
+page. For example, a template with one bullet per project keeps one bullet per selected project;
+mixed patterns such as two/three/two are preserved entry by entry and repeated when more approved
+entries are needed. Section totals are density targets rather than hard factual quotas: if the
+master has fewer experiences than the visual example, the one-page render search may use additional
+approved projects without inventing experience. Intentionally spacious templates are not rejected
+against Erga's default page-fill threshold.
+
+`erga resume sources import --master ... --style ...` remains available for scripts that need to
+replace both sources together.
+
+To discard the configured style/custom template while preserving the approved master and all
+career evidence, regenerate Erga's default Jake-style template:
+
+```bash
+uv run erga resume template reset --config ~/.config/erga-mcp/config.toml
+```
+
+The reset changes configuration pointers rather than deleting old private template files.
 
 ## 3. Add optional coding hosts
 
@@ -305,7 +346,7 @@ Hermes exposes tools prefixed with `mcp__erga_mcp__`:
 - `record_secondary_research` — records bounded host-provided web/community search results after intake, clearly separated from official-posting facts and labeled unverified.
 - `prepare_job_workspace` — an advanced second-stage variant for callers that already have company, role, cycle, and slug metadata and explicitly need tracker integration. It is not the entry point for pasted links.
 - `create_tailored_resume` — writes only a reviewable tailored `.tex`, diff, and claim report inside that package, gated by supplied approved evidence IDs and configured editable sections.
-- `validate_tailored_resume` — explicitly compiles the selected proposal locally; it never publishes or submits it.
+- `validate_tailored_resume` — explicitly compiles the selected proposal locally and enforces the configured page-count and fill guarantees; it never publishes or submits it.
 
 The recommended `career` profile deliberately excludes mail and monitor tools. It also withholds
 `resume_source_context` and master-resume evidence from `list_evidence`, as well as `export_data`
@@ -350,8 +391,9 @@ must cite evidence IDs belonging to that project. Erga rejects unsupported numbe
 citations, raw Git accounting prose, duplicate lead verbs, unsafe LaTeX, and excessive length.
 Without sampling, intake keeps the deterministic approved-copy behavior. All output records
 per-claim provenance in `claim-report.json`. An exact TeX width preflight selects another approved
-project or retries model wording when a candidate would wrap; a final width check prevents
-publication if any bullet still needs a second line. A configured `max_pages` is enforced with the
+project or retries model wording when a candidate overflows. A compiled-PDF check permits readable
+multi-line bullets but prevents publication when a final line contains only one or two words. A
+configured `max_pages` is enforced with the
 same pure-Python PDF parser on macOS, Linux, and Windows.
 Before ranking, the fetcher keeps visible official job text and bounded structured job metadata but
 removes scripts, styles, navigation, and footer content. Relevance matching is boundary-aware and

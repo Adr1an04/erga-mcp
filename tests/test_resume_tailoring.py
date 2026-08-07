@@ -16,13 +16,17 @@ from erga_mcp.project_inventory import ProjectCandidate
 from erga_mcp.resume import validate_single_line_resume_items
 from erga_mcp.resume_tailoring import (
     TAILORING_VERSION,
+    _compact_generated_entry_section,
     _record_lead_verb_rewrites,
     _relevance,
+    _separate_legacy_project_technology_stacks,
+    _tailor_projects,
     apply_adaptive_single_page_fill,
     classify_wrapped_resume_items,
     create_automatic_resume_proposal,
     pdf_page_count,
     pdf_page_fill,
+    semantic_resume_structure_issues,
 )
 
 _TEMPLATE = r"""
@@ -109,10 +113,143 @@ Software Engineering Intern \hfill May 2026 -- Present
 
 
 class AutomaticResumeTailoringTests(unittest.TestCase):
+    def test_legacy_inventory_project_technology_stack_uses_the_structural_heading_row(
+        self,
+    ) -> None:
+        legacy = (
+            r"\resumeProjectHeading{\href{https://example.test/project}{\textbf{Project}} "
+            r"$|$ \textit{Python, CUDA, Distributed Systems}}{Summer 2027}"
+        )
+
+        upgraded = _separate_legacy_project_technology_stacks(legacy)
+
+        self.assertEqual(
+            upgraded,
+            r"\resumeProjectHeading{\href{https://example.test/project}{\textbf{Project}}}"
+            r"{\textit{Python, CUDA, Distributed Systems}}{Summer 2027}",
+        )
+        self.assertEqual(_separate_legacy_project_technology_stacks(upgraded), upgraded)
+
+    def test_entry_bullet_pattern_ignores_structural_category_headings(self) -> None:
+        section = r"""
+\section{Projects}
+\resumeSubHeadingListStart
+\resumeProjectHeading{\textit{Research Projects}}{}
+\resumeProjectHeading{\textbf{Alpha}}{}
+\resumeItemListStart
+\resumeItem{Alpha one}
+\resumeItem{Alpha two}
+\resumeItemListEnd
+\resumeProjectHeading{\textbf{Beta}}{}
+\resumeItemListStart
+\resumeItem{Beta one}
+\resumeItem{Beta two}
+\resumeItemListEnd
+\resumeSubHeadingListEnd
+"""
+
+        compacted, _ = _compact_generated_entry_section(
+            section,
+            heading_command="resumeProjectHeading",
+            maximum_items=3,
+            maximum_items_per_entry=(1, 2),
+        )
+
+        self.assertIn(r"\resumeProjectHeading{\textit{Research Projects}}", compacted)
+        alpha_start = compacted.index(r"\resumeProjectHeading{\textbf{Alpha}}")
+        beta_start = compacted.index(r"\resumeProjectHeading{\textbf{Beta}}")
+        self.assertEqual(compacted[alpha_start:beta_start].count(r"\resumeItem{"), 1)
+        self.assertEqual(compacted[beta_start:].count(r"\resumeItem{"), 2)
+
+    def test_project_categories_stay_attached_when_projects_are_ranked(self) -> None:
+        section = r"""
+\resumeSubHeadingListStart
+\resumeProjectHeading{\textit{Product Systems}}{}
+\resumeProjectHeading{\textbf{Visual Client}}{2026}
+\resumeItemListStart
+\resumeItem{Built an approved visual interface.}
+\resumeItemListEnd
+\resumeProjectHeading{\textit{Research Systems}}{}
+\resumeProjectHeading{\textbf{Inference Engine}}{2026}
+\resumeItemListStart
+\resumeItem{Built an approved Python inference engine.}
+\resumeItemListEnd
+\resumeSubHeadingListEnd
+"""
+
+        tailored, _, changed = _tailor_projects(section, "Python inference")
+
+        research = tailored.index(r"\resumeProjectHeading{\textit{Research Systems}}{}")
+        inference = tailored.index(r"\resumeProjectHeading{\textbf{Inference Engine}}{2026}")
+        product = tailored.index(r"\resumeProjectHeading{\textit{Product Systems}}{}")
+        visual = tailored.index(r"\resumeProjectHeading{\textbf{Visual Client}}{2026}")
+        self.assertTrue(changed)
+        self.assertLess(research, inference)
+        self.assertLess(inference, product)
+        self.assertLess(product, visual)
+
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 18)
+        self.assertEqual(TAILORING_VERSION, 28)
+
+    def test_semantic_layout_gate_rejects_flattened_generated_resume(self) -> None:
+        flattened = r"""
+% Erga semantic resume template version: 8
+\begin{document}
+\begin{center}\Large Synthetic Candidate\end{center}
+\section{Education}
+Synthetic University
+\section{Experience}
+\resumeItem{Built a verified synthetic service.}
+\section{Projects}
+\resumeItem{Created project one.}
+\resumeItem{Created project two.}
+\resumeItem{Created project three.}
+\resumeItem{Created project four.}
+\section{Technical Skills}
+% No approved skills were extracted from the master resume.
+\end{document}
+"""
+
+        issues = semantic_resume_structure_issues(flattened)
+
+        self.assertIn("education heading hierarchy is missing", issues)
+        self.assertIn("experience subheadings are missing", issues)
+        self.assertIn("projects subheadings are missing", issues)
+        self.assertIn("projects were flattened into too few semantic groups", issues)
+        self.assertIn("projects bullet structure is missing", issues)
+        self.assertIn("technical skills rows are missing", issues)
+
+    def test_semantic_layout_gate_accepts_structured_generated_resume(self) -> None:
+        structured = r"""
+% Erga semantic resume template version: 8
+\begin{document}
+\begin{center}\LARGE Synthetic Candidate\end{center}
+\section{Education}
+\resumeEducationHeading{Synthetic University}{Example, CO}
+\section{Experience}
+\resumeSubheading{Engineer}{Remote}{Synthetic Lab}{2026}
+\resumeItemListStart
+\resumeItem{Built a verified synthetic service.}
+\resumeItemListEnd
+\section{Projects}
+\resumeProjectHeading{\textbf{One}}{}
+\resumeItemListStart
+\resumeItem{Created project one.}
+\resumeItem{Created project two.}
+\resumeItemListEnd
+\resumeProjectHeading{\textbf{Two}}{}
+\resumeItemListStart
+\resumeItem{Created project three.}
+\resumeItem{Created project four.}
+\resumeItemListEnd
+\section{Technical Skills}
+\textbf{Languages:} Python, C++ \\
+\end{document}
+"""
+
+        self.assertEqual(semantic_resume_structure_issues(structured), ())
 
     def test_adaptive_page_fill_is_template_agnostic_and_idempotent(self) -> None:
         compact = _SPARSE_TEMPLATE.replace("[10pt]", "[9pt]")
@@ -120,8 +257,16 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
         filled = apply_adaptive_single_page_fill(compact)
 
         self.assertIn(r"\flushbottom", filled)
-        self.assertIn(r"\renewcommand{\resumeItem}[1]", filled)
-        self.assertEqual(filled.count(r"\vspace{0pt plus 1fill}"), 4)
+        self.assertNotIn(r"\renewcommand{\resumeItem}[1]", filled)
+        self.assertEqual(filled.count(r"\vspace{0pt plus 1fill}"), 5)
+        self.assertNotIn(r"\ergaPageFillOriginalResumeItem", filled)
+        self.assertTrue(
+            all(
+                "ERGA-ADAPTIVE-PAGE-FILL" not in line
+                for line in filled.splitlines()
+                if r"\resumeItem{" in line
+            )
+        )
         self.assertEqual(apply_adaptive_single_page_fill(filled), filled)
 
     def test_page_fill_does_not_create_giant_gaps_for_too_little_content(self) -> None:
@@ -131,6 +276,11 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
         )
 
         self.assertEqual(apply_adaptive_single_page_fill(tiny), tiny)
+
+    def test_page_fill_preserves_user_template_spacing(self) -> None:
+        controlled = "% Erga visual spacing is template-controlled.\n" + _SPARSE_TEMPLATE
+
+        self.assertEqual(apply_adaptive_single_page_fill(controlled), controlled)
 
     def test_page_fill_uses_rendered_page_relative_coordinates(self) -> None:
         with TemporaryDirectory() as directory:

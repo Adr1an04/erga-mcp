@@ -56,7 +56,10 @@ def check_installation(config_path: Path) -> DoctorReport:
         else:
             checks["gmail"] = "gws available; verify Google Workspace OAuth before syncing"
     if config.resume.template_path is None:
-        warnings["resume_template"] = "not configured"
+        if config.resume.master_path is not None and config.resume.master_path.is_file():
+            checks["resume_template"] = "will be generated from approved master on first use"
+        else:
+            warnings["resume_template"] = "master resume required"
     elif not config.resume.template_path.is_file():
         warnings["resume_template"] = "missing"
     else:

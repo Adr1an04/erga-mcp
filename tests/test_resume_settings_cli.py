@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.cli import main
+from erga_mcp.config import load_config
 from erga_mcp.resume_settings import update_settings
 
 
@@ -146,6 +147,175 @@ class ResumeSettingsCliTests(unittest.TestCase):
                 context["style_reference"]["observed_section_order"],  # type: ignore[index]
                 ["Education", "Experience", "Projects"],
             )
+
+    def test_resets_to_default_template_without_replacing_the_master(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            master = root / "master.tex"
+            style = root / "style.tex"
+            master.write_text(
+                "Jane Candidate\nExperience\nBuilt an approved service.\n",
+                encoding="utf-8",
+            )
+            style.write_text("Projects\nTechnical Skills\n", encoding="utf-8")
+            main(["init", "--config", str(config_path)])
+            self._json_command(
+                [
+                    "resume",
+                    "sources",
+                    "import",
+                    "--config",
+                    str(config_path),
+                    "--master",
+                    str(master),
+                    "--style",
+                    str(style),
+                ]
+            )
+            before = load_config(config_path).resume
+            assert before.master_path is not None
+            assert before.template_path is not None
+            managed_master = before.master_path
+            previous_template = before.template_path
+
+            result = self._json_command(
+                ["resume", "template", "reset", "--config", str(config_path)]
+            )
+            after = load_config(config_path).resume
+
+            self.assertTrue(result["reset"])
+            self.assertEqual(result["master_path"], str(managed_master))
+            self.assertIsNone(result["style_path"])
+            self.assertEqual(after.master_path, managed_master)
+            self.assertIsNone(after.reference_path)
+            self.assertNotEqual(after.template_path, previous_template)
+            self.assertTrue(previous_template.is_file())
+            self.assertTrue(after.template_path.is_file())  # type: ignore[union-attr]
+            self.assertIn(
+                "% Erga semantic resume template version:",
+                after.template_path.read_text(encoding="utf-8"),  # type: ignore[union-attr]
+            )
+
+    def test_master_set_adds_and_replaces_the_master_while_preserving_style(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            first_master = root / "first-master.tex"
+            second_master = root / "second-master.tex"
+            style = root / "style.tex"
+            first_master.write_text(
+                "Jane Candidate\nExperience\nBuilt the first approved service.\n",
+                encoding="utf-8",
+            )
+            second_master.write_text(
+                "Jane Candidate\nExperience\nBuilt the replacement approved service.\n",
+                encoding="utf-8",
+            )
+            style.write_text(
+                "Education\nExperience\nProjects\nTechnical Skills\n",
+                encoding="utf-8",
+            )
+            main(["init", "--config", str(config_path)])
+
+            first = self._json_command(
+                ["resume", "master", "set", str(first_master), "--config", str(config_path)]
+            )
+            styled = self._json_command(
+                ["resume", "template", "set", str(style), "--config", str(config_path)]
+            )
+            before = load_config(config_path).resume
+            replacement = self._json_command(
+                ["resume", "master", "set", str(second_master), "--config", str(config_path)]
+            )
+            after = load_config(config_path).resume
+            context = self._json_command(
+                ["resume", "sources", "context", "--config", str(config_path)]
+            )
+
+            self.assertEqual(context["master"]["text"], second_master.read_text().strip())  # type: ignore[index]
+            self.assertEqual(after.reference_path, before.reference_path)
+            self.assertEqual(replacement["style_path"], styled["style_path"])
+            self.assertNotEqual(replacement["master_path"], first["master_path"])
+            self.assertNotEqual(replacement["template_path"], styled["template_path"])
+            self.assertTrue(Path(str(styled["template_path"])).is_file())
+
+    def test_template_set_adds_and_replaces_style_without_replacing_master(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            master = root / "master.tex"
+            first_style = root / "project-style.tex"
+            second_style = root / "experience-style.tex"
+            master.write_text(
+                "Jane Candidate\nExperience\nBuilt an approved service.\n"
+                "Projects\nBuilt an approved project.\nTechnical Skills\nPython\n",
+                encoding="utf-8",
+            )
+            first_style.write_text(
+                "Education\nProjects\nTechnical Skills\n",
+                encoding="utf-8",
+            )
+            second_style.write_text(
+                "Education\nExperience\nTechnical Skills\n",
+                encoding="utf-8",
+            )
+            main(["init", "--config", str(config_path)])
+            master_result = self._json_command(
+                ["resume", "master", "set", str(master), "--config", str(config_path)]
+            )
+
+            first = self._json_command(
+                [
+                    "resume",
+                    "template",
+                    "set",
+                    str(first_style),
+                    "--config",
+                    str(config_path),
+                ]
+            )
+            second = self._json_command(
+                [
+                    "resume",
+                    "template",
+                    "set",
+                    str(second_style),
+                    "--config",
+                    str(config_path),
+                ]
+            )
+            settings = load_config(config_path).resume
+
+            self.assertEqual(second["master_path"], master_result["master_path"])
+            self.assertNotEqual(second["style_path"], first["style_path"])
+            self.assertNotEqual(second["template_path"], first["template_path"])
+            self.assertTrue(Path(str(second["style_path"])).is_file())
+            self.assertTrue(Path(str(first["template_path"])).is_file())
+            self.assertEqual(settings.project_selection_mode, "template_only")
+
+    def test_template_set_requires_a_master_without_changing_configuration(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            style = root / "style.tex"
+            style.write_text("Education\nProjects\n", encoding="utf-8")
+            main(["init", "--config", str(config_path)])
+            original = config_path.read_text(encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "set a master resume"):
+                main(
+                    [
+                        "resume",
+                        "template",
+                        "set",
+                        str(style),
+                        "--config",
+                        str(config_path),
+                    ]
+                )
+
+            self.assertEqual(config_path.read_text(encoding="utf-8"), original)
 
     def test_creates_a_package_using_the_configured_output_root(self) -> None:
         with TemporaryDirectory() as directory:

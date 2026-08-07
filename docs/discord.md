@@ -23,6 +23,7 @@ Message Content Intent, and invite it with only:
 
 - View Channels
 - Send Messages
+- Embed Links
 - Read Message History
 
 Then run:
@@ -68,18 +69,61 @@ uv run erga discord run --config ~/.config/erga-mcp/config.toml
 Then use the optional background lifecycle:
 
 ```bash
-uv run erga discord start --config ~/.config/erga-mcp/config.toml
+uv run erga discord connect --config ~/.config/erga-mcp/config.toml
 uv run erga discord status --config ~/.config/erga-mcp/config.toml
 uv run erga discord stop --config ~/.config/erga-mcp/config.toml
 ```
+
+`connect` reuses the existing settings and keyring token after a restart and returns only after the
+Discord gateway reports ready. If Discord rotates the token, run `erga discord set-token` and
+connect again; full setup is unnecessary.
 
 Direct messages from trusted users are accepted. Server messages require an explicit bot mention
 unless the owner knowingly disables that safeguard during configuration. Bot-authored messages
 are always ignored, only one backend turn runs at a time, incoming content is bounded, and long
 responses are split below Discord's message limit.
 
+## Live request experience and color system
+
+Erga acknowledges an accepted request immediately with one live Discord card. For résumé work, the
+card shows the evidence/tailoring/validation pipeline, a truthful current status, elapsed time, and
+the review-only safety boundary. It refreshes in place every 12 seconds while the local backend
+works, then becomes the final result card. This avoids both a silent multi-minute wait and a channel
+full of disposable progress messages. When Erga returns a validated PDF artifact, that same final
+card shows a rendered first-page preview and carries the PDF as a Discord attachment, so the result
+can be reviewed or downloaded without finding a local path. Erga only attaches regular PDF files
+inside its configured data or résumé output directories and only from an `artifacts` package; a path
+merely mentioned by an untrusted job page or reasoning response is never uploaded. Long results
+continue in matching detail cards.
+
+The visual system follows a 60–30–10 hierarchy derived from Erga's existing wordmark, onboarding,
+and orbit mark:
+
+- **60% — Erga Ink (`#171717`)** comes from the wordmark and provides the structural foundation.
+- **30% — Orbit Violet (`#7C5CFF`)** identifies active work and live progress.
+- **10% — orbit accents** communicate outcomes: Leaf (`#83FE7F`) for validated/ready, Sun
+  (`#FEF17F`) for review-required, Coral (`#FE7F7F`) for a stopped turn, and Sky (`#7FC2FE`) for
+  continuation details.
+
+Discord owns the light or dark message canvas, so Erga applies this hierarchy to the embed rail,
+titles, fields, and status language rather than forcing a background color that may become
+unreadable in the user's theme. Progress text never claims a pipeline stage has completed unless
+Erga has actually returned the result.
+
+Résumé requests that contain a job URL are routed through Erga's canonical `intake_job_url`
+operation. The reasoning backend is instructed not to hand-edit generated files or invoke a PDF
+renderer directly, and it may report a PDF as ready only after Erga's one-page fill validation
+succeeds. The same rule is injected for every supported reasoning backend.
+
 Private runtime settings live beside Erga's private config. Logs and the nonce-bearing background
 process record live in Erga's owner-only data directory.
+
+Codex-backed turns use `--dangerously-bypass-approvals-and-sandbox` because a background process
+cannot answer MCP approval prompts. An allowlisted Discord identity therefore has the permissions
+of the OS account running Erga, not merely access to the configured project. Use a private bot and
+the smallest possible allowlist. Each invocation also uses `--ephemeral`, so Codex does not persist
+session rollout files and no Discord turn is resumed by a later message. Both readiness checks and
+real bridge turns explicitly select `gpt-5.6-terra` for predictable everyday latency and tool use.
 
 ## Failure boundaries
 

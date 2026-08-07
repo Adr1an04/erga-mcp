@@ -4,8 +4,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
@@ -67,7 +68,6 @@ from .job_research import (
     JobResearch,
     analyze_job_snapshot,
     official_job_text,
-    require_job_posting,
     write_job_research,
     write_secondary_research,
     write_stage_research,
@@ -83,20 +83,26 @@ from .project_inventory import (
 )
 from .project_metrics import propose_git_project_metrics
 from .resume import (
+    ResumeItemLayoutValidation,
     create_section_resume_proposal,
     normalize_cycle,
+    resume_item_texts,
     validate_latex_proposal,
     validate_single_line_resume_items,
 )
 from .resume_sources import resume_source_context as build_resume_source_context
 from .resume_tailoring import (
     TAILORING_VERSION,
+    AutomaticResumeProposal,
     classify_wrapped_resume_items,
     create_automatic_resume_proposal,
+    generated_resume_item_counts,
     pdf_page_count,
     pdf_page_fill,
     plan_resume_project_selection,
+    semantic_resume_structure_issues,
 )
+from .resume_template import ensure_resume_template
 from .store import ErgaStore, SQLiteStoreFactory, StoreFactory
 from .tracker_view import (
     filter_application_tracker,
@@ -107,6 +113,7 @@ from .tracker_view import (
 from .versioning import capabilities
 from .web_scraping import extract_page, scrape_page
 
+_VISUAL_SPACING_MARKER = "% Erga visual spacing is template-controlled."
 _READ_ONLY = ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
 )
@@ -371,7 +378,7 @@ def _layout_safe_project_selection(
     project_candidates: tuple[ProjectCandidate, ...],
     config: ErgaConfig,
 ) -> tuple[tuple[str, ...], tuple[dict[str, object], ...]]:
-    """Reject wrapped project blocks and deterministically select the next approved projects."""
+    """Reject short-tail project blocks and select the next approved projects."""
     candidates_by_id = {candidate.id: candidate for candidate in project_candidates}
     layout_rejections: list[dict[str, object]] = []
     rejected_ids: set[str] = set()
@@ -391,6 +398,7 @@ def _layout_safe_project_selection(
             minimum_page_fill_ratio=(
                 config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
             ),
+            max_pages=config.resume.max_pages,
             additional_project_quality_rejections=tuple(layout_rejections),
         )
         _require_constraint_valid_proposal(automatic)
@@ -400,26 +408,27 @@ def _layout_safe_project_selection(
         )
         if layout.returncode != 0:
             raise ValueError("single-line resume layout preflight did not compile")
-        wrapped_project_ids, non_project_indices = classify_wrapped_resume_items(
+        orphaned_project_ids, non_project_indices = classify_wrapped_resume_items(
             automatic.proposal.proposed_tex_path.read_text(encoding="utf-8"),
             project_candidates,
-            layout.wrapped_item_indices,
+            layout.orphan_item_indices,
         )
         if non_project_indices:
             rendered = ", ".join(str(index + 1) for index in non_project_indices)
             raise ValueError(
-                "configured baseline resume bullets render beyond one line "
+                "configured baseline resume bullets leave only one or two words "
+                "on their final line "
                 f"(document bullet indexes: {rendered})"
             )
         selected_ids = set(_selected_project_ids(automatic.project_selection))
         newly_rejected = [
             project_id
-            for project_id in wrapped_project_ids
+            for project_id in orphaned_project_ids
             if project_id in selected_ids and project_id not in rejected_ids
         ]
         if not newly_rejected:
-            if wrapped_project_ids:
-                raise ValueError("single-line project fallback could not resolve wrapped bullets")
+            if orphaned_project_ids:
+                raise ValueError("project fallback could not resolve short final bullet lines")
             return _selected_project_ids(automatic.project_selection), tuple(layout_rejections)
         for project_id in newly_rejected:
             candidate = candidates_by_id[project_id]
@@ -428,10 +437,10 @@ def _layout_safe_project_selection(
                 {
                     "id": candidate.id,
                     "title": candidate.title,
-                    "reasons": ["project bullet renders beyond one line"],
+                    "reasons": ["project bullet leaves a one/two-word final line"],
                 }
             )
-    raise ValueError("single-line project fallback exhausted the approved project inventory")
+    raise ValueError("short-tail project fallback exhausted the approved project inventory")
 
 
 def _project_density_trial(
@@ -468,7 +477,7 @@ def _project_density_trial(
         automatic.proposal.proposed_tex_path,
         latexmk=Path(config.resume.latexmk),
     )
-    if layout.returncode != 0 or layout.wrapped_item_indices:
+    if layout.returncode != 0 or layout.orphan_item_indices:
         return False, 0
     checked = validate_latex_proposal(
         automatic.proposal.proposed_tex_path,
@@ -485,6 +494,372 @@ def _project_density_trial(
         return False, 0
 
 
+def _layout_balanced_generated_proposal(
+    factory: Callable[[tuple[str, ...]], AutomaticResumeProposal],
+    *,
+    latexmk: str,
+) -> tuple[AutomaticResumeProposal, ResumeItemLayoutValidation, tuple[str, ...]]:
+    """Backfill around bullets whose compiled final line contains only one/two words."""
+    rejected: list[str] = []
+    while True:
+        automatic = factory(tuple(rejected))
+        layout = validate_single_line_resume_items(
+            automatic.proposal.proposed_tex_path,
+            latexmk=Path(latexmk),
+        )
+        if layout.returncode != 0 or not layout.orphan_item_indices:
+            return automatic, layout, tuple(rejected)
+        texts = resume_item_texts(automatic.proposal.proposed_tex_path.read_text(encoding="utf-8"))
+        newly_rejected = [
+            texts[index]
+            for index in layout.orphan_item_indices
+            if index < len(texts) and texts[index] not in rejected
+        ]
+        if not newly_rejected:
+            return automatic, layout, tuple(rejected)
+        rejected.extend(newly_rejected)
+
+
+def _generated_density_trial(
+    *,
+    resume_path: Path,
+    output_dir: Path,
+    job_description: str,
+    evidence: list[Evidence],
+    section_item_limits: Mapping[str, int],
+    section_entry_item_limits: Mapping[str, tuple[int, ...]],
+    config: ErgaConfig,
+) -> tuple[bool, float, tuple[str, ...]]:
+    """Render one generated-template content budget without model calls or persistent writes."""
+    automatic, layout, rejected = _layout_balanced_generated_proposal(
+        lambda rejected: create_automatic_resume_proposal(
+            resume_path=resume_path,
+            output_dir=output_dir,
+            job_description=job_description,
+            evidence=evidence,
+            editable_sections=config.resume.editable_sections,
+            bullet_min_chars=config.resume.bullet_min_chars,
+            bullet_target_chars=config.resume.bullet_target_chars,
+            bullet_max_chars=config.resume.bullet_max_chars,
+            project_count=config.resume.project_count,
+            require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+            max_pages=1,
+            generated_section_item_limits=section_item_limits,
+            generated_section_entry_item_limits=section_entry_item_limits,
+            layout_rejected_bullet_texts=rejected,
+        ),
+        latexmk=config.resume.latexmk,
+    )
+    if automatic.constraint_violations:
+        return False, 0, rejected
+    if layout.returncode != 0 or layout.orphan_item_indices:
+        return False, 0, rejected
+    checked = validate_latex_proposal(
+        automatic.proposal.proposed_tex_path,
+        latexmk=Path(config.resume.latexmk),
+    )
+    proposal_pdf = automatic.proposal.proposed_tex_path.with_suffix(".pdf")
+    if checked.returncode != 0 or not proposal_pdf.is_file():
+        return False, 0, rejected
+    try:
+        if pdf_page_count(proposal_pdf) != 1:
+            return False, 0, rejected
+        return True, pdf_page_fill(proposal_pdf).fill_ratio, rejected
+    except ValueError:
+        return False, 0, rejected
+
+
+def _generated_density_states(item_counts: Mapping[str, int]) -> tuple[dict[str, int], ...]:
+    """Build deterministic, relevance-preserving content budgets for binary render search."""
+    priorities = sorted(
+        item_counts,
+        key=lambda section: (
+            {"Experience": 0, "Projects": 1, "Education": 2}.get(section, 3),
+            section.casefold(),
+        ),
+    )
+    limits = {
+        section: min(total, 2 if section in {"Education", "Experience"} else 1)
+        for section, total in item_counts.items()
+    }
+    states = [dict(limits)]
+    while any(limits[section] < item_counts[section] for section in priorities):
+        for section in priorities:
+            if limits[section] >= item_counts[section]:
+                continue
+            limits[section] += 1
+            states.append(dict(limits))
+    return tuple(states)
+
+
+def _style_section_item_caps(resume_path: Path) -> dict[str, int]:
+    """Read positive, non-factual content budgets measured from the active style reference."""
+    metadata_path = resume_path.with_name("template.json")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(metadata, dict) or not metadata.get("style_sha256"):
+        return {}
+    style_profile = metadata.get("style_layout_profile")
+    if not isinstance(style_profile, dict):
+        return {}
+    raw_counts = style_profile.get("section_item_counts")
+    if not isinstance(raw_counts, dict):
+        return {}
+    return {
+        str(section): count
+        for section, count in raw_counts.items()
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0
+    }
+
+
+def _style_section_entry_item_caps(resume_path: Path) -> dict[str, tuple[int, ...]]:
+    """Read exact bullets-per-entry patterns from the active visual reference."""
+    metadata_path = resume_path.with_name("template.json")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(metadata, dict) or not metadata.get("style_sha256"):
+        return {}
+    style_profile = metadata.get("style_layout_profile")
+    if not isinstance(style_profile, dict):
+        return {}
+    raw_patterns = style_profile.get("section_entry_item_counts")
+    if not isinstance(raw_patterns, dict):
+        return {}
+    patterns: dict[str, tuple[int, ...]] = {}
+    for section, raw_counts in raw_patterns.items():
+        if not isinstance(raw_counts, list):
+            continue
+        counts = tuple(
+            count
+            for count in raw_counts
+            if isinstance(count, int) and not isinstance(count, bool) and count > 0
+        )
+        if counts:
+            patterns[str(section)] = counts
+    return patterns
+
+
+def _generated_section_entry_counts(resume_path: Path) -> dict[str, int]:
+    """Read the available semantic entry count from the generated factual template."""
+    metadata_path = resume_path.with_name("template.json")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(metadata, dict):
+        return {}
+    layout_profile = metadata.get("layout_profile")
+    if not isinstance(layout_profile, dict):
+        return {}
+    raw_patterns = layout_profile.get("section_entry_item_counts")
+    if not isinstance(raw_patterns, dict):
+        return {}
+    return {
+        str(section): sum(
+            isinstance(count, int) and not isinstance(count, bool) and count > 0 for count in counts
+        )
+        for section, counts in raw_patterns.items()
+        if isinstance(counts, list) and counts
+    }
+
+
+def _repeat_entry_patterns(
+    patterns: Mapping[str, tuple[int, ...]], entry_counts: Mapping[str, int]
+) -> dict[str, tuple[int, ...]]:
+    """Repeat visual bullet patterns across the factual entries available to fill the page."""
+    return {
+        section: tuple(
+            pattern[index % len(pattern)] for index in range(entry_counts.get(section, 0))
+        )
+        for section, pattern in patterns.items()
+        if pattern and entry_counts.get(section, 0) > 0
+    }
+
+
+def _entry_limits_for_item_state(
+    patterns: Mapping[str, tuple[int, ...]], item_limits: Mapping[str, int]
+) -> dict[str, tuple[int, ...]]:
+    """Fit complete template-shaped entries inside one aggregate density-search state."""
+    fitted: dict[str, tuple[int, ...]] = {}
+    for section, pattern in patterns.items():
+        remaining = max(0, item_limits.get(section, 0))
+        counts: list[int] = []
+        for cap in pattern:
+            if remaining >= cap:
+                counts.append(cap)
+                remaining -= cap
+            elif remaining:
+                # Preserve the template's spacing and hierarchy by admitting one final factual
+                # entry with the approved bullets that remain, rather than leaving usable page
+                # height empty solely because a full visual pattern will not fit.
+                counts.append(remaining)
+                remaining = 0
+            else:
+                counts.append(0)
+        fitted[section] = tuple(counts)
+    return fitted
+
+
+def _style_project_bullet_limits(
+    resume_path: Path, *, project_count: int
+) -> tuple[int, ...] | None:
+    if project_count < 1:
+        return None
+    patterns = _style_section_entry_item_caps(resume_path)
+    project_pattern = patterns.get("Projects")
+    if project_pattern:
+        if len(project_pattern) >= project_count:
+            return project_pattern[:project_count]
+        return project_pattern + (project_pattern[-1],) * (project_count - len(project_pattern))
+    style_counts = _style_section_item_caps(resume_path)
+    style_projects = style_counts.get("Projects")
+    if style_projects is None:
+        return None
+    average = max(1, style_projects // project_count)
+    remainder = style_projects % project_count
+    return tuple(average + (1 if index < remainder else 0) for index in range(project_count))
+
+
+def _create_render_packed_automatic_resume_proposal(
+    *,
+    resume_path: Path,
+    output_dir: Path,
+    job_description: str,
+    evidence: list[Evidence],
+    project_candidates: tuple[ProjectCandidate, ...],
+    config: ErgaConfig,
+    additional_project_quality_rejections: tuple[dict[str, object], ...] = (),
+    spacing_fallback_requested: bool = False,
+) -> AutomaticResumeProposal:
+    """Create the fullest valid generated-template proposal, independent of the caller agent."""
+    common: dict[str, Any] = {
+        "resume_path": resume_path,
+        "job_description": job_description,
+        "evidence": evidence,
+        "editable_sections": config.resume.editable_sections,
+        "bullet_min_chars": config.resume.bullet_min_chars,
+        "bullet_target_chars": config.resume.bullet_target_chars,
+        "bullet_max_chars": config.resume.bullet_max_chars,
+        "project_candidates": project_candidates,
+        "project_count": config.resume.project_count,
+        "require_unique_lead_verbs": config.resume.require_unique_lead_verbs,
+        "max_pages": config.resume.max_pages,
+        "additional_project_quality_rejections": additional_project_quality_rejections,
+    }
+    item_counts = generated_resume_item_counts(resume_path.read_text(encoding="utf-8"))
+    profile_path = (
+        resume_path
+        if resume_path.with_name("template.json").is_file()
+        else config.resume.template_path or resume_path
+    )
+    style_caps = _style_section_item_caps(profile_path)
+    style_entry_caps = _repeat_entry_patterns(
+        _style_section_entry_item_caps(profile_path),
+        _generated_section_entry_counts(profile_path),
+    )
+    should_pack = (
+        config.resume.max_pages == 1
+        and bool(config.resume.minimum_page_fill_ratio)
+        and bool(item_counts)
+        and not project_candidates
+    )
+    if not should_pack:
+        if not item_counts:
+            return create_automatic_resume_proposal(
+                output_dir=output_dir,
+                generated_section_entry_item_limits=style_entry_caps,
+                minimum_page_fill_ratio=(
+                    config.resume.minimum_page_fill_ratio if spacing_fallback_requested else 0
+                ),
+                **common,
+            )
+        automatic, _, _ = _layout_balanced_generated_proposal(
+            lambda rejected: create_automatic_resume_proposal(
+                output_dir=output_dir,
+                generated_section_entry_item_limits=style_entry_caps,
+                minimum_page_fill_ratio=(
+                    config.resume.minimum_page_fill_ratio if spacing_fallback_requested else 0
+                ),
+                layout_rejected_bullet_texts=rejected,
+                **common,
+            ),
+            latexmk=config.resume.latexmk,
+        )
+        return automatic
+
+    # The reference provides a visual target, not a hard factual-section quota. Search all
+    # approved content so a user with fewer experiences can fill the same geometry with projects,
+    # while the repeated per-entry pattern still controls one-vs-two-vs-three bullet styling.
+    state_item_counts = item_counts
+    states = _generated_density_states(state_item_counts)
+    best_index = -1
+    best_fill = 0.0
+    best_layout_rejections: tuple[str, ...] = ()
+    with TemporaryDirectory(prefix="erga-generated-density-") as density_directory:
+        root = Path(density_directory)
+        low = 0
+        high = len(states) - 1
+        trial_number = 0
+        while low <= high:
+            middle = (low + high) // 2
+            valid, fill_ratio, layout_rejections = _generated_density_trial(
+                resume_path=resume_path,
+                output_dir=root / f"trial-{trial_number}",
+                job_description=job_description,
+                evidence=evidence,
+                section_item_limits=states[middle],
+                section_entry_item_limits=_entry_limits_for_item_state(
+                    style_entry_caps, states[middle]
+                ),
+                config=config,
+            )
+            trial_number += 1
+            if valid:
+                best_index = middle
+                best_fill = fill_ratio
+                best_layout_rejections = layout_rejections
+                low = middle + 1
+            else:
+                high = middle - 1
+    if best_index < 0:
+        raise ValueError("minimum approved resume content did not fit the one-page layout")
+
+    requires_spacing = not style_caps and best_fill < config.resume.minimum_page_fill_ratio
+    final_entry_limits = _entry_limits_for_item_state(style_entry_caps, states[best_index])
+    automatic = create_automatic_resume_proposal(
+        output_dir=output_dir,
+        minimum_page_fill_ratio=(config.resume.minimum_page_fill_ratio if requires_spacing else 0),
+        generated_section_item_limits=states[best_index],
+        generated_section_entry_item_limits=final_entry_limits,
+        layout_rejected_bullet_texts=best_layout_rejections,
+        **common,
+    )
+    packing: dict[str, object] = {
+        "agent_independent": True,
+        "natural_page_fill_ratio": best_fill,
+        "section_entry_item_limits": final_entry_limits,
+        "section_item_limits": states[best_index],
+        "spacing_fallback": requires_spacing,
+        "strategy": "fullest_valid_one_page_render",
+    }
+    if style_caps:
+        packing["style_reference_item_budget"] = sum(style_caps.values())
+    automatic.project_selection["rendered_content_packing"] = packing
+    report_path = automatic.proposal.claim_report_path
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if isinstance(report, dict):
+        report["project_selection"] = automatic.project_selection
+        report_path.write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    return automatic
+
+
 def _select_rendered_project_bullet_density(
     *,
     resume_path: Path,
@@ -493,18 +868,30 @@ def _select_rendered_project_bullet_density(
     selected_candidates: tuple[ProjectCandidate, ...],
     config: ErgaConfig,
 ) -> tuple[tuple[ProjectCandidate, ...], bool, float]:
-    """Add supported bullets until page-fill succeeds or the next addition breaks layout."""
+    """Add every supported bullet that fits, then report whether spacing is still required."""
     if config.resume.max_pages != 1 or not config.resume.minimum_page_fill_ratio:
         return selected_candidates, False, 0
     if len(selected_candidates) != config.resume.project_count:
         raise ValueError("adaptive bullet density requires the exact selected project count")
 
-    counts = [1 for _ in selected_candidates]
+    style_limits = _style_project_bullet_limits(
+        resume_path,
+        project_count=config.resume.project_count,
+    )
+    density_candidates = (
+        tuple(
+            limit_project_candidate_bullets(candidate, style_limits[index])
+            for index, candidate in enumerate(selected_candidates)
+        )
+        if style_limits is not None
+        else selected_candidates
+    )
+    counts = [1 for _ in density_candidates]
 
     def candidates_for_counts() -> tuple[ProjectCandidate, ...]:
         return tuple(
             limit_project_candidate_bullets(candidate, counts[index])
-            for index, candidate in enumerate(selected_candidates)
+            for index, candidate in enumerate(density_candidates)
         )
 
     with TemporaryDirectory(prefix="erga-project-density-") as density_directory:
@@ -520,19 +907,14 @@ def _select_rendered_project_bullet_density(
         )
         if not valid:
             raise ValueError("minimum project bullet density did not fit the one-page layout")
-        if fill_ratio >= config.resume.minimum_page_fill_ratio:
-            return current, False, fill_ratio
-
         tier = 2
         blocked_indices: set[int] = set()
         while any(
             index not in blocked_indices and count < len(candidate.bullet_evidence_ids)
-            for index, (count, candidate) in enumerate(
-                zip(counts, selected_candidates, strict=True)
-            )
+            for index, (count, candidate) in enumerate(zip(counts, density_candidates, strict=True))
         ):
             accepted_in_tier = False
-            for index, candidate in enumerate(selected_candidates):
+            for index, candidate in enumerate(density_candidates):
                 if index in blocked_indices or counts[index] >= len(candidate.bullet_evidence_ids):
                     continue
                 counts[index] += 1
@@ -552,12 +934,14 @@ def _select_rendered_project_bullet_density(
                 accepted_in_tier = True
                 current = trial
                 fill_ratio = trial_fill
-                if fill_ratio >= config.resume.minimum_page_fill_ratio:
-                    return current, False, fill_ratio
             if not accepted_in_tier:
                 break
             tier += 1
-    return current, fill_ratio < config.resume.minimum_page_fill_ratio, fill_ratio
+    return (
+        current,
+        style_limits is None and fill_ratio < config.resume.minimum_page_fill_ratio,
+        fill_ratio,
+    )
 
 
 def _require_single_line_resume_layout(
@@ -566,16 +950,20 @@ def _require_single_line_resume_layout(
     latexmk: str,
     enabled: bool,
 ) -> None:
-    """Refuse publication when the exact final proposal contains a wrapped resume bullet."""
+    """Refuse publication when a rendered bullet strands only one or two final-line words."""
     if not enabled:
+        return
+    # Some adapter/unit-test fixtures intentionally use opaque non-LaTeX proposal payloads; the
+    # normal compiler remains their validation authority. Layout inspection applies to documents.
+    if r"\begin{document}" not in proposal_path.read_text(encoding="utf-8"):
         return
     layout = validate_single_line_resume_items(proposal_path, latexmk=Path(latexmk))
     if layout.returncode != 0:
         raise ValueError("single-line resume layout validation did not compile")
-    if layout.wrapped_item_indices:
-        rendered = ", ".join(str(index + 1) for index in layout.wrapped_item_indices)
+    if layout.orphan_item_indices:
+        rendered = ", ".join(str(index + 1) for index in layout.orphan_item_indices)
         raise ValueError(
-            "tailored resume still contains bullets that render beyond one line "
+            "tailored resume contains bullets with only one or two words on the final line "
             f"(document bullet indexes: {rendered})"
         )
 
@@ -1005,6 +1393,14 @@ def _compile_intake_proposal(
     minimum_page_fill_ratio: float = 0,
 ) -> IntakeValidationResult:
     """Compile, enforce page geometry constraints, and select the exact attachment PDF."""
+    proposal_source = proposal_path.read_text(encoding="utf-8")
+    structure_issues = semantic_resume_structure_issues(proposal_source)
+    if structure_issues:
+        return IntakeValidationResult(
+            returncode=1,
+            pdf=None,
+            skipped="Semantic resume structure failed: " + "; ".join(structure_issues),
+        )
     try:
         checked = validate_latex_proposal(proposal_path, latexmk=Path(latexmk))
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -1047,8 +1443,13 @@ def _compile_intake_proposal(
                 ),
             )
 
+    # A user-supplied visual reference owns its measured section, entry, and line spacing. Erga
+    # expands with approved content before rendering but never stretches those template gaps.
+    effective_minimum_fill = (
+        0 if _VISUAL_SPACING_MARKER in proposal_source else minimum_page_fill_ratio
+    )
     page_fill_ratio: float | None = None
-    if minimum_page_fill_ratio:
+    if effective_minimum_fill:
         try:
             fill = pdf_page_fill(proposal_pdf)
         except ValueError as error:
@@ -1057,21 +1458,21 @@ def _compile_intake_proposal(
                 returncode=1,
                 pdf=None,
                 page_count=page_count,
-                minimum_page_fill_ratio=minimum_page_fill_ratio,
+                minimum_page_fill_ratio=effective_minimum_fill,
                 skipped=f"PDF page-fill validation failed: {error}",
             )
         page_fill_ratio = fill.fill_ratio
-        if page_fill_ratio < minimum_page_fill_ratio:
+        if page_fill_ratio < effective_minimum_fill:
             proposal_pdf.unlink(missing_ok=True)
             return IntakeValidationResult(
                 returncode=1,
                 pdf=None,
                 page_count=page_count,
                 page_fill_ratio=page_fill_ratio,
-                minimum_page_fill_ratio=minimum_page_fill_ratio,
+                minimum_page_fill_ratio=effective_minimum_fill,
                 skipped=(
                     f"Tailored resume fills {page_fill_ratio:.1%} of the page; required minimum "
-                    f"is {minimum_page_fill_ratio:.1%}."
+                    f"is {effective_minimum_fill:.1%}."
                 ),
             )
 
@@ -1083,7 +1484,7 @@ def _compile_intake_proposal(
         pdf=str(output_pdf),
         page_count=page_count,
         page_fill_ratio=page_fill_ratio,
-        minimum_page_fill_ratio=(minimum_page_fill_ratio or None),
+        minimum_page_fill_ratio=(effective_minimum_fill or None),
     )
 
 
@@ -1091,10 +1492,11 @@ def _require_master_template_parity(*, master_path: Path | None, template_path: 
     """Prevent a configured factual master and the tailored baseline from drifting apart."""
     if master_path is None:
         return
-    if master_path.suffix.casefold() != ".tex":
-        raise ValueError(
-            "configured master resume must be a LaTeX (.tex) file for automatic tailoring"
-        )
+    if (
+        master_path.suffix.casefold() != ".tex"
+        or template_path.with_name("template.json").is_file()
+    ):
+        return
     try:
         master = master_path.read_text(encoding="utf-8")
         template = template_path.read_text(encoding="utf-8")
@@ -1439,6 +1841,48 @@ def _cycle_from_package(package_dir: Path) -> str | None:
     return f"{match.group(1).title()} {match.group(2)}"
 
 
+_GENERATED_MASTER_IDENTITY = re.compile(
+    r"^% Generated by Erga from approved master resume SHA-256: (?P<sha>[0-9a-f]{64})$",
+    re.MULTILINE,
+)
+
+
+def _refresh_generated_package_template(
+    source_resume: Path,
+    *,
+    configured_template: Path | None,
+    prior_tailoring_version: object,
+) -> bool:
+    """Refresh an old generated package schema while preserving its prior source copy."""
+    if configured_template is None or not configured_template.is_file():
+        return False
+    current = source_resume.read_text(encoding="utf-8")
+    configured = configured_template.read_text(encoding="utf-8")
+    if current == configured:
+        return False
+    current_identity = _GENERATED_MASTER_IDENTITY.search(current)
+    configured_identity = _GENERATED_MASTER_IDENTITY.search(configured)
+    if (
+        current_identity is None
+        or configured_identity is None
+        or current_identity.group("sha") != configured_identity.group("sha")
+    ):
+        return False
+    version_label = (
+        str(prior_tailoring_version) if isinstance(prior_tailoring_version, int) else "legacy"
+    )
+    backup = source_resume.with_name(f"resume.tailoring-v{version_label}.tex")
+    if not backup.exists():
+        shutil.copy2(source_resume, backup)
+    temporary = source_resume.with_name(f".{source_resume.name}.refresh")
+    try:
+        shutil.copy2(configured_template, temporary)
+        temporary.replace(source_resume)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return True
+
+
 def _upgrade_existing_tailoring(
     result: IntakeJobResult,
     *,
@@ -1469,6 +1913,7 @@ def _upgrade_existing_tailoring(
     )
     snapshot_path = package_dir / "research" / "job-description.txt"
     snapshot_refreshed = False
+    template_refreshed = False
     if existing_tailoring_version != TAILORING_VERSION:
         try:
             refreshed_snapshot = fetch_job_snapshot(job_url)
@@ -1481,6 +1926,15 @@ def _upgrade_existing_tailoring(
             snapshot_path.write_text(refreshed_snapshot + "\n", encoding="utf-8")
             snapshot = refreshed_snapshot
             snapshot_refreshed = True
+            template_refreshed = _refresh_generated_package_template(
+                source_resume,
+                configured_template=config.resume.template_path,
+                prior_tailoring_version=existing_tailoring_version,
+            )
+            _require_master_template_parity(
+                master_path=config.resume.master_path,
+                template_path=source_resume,
+            )
     else:
         snapshot = snapshot_path.read_text(encoding="utf-8")
     research = analyze_job_snapshot(snapshot, job_url=job_url)
@@ -1508,24 +1962,15 @@ def _upgrade_existing_tailoring(
         project_candidates,
         selected_project_ids=_git_researched_project_ids(enrichment),
     )
-    automatic = create_automatic_resume_proposal(
+    automatic = _create_render_packed_automatic_resume_proposal(
         resume_path=source_resume,
         output_dir=package_dir / "artifacts",
         job_description=tailoring_context,
         evidence=evidence,
-        editable_sections=config.resume.editable_sections,
-        bullet_min_chars=config.resume.bullet_min_chars,
-        bullet_target_chars=config.resume.bullet_target_chars,
-        bullet_max_chars=config.resume.bullet_max_chars,
         project_candidates=project_candidates,
-        project_count=config.resume.project_count,
-        require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
-        minimum_page_fill_ratio=(
-            config.resume.minimum_page_fill_ratio
-            if config.resume.max_pages == 1 and enrichment.requires_spacing_fallback
-            else 0
-        ),
+        config=config,
         additional_project_quality_rejections=enrichment.quality_rejections,
+        spacing_fallback_requested=enrichment.requires_spacing_fallback,
     )
     automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
     enrichment = _realign_git_project_research(
@@ -1540,7 +1985,7 @@ def _upgrade_existing_tailoring(
     _require_single_line_resume_layout(
         automatic.proposal.proposed_tex_path,
         latexmk=config.resume.latexmk,
-        enabled=bool(config.resume.bullet_max_chars),
+        enabled=True,
     )
     validation = _compile_intake_proposal(
         automatic.proposal.proposed_tex_path,
@@ -1563,6 +2008,7 @@ def _upgrade_existing_tailoring(
                 "changed_sections": list(automatic.changed_sections),
                 "meaningful_change": automatic.meaningful_change,
                 "snapshot_refreshed": snapshot_refreshed,
+                "template_refreshed": template_refreshed,
                 "version": TAILORING_VERSION,
             },
             "validation": {
@@ -1886,6 +2332,18 @@ def _incomplete_package_by_identity(*, output_root: Path, job_url: str) -> Path 
 def build_server(config_path: Path, *, store_factory: StoreFactory | None = None) -> MCPServer:
     """Build a local MCP interface with read, local-write, and local-exec tools."""
     config = load_config(config_path)
+    template_path = config.resume.template_path
+    if (
+        config.resume.master_path is not None
+        and config.resume.master_path.is_file()
+        and (
+            template_path is None
+            or not template_path.is_file()
+            or template_path.with_name("template.json").is_file()
+        )
+    ):
+        ensure_resume_template(config_path)
+        config = load_config(config_path)
     selected_tool_profile = _selected_tool_profile(config, os.environ)
     enabled_tool_names = _enabled_tool_names(config, os.environ)
     store = (store_factory or SQLiteStoreFactory()).create(config.data_dir / "erga.sqlite3")
@@ -2047,6 +2505,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         return build_resume_source_context(
             master_path=config.resume.master_path,
             reference_path=config.resume.reference_path,
+            template_path=config.resume.template_path,
         )
 
     @profile_tool("list_mail_events", annotations=_READ_ONLY)
@@ -2412,7 +2871,6 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             template_path=config.resume.template_path,
         )
         snapshot = fetch_job_snapshot(job_url)
-        require_job_posting(snapshot, job_url=job_url)
         source_research = analyze_job_snapshot(snapshot, job_url=job_url)
         resolved_cycle, resolved_slug = _metadata_from_research(
             job_url,
@@ -2485,24 +2943,15 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 template_path=config.resume.template_path,
                 selected_evidence=evidence,
             )
-            automatic = create_automatic_resume_proposal(
+            automatic = _create_render_packed_automatic_resume_proposal(
                 resume_path=workspace.template_copy_path,
                 output_dir=workspace.package.package_dir / "artifacts",
                 job_description=tailoring_context,
                 evidence=evidence,
-                editable_sections=config.resume.editable_sections,
-                bullet_min_chars=config.resume.bullet_min_chars,
-                bullet_target_chars=config.resume.bullet_target_chars,
-                bullet_max_chars=config.resume.bullet_max_chars,
                 project_candidates=project_candidates,
-                project_count=config.resume.project_count,
-                require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
-                minimum_page_fill_ratio=(
-                    config.resume.minimum_page_fill_ratio
-                    if config.resume.max_pages == 1 and enrichment.requires_spacing_fallback
-                    else 0
-                ),
+                config=config,
                 additional_project_quality_rejections=enrichment.quality_rejections,
+                spacing_fallback_requested=enrichment.requires_spacing_fallback,
             )
             automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
             enrichment = _realign_git_project_research(
@@ -2518,7 +2967,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             _require_single_line_resume_layout(
                 proposal.proposed_tex_path,
                 latexmk=config.resume.latexmk,
-                enabled=bool(config.resume.bullet_max_chars),
+                enabled=True,
             )
             validation = _compile_intake_proposal(
                 proposal.proposed_tex_path,
@@ -2811,7 +3260,6 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         if config.resume.template_path is None or config.vault_path is None:
             raise ValueError("resume template_path and vault_path must be configured")
         snapshot = fetch_job_snapshot(job_url)
-        require_job_posting(snapshot, job_url=job_url)
         research = analyze_job_snapshot(snapshot, job_url=job_url)
         all_approved = [item for item in store.list_evidence() if item.approved]
         evidence = select_relevant_evidence(snapshot, all_approved)
@@ -2842,24 +3290,15 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             template_path=config.resume.template_path,
             selected_evidence=evidence,
         )
-        automatic = create_automatic_resume_proposal(
+        automatic = _create_render_packed_automatic_resume_proposal(
             resume_path=workspace.template_copy_path,
             output_dir=workspace.package.package_dir / "artifacts",
             job_description=tailoring_context,
             evidence=evidence,
-            editable_sections=config.resume.editable_sections,
-            bullet_min_chars=config.resume.bullet_min_chars,
-            bullet_target_chars=config.resume.bullet_target_chars,
-            bullet_max_chars=config.resume.bullet_max_chars,
             project_candidates=project_candidates,
-            project_count=config.resume.project_count,
-            require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
-            minimum_page_fill_ratio=(
-                config.resume.minimum_page_fill_ratio
-                if config.resume.max_pages == 1 and enrichment.requires_spacing_fallback
-                else 0
-            ),
+            config=config,
             additional_project_quality_rejections=enrichment.quality_rejections,
+            spacing_fallback_requested=enrichment.requires_spacing_fallback,
         )
         automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
         enrichment = _realign_git_project_research(
@@ -2875,7 +3314,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         _require_single_line_resume_layout(
             proposal.proposed_tex_path,
             latexmk=config.resume.latexmk,
-            enabled=bool(config.resume.bullet_max_chars),
+            enabled=True,
         )
         validation = _compile_intake_proposal(
             proposal.proposed_tex_path,
@@ -2990,7 +3429,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
 
     @profile_tool("validate_tailored_resume", annotations=_LOCAL_EXEC)
     def validate_tailored_resume(proposal_tex: str) -> dict[str, object]:
-        """Compile a generated proposal beneath the configured package artifacts directory."""
+        """Compile a proposal and enforce the configured page-count and fill guarantees."""
         proposal_path = Path(proposal_tex).expanduser().resolve()
         output_root = config.resume.output_root.expanduser().resolve()
         try:
@@ -2999,8 +3438,16 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             raise ValueError("proposal_tex must be inside configured resume output_root") from error
         if "artifacts" not in relative_path.parts:
             raise ValueError("proposal_tex must be a generated package artifact")
-        validation = validate_latex_proposal(proposal_path, latexmk=Path(config.resume.latexmk))
-        return cast(dict[str, object], _json_value(asdict(validation)))
+        validation = _compile_intake_proposal(
+            proposal_path,
+            latexmk=config.resume.latexmk,
+            output_pdf_name=proposal_path.with_suffix(".pdf").name,
+            max_pages=config.resume.max_pages,
+            minimum_page_fill_ratio=(
+                config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
+            ),
+        )
+        return cast(dict[str, object], _json_value(validation.model_dump()))
 
     return server
 

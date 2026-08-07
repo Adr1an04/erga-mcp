@@ -41,6 +41,24 @@ class ResumeSourceTests(unittest.TestCase):
             self.assertIn("Second page projects", source.text)
             self.assertIn("[Page 3]", source.text)
 
+    def test_pdf_extraction_requests_layout_preserving_line_boundaries(self) -> None:
+        with TemporaryDirectory() as directory:
+            master = Path(directory) / "master.pdf"
+            master.write_bytes(b"%PDF synthetic")
+            calls: list[dict[str, str]] = []
+
+            class Page:
+                def extract_text(self, **kwargs: str) -> str:
+                    calls.append(kwargs)
+                    return "Experience\n   Built a service\n   across two regions."
+
+            reader = SimpleNamespace(is_encrypted=False, pages=[Page()])
+            with patch("erga_mcp.resume_sources.PdfReader", return_value=reader):
+                source = load_resume_source(master)
+
+            self.assertEqual(calls, [{"extraction_mode": "layout"}])
+            self.assertIn("\n   Built a service\n", source.text)
+
     def test_master_import_is_approved_and_idempotent(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -148,7 +166,13 @@ class ResumeSourceTests(unittest.TestCase):
             self.assertTrue(context["preferences"]["style_override_confirmed"])  # type: ignore[index]
             self.assertEqual(
                 context["preferences"]["reference_metadata"],  # type: ignore[index]
-                ["page count", "section order", "content density"],
+                [
+                    "page count",
+                    "section order",
+                    "content density",
+                    "typography, rules, spacing, and margins",
+                    "bullets per entry",
+                ],
             )
             self.assertEqual(
                 context["preferences"]["rendered_layout_control"],  # type: ignore[index]
@@ -156,9 +180,12 @@ class ResumeSourceTests(unittest.TestCase):
             )
             self.assertEqual(
                 context["preferences"]["not_automatically_transformed"],  # type: ignore[index]
-                ["section order", "content density"],
+                [],
             )
-            self.assertEqual(context["preferences"]["automatically_applied"], [])  # type: ignore[index]
+            self.assertEqual(  # type: ignore[index]
+                context["preferences"]["automatically_applied"],
+                ["section presence", "section order"],
+            )
             self.assertNotIn("adjust_from_reference", context["preferences"])  # type: ignore[operator]
 
     def test_docx_rejects_oversized_decompressed_document_xml(self) -> None:
@@ -182,6 +209,62 @@ class ResumeSourceTests(unittest.TestCase):
             self.assertEqual(context["preferences"]["max_pages"], 1)  # type: ignore[index]
             self.assertFalse(context["preferences"]["style_override_confirmed"])  # type: ignore[index]
 
+    def test_resume_context_exposes_inferred_template_profile_to_any_mcp_host(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master = root / "master.tex"
+            template = root / "resume.tex"
+            metadata = root / "template.json"
+            master.write_text("Approved master", encoding="utf-8")
+            template.write_text("Generated template", encoding="utf-8")
+            profile = {
+                "editable_sections": ["Projects", "Technical Skills"],
+                "project_count": 3,
+                "repeatable_sections": ["Projects"],
+                "section_item_counts": {"Projects": 9, "Technical Skills": 0},
+                "section_order": ["Projects", "Technical Skills"],
+            }
+            style_profile = {
+                "project_count": 3,
+                "section_item_counts": {"Projects": 6},
+            }
+            visual_profile = {"body_font_size_pt": 10.0, "margin_in": 0.5}
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "layout_profile": profile,
+                        "style_layout_profile": style_profile,
+                        "visual_style_profile": visual_profile,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            context = resume_source_context(
+                master_path=master,
+                reference_path=None,
+                template_path=template,
+            )
+
+            self.assertEqual(context["layout_profile"], profile)
+            self.assertEqual(context["style_layout_profile"], style_profile)
+            self.assertEqual(context["visual_style_profile"], visual_profile)
+            self.assertEqual(
+                context["preferences"]["section_order"],  # type: ignore[index]
+                ["Projects", "Technical Skills"],
+            )
+            self.assertEqual(
+                context["preferences"]["automatically_applied"],  # type: ignore[index]
+                [
+                    "section presence",
+                    "section order",
+                    "project count",
+                    "bullets per entry",
+                    "content density",
+                    "typography, rules, spacing, and margins",
+                ],
+            )
+
     def test_pdf_style_reference_applies_only_its_page_count_automatically(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -203,11 +286,11 @@ class ResumeSourceTests(unittest.TestCase):
             self.assertEqual(context["preferences"]["max_pages"], 2)  # type: ignore[index]
             self.assertEqual(
                 context["preferences"]["automatically_applied"],  # type: ignore[index]
-                ["maximum page count"],
+                ["maximum page count", "section presence", "section order"],
             )
             self.assertEqual(
                 context["preferences"]["not_automatically_transformed"],  # type: ignore[index]
-                ["section order", "content density"],
+                [],
             )
 
 

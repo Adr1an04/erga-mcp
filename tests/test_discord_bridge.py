@@ -1,20 +1,36 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
+from erga_mcp.config import DEFAULT_CONFIG, load_config
 from erga_mcp.discord_backends import DiscordBackendName
 from erga_mcp.discord_bridge import (
+    ERGA_INK,
+    ERGA_LEAF,
+    ERGA_ORBIT_VIOLET,
+    ERGA_SUN,
     DiscordBridgeSettings,
     DiscordProcessRecord,
     _backend_environment,
+    _backend_prompt,
+    _create_discord_client,
+    _managed_resume_pdf,
+    _progress_card,
     _record_matches_process,
+    _render_resume_preview,
+    _response_state,
+    _result_cards,
     build_backend_command,
+    discord_status,
     is_authorized_discord_user,
     load_discord_settings,
     resolve_backend_command,
@@ -27,6 +43,190 @@ from erga_mcp.discord_setup import parse_discord_identities
 
 
 class DiscordBridgeTests(unittest.TestCase):
+    def test_resume_progress_card_uses_erga_active_color_and_truthful_status(self) -> None:
+        card = _progress_card(
+            "make a résumé for https://jobs.example.test/role",
+            elapsed_seconds=42,
+        )
+
+        self.assertEqual(card.color, ERGA_ORBIT_VIOLET)
+        self.assertEqual(card.title, "✦ Tailoring your résumé")
+        self.assertIn("Evidence selection, tailoring, and validation", card.description)
+        self.assertEqual(card.fields[0].value, "Working through the one-page pipeline")
+        self.assertEqual(card.fields[1].value, "42s")
+        self.assertIn("no submission", card.fields[2].value)
+
+    def test_result_cards_use_semantic_orbit_colors(self) -> None:
+        success = _result_cards(
+            "Your validated PDF is ready at /private/resume.pdf",
+            resume_request=True,
+            elapsed_seconds=75,
+        )
+        warning = _result_cards(
+            "⚠️ Résumé not ready. Validation failed.",
+            resume_request=True,
+            elapsed_seconds=12,
+        )
+        neutral = _result_cards(
+            "Application tracker updated.", resume_request=False, elapsed_seconds=3
+        )
+
+        self.assertEqual(_response_state(success[0].description), "success")
+        self.assertEqual(success[0].color, ERGA_LEAF)
+        self.assertEqual(success[0].fields[1].value, "1m 15s")
+        self.assertEqual(warning[0].color, ERGA_SUN)
+        self.assertEqual(neutral[0].color, ERGA_INK)
+
+    def test_discord_turn_attaches_validated_resume_and_first_page_preview(self) -> None:
+        class FakeIntents:
+            message_content = False
+
+            @classmethod
+            def default(cls) -> FakeIntents:
+                return cls()
+
+        class FakeEmbed:
+            def __init__(self, **kwargs: object) -> None:
+                self.title = kwargs["title"]
+                self.description = kwargs["description"]
+                self.color = kwargs["color"]
+                self.fields: list[dict[str, object]] = []
+                self.footer = ""
+                self.image: str | None = None
+
+            def add_field(self, **kwargs: object) -> None:
+                self.fields.append(kwargs)
+
+            def set_footer(self, *, text: str) -> None:
+                self.footer = text
+
+            def set_image(self, *, url: str) -> None:
+                self.image = url
+
+        class FakeFile:
+            def __init__(self, path: Path, *, filename: str) -> None:
+                self.path = path
+                self.filename = filename
+
+        class FakeClient:
+            def __init__(self, **_: object) -> None:
+                self.user = SimpleNamespace(id=777)
+
+        class Typing:
+            async def __aenter__(self) -> None:
+                return None
+
+            async def __aexit__(self, *_: object) -> None:
+                return None
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            resume_pdf = root / "applications" / "summer-2027" / "role" / "artifacts" / "resume.pdf"
+            resume_pdf.parent.mkdir(parents=True)
+            resume_pdf.write_bytes(b"%PDF-1.4 synthetic fixture")
+            preview = root / "preview.png"
+            preview.write_bytes(b"synthetic preview")
+            fake_discord = SimpleNamespace(
+                Intents=FakeIntents,
+                Client=FakeClient,
+                Embed=FakeEmbed,
+                File=FakeFile,
+            )
+            status_message = SimpleNamespace(edit=AsyncMock())
+            reply = AsyncMock(return_value=status_message)
+            message = SimpleNamespace(
+                author=SimpleNamespace(id=123456789, name="student", bot=False),
+                guild=None,
+                mentions=[],
+                content="make a resume for https://jobs.example.test/role",
+                channel=SimpleNamespace(typing=lambda: Typing()),
+                reply=reply,
+            )
+
+            with (
+                patch("erga_mcp.discord_bridge._discord_module", return_value=fake_discord),
+                patch(
+                    "erga_mcp.discord_bridge.run_backend",
+                    return_value=f"Validated PDF ready at {resume_pdf}",
+                ),
+                patch("erga_mcp.discord_bridge._render_resume_preview", return_value=preview),
+            ):
+                client = _create_discord_client(
+                    DiscordBridgeSettings(
+                        backend="codex",
+                        backend_command="/private/codex",
+                        project_dir=Path("/private/project"),
+                        allowed_user_ids=(123456789,),
+                    ),
+                    attachment_roots=(root,),
+                )
+                asyncio.run(client.on_message(message))
+
+        first_embed = reply.await_args_list[0].kwargs["embed"]
+        final_embed = status_message.edit.await_args_list[-1].kwargs["embed"]
+        attachments = status_message.edit.await_args_list[-1].kwargs["attachments"]
+        self.assertEqual(reply.await_count, 1)
+        self.assertEqual(first_embed.title, "✦ Tailoring your résumé")
+        self.assertEqual(first_embed.color, ERGA_ORBIT_VIOLET)
+        self.assertEqual(final_embed.title, "✓ Résumé ready for review")
+        self.assertEqual(final_embed.color, ERGA_LEAF)
+        self.assertEqual(final_embed.image, "attachment://erga-resume-preview.png")
+        self.assertEqual(
+            [file.filename for file in attachments], ["erga-resume-preview.png", "resume.pdf"]
+        )
+        self.assertEqual(final_embed.fields[-1]["value"], "Validated PDF attached")
+
+    def test_resume_attachment_must_be_an_erga_artifact_inside_a_configured_root(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / "cycle" / "role" / "artifacts" / "resume.pdf"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"%PDF-1.4 synthetic fixture")
+            outside = root.parent / "resume.pdf"
+            outside.write_bytes(b"%PDF-1.4 synthetic fixture")
+            try:
+                self.assertEqual(
+                    _managed_resume_pdf(
+                        f"Validated PDF ready at {outside}", attachment_roots=(root,)
+                    ),
+                    None,
+                )
+                self.assertEqual(
+                    _managed_resume_pdf(
+                        f"Validated PDF ready at {artifact}", attachment_roots=(root,)
+                    ),
+                    artifact.resolve(),
+                )
+            finally:
+                outside.unlink(missing_ok=True)
+
+    @unittest.skipUnless(shutil.which("pdftoppm"), "pdftoppm is required to render previews")
+    def test_resume_preview_renders_the_validated_pdf_first_page(self) -> None:
+        from pypdf import PdfWriter
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            resume_pdf = root / "resume.pdf"
+            writer = PdfWriter()
+            writer.add_blank_page(width=612, height=792)
+            with resume_pdf.open("wb") as stream:
+                writer.write(stream)
+
+            preview = _render_resume_preview(resume_pdf, root)
+
+            self.assertIsNotNone(preview)
+            assert preview is not None
+            self.assertTrue(preview.is_file())
+            self.assertEqual(preview.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+
+    def test_backend_prompt_requires_canonical_validated_job_intake(self) -> None:
+        prompt = _backend_prompt("make a resume for https://jobs.example.test/role")
+
+        self.assertIn("use intake_job_url as the canonical end-to-end operation", prompt)
+        self.assertIn("do not hand-edit proposal files", prompt)
+        self.assertIn("one-page fill check", prompt)
+        self.assertIn("exact PDF artifact path returned by Erga", prompt)
+
     def _settings(
         self,
         root: Path,
@@ -55,6 +255,32 @@ class DiscordBridgeTests(unittest.TestCase):
             self.assertNotIn("token", content.casefold())
             if os.name != "nt":
                 self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+
+    def test_load_migrates_the_previous_client_settings_schema(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.toml"
+            command = root / "codex"
+            command.write_text("", encoding="utf-8")
+            target = root / "discord-bridge.json"
+            target.write_text(
+                json.dumps(
+                    {
+                        "client": "codex",
+                        "client_command": str(command),
+                        "project_dir": str(root),
+                        "allowed_user_ids": [123],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            settings = load_discord_settings(config)
+            migrated = json.loads(target.read_text(encoding="utf-8"))
+
+            self.assertEqual(settings.backend, "codex")
+            self.assertEqual(migrated["backend"], "codex")
+            self.assertNotIn("client", migrated)
 
     def test_resolves_codex_bundled_inside_a_desktop_app(self) -> None:
         with TemporaryDirectory() as directory:
@@ -151,6 +377,10 @@ class DiscordBridgeTests(unittest.TestCase):
             )
 
             self.assertEqual(codex[1], "exec")
+            self.assertIn("--ephemeral", codex)
+            self.assertEqual(codex[codex.index("--model") + 1], "gpt-5.6-terra")
+            self.assertIn("--dangerously-bypass-approvals-and-sandbox", codex)
+            self.assertNotIn("workspace-write", codex)
             self.assertIn("--output-last-message", codex)
             self.assertIn("--print", claude)
             self.assertIn("acceptEdits", claude)
@@ -159,6 +389,16 @@ class DiscordBridgeTests(unittest.TestCase):
             self.assertIn("--allowed-mcp-server-names", gemini)
             self.assertIn("--approve-mcps", cursor)
             self.assertIn("--allow-tool=erga-mcp", copilot)
+
+            codex_probe = build_backend_command(
+                self._settings(root, "codex"), "prompt", output, probe=True
+            )
+            self.assertIn("--ephemeral", codex_probe)
+            self.assertEqual(
+                codex_probe[codex_probe.index("--model") + 1],
+                "gpt-5.6-terra",
+            )
+            self.assertIn("read-only", codex_probe)
 
     def test_backend_processes_receive_only_allowlisted_runtime_environment(self) -> None:
         with patch.dict(
@@ -323,6 +563,37 @@ class DiscordBridgeTests(unittest.TestCase):
                 return_value=command,
             ):
                 self.assertFalse(_record_matches_process(record))
+
+    def test_status_distinguishes_running_from_gateway_ready(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.toml"
+            config.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            write_discord_settings(config, self._settings(root))
+            data_dir = load_config(config).data_dir
+            data_dir.mkdir(parents=True)
+            record = DiscordProcessRecord(
+                pid=4321,
+                nonce="private-nonce",
+                config_path=str(config.absolute()),
+            )
+            (data_dir / "discord-bridge-process.json").write_text(
+                json.dumps(record.__dict__), encoding="utf-8"
+            )
+
+            with (
+                patch("erga_mcp.discord_bridge.os.kill"),
+                patch("erga_mcp.discord_bridge._record_matches_process", return_value=True),
+            ):
+                starting = discord_status(config)
+                (data_dir / "discord-bridge-ready.json").write_text(
+                    json.dumps({"pid": 4321}), encoding="utf-8"
+                )
+                ready = discord_status(config)
+
+            self.assertTrue(starting["running"])
+            self.assertFalse(starting["ready"])
+            self.assertTrue(ready["ready"])
 
     def test_settings_json_is_parseable(self) -> None:
         with TemporaryDirectory() as directory:

@@ -25,6 +25,7 @@ from .resume_sources import (
     load_resume_source,
     snapshot_resume_source,
 )
+from .resume_template import generate_latex_template
 from .store import ErgaStore
 from .toml_edit import update_table
 
@@ -253,9 +254,9 @@ def collect_core_setup_selections(
         "\n2. Style reference (optional)\n"
         "Erga's clean one-page defaults are recommended. Add a second resume only if you are "
         "confident it is a useful layout reference. A PDF page count can prefill the maximum; "
-        "section order and density are recorded as descriptive metadata. The editable .tex "
-        "template still controls rendered layout. Erga never treats reference wording as factual "
-        "evidence.",
+        "section presence, order, repeatable content, and project slots are inferred into a "
+        "private layout profile that controls later tailoring. Erga never treats reference "
+        "wording as factual evidence.",
         style="fg:#aaaaaa",
     )
     style_resume: Path | None = None
@@ -722,6 +723,11 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         if style is not None
         else None
     )
+    generated_template = generate_latex_template(
+        managed_master,
+        data_dir=config.data_dir,
+        style=managed_style,
+    )
     evidence = import_master_resume(
         store,
         managed_master,
@@ -750,9 +756,16 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         {
             "master_path": str(managed_master.path),
             "reference_path": str(managed_style.path) if managed_style is not None else "",
+            "template_path": str(generated_template.path),
             "output_root": str(output_root),
             "project_inventory_path": str(inventory_path),
-            "project_selection_mode": "inventory_required",
+            "project_selection_mode": (
+                "inventory_required"
+                if "Projects" in generated_template.profile.editable_sections
+                else "template_only"
+            ),
+            "editable_sections": list(generated_template.profile.editable_sections),
+            "project_count": generated_template.profile.project_count,
             "output_pdf_name": normalize_output_pdf_name(selections.output_pdf_name),
             "bullet_min_chars": selections.bullet_min_chars,
             "bullet_target_chars": selections.bullet_target_chars,
@@ -768,6 +781,8 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         "Private Erga configuration and database",
         "Private local application tracking",
         "Managed master resume knowledge",
+        "Generated private LaTeX resume template",
+        "Template-derived section and content profile",
         "Required project inventory with approved per-bullet evidence",
         "Client-neutral local MCP profile",
     ]
