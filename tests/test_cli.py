@@ -18,21 +18,24 @@ from erga_mcp.store import ErgaStore
 
 class CliTests(unittest.TestCase):
     def test_resume_template_ensure_reports_generated_or_reused_path(self) -> None:
-        output = StringIO()
-        template = Path("/private/generated/resume.tex")
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            template = Path(directory) / "generated" / "resume.tex"
+            output = StringIO()
+            main(["init", "--config", str(config_path)])
 
-        with (
-            patch("erga_mcp.cli.ensure_resume_template", return_value=template) as ensure,
-            redirect_stdout(output),
-        ):
-            exit_code = main(["resume", "template", "ensure"])
+            with (
+                patch("erga_mcp.cli.ensure_resume_template", return_value=template) as ensure,
+                redirect_stdout(output),
+            ):
+                exit_code = main(["resume", "template", "ensure", "--config", str(config_path)])
 
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(
-            json.loads(output.getvalue()),
-            {"generated_or_reused": True, "template_path": str(template)},
-        )
-        ensure.assert_called_once()
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                json.loads(output.getvalue()),
+                {"generated_or_reused": True, "template_path": str(template)},
+            )
+            ensure.assert_called_once()
 
     def test_discord_connect_reuses_existing_setup(self) -> None:
         output = StringIO()

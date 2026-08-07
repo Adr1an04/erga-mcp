@@ -93,18 +93,19 @@ class ResumeValidationTests(unittest.TestCase):
             self.assertEqual(resolved, latexmk)
 
     def test_falls_back_to_tectonic_when_default_latexmk_is_unavailable(self) -> None:
-        tectonic = "/opt/tools/tectonic"
+        with TemporaryDirectory() as directory:
+            tectonic = str(Path(directory) / "tectonic")
 
-        def which(command: str) -> str | None:
-            return tectonic if command == "tectonic" else None
+            def which(command: str) -> str | None:
+                return tectonic if command == "tectonic" else None
 
-        with (
-            patch("erga_mcp.resume.sys.platform", "linux"),
-            patch("erga_mcp.resume.shutil.which", side_effect=which),
-        ):
-            resolved = resolve_latexmk_executable(Path("latexmk"))
+            with (
+                patch("erga_mcp.resume.sys.platform", "linux"),
+                patch("erga_mcp.resume.shutil.which", side_effect=which),
+            ):
+                resolved = resolve_latexmk_executable(Path("latexmk"))
 
-        self.assertEqual(resolved, Path(tectonic))
+            self.assertEqual(resolved, Path(tectonic).absolute())
 
     def test_tectonic_uses_its_native_non_shell_compilation_arguments(self) -> None:
         with TemporaryDirectory() as directory:
