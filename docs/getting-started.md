@@ -108,10 +108,18 @@ uv run erga resume template set /absolute/path/to/preferred-resume.pdf \
 
 Both commands accept PDF, DOCX, or `.tex` input and snapshot it into private local state. The master
 is the sole factual source and never contributes page geometry, typography, spacing, density, or
-section order. A visual template controls section presence, order, density, and project
-slots but cannot authorize claims. PDF templates additionally contribute measured margins,
-typography, small-caps treatment, line height, and grouped-item spacing. Rendered packing keeps
-bullets compact within each entry and distributes unavoidable spare height between semantic groups.
+section order. A visual template controls section presence, order, density, project slots, and the
+exact bullet count for each experience or project entry, but cannot authorize claims. PDF templates
+additionally contribute measured per-edge margins, typography, small-caps treatment, section-rule
+presence and weight, line height, bullet indentation, and section/entry/item spacing. Rendered
+packing keeps those template-owned gaps fixed instead of elastically stretching them to fill the
+page. For example, a template with one bullet per project keeps one bullet per selected project;
+mixed patterns such as two/three/two are preserved entry by entry and repeated when more approved
+entries are needed. Section totals are density targets rather than hard factual quotas: if the
+master has fewer experiences than the visual example, the one-page render search may use additional
+approved projects without inventing experience. Intentionally spacious templates are not rejected
+against Erga's default page-fill threshold.
+
 `erga resume sources import --master ... --style ...` remains available for scripts that need to
 replace both sources together.
 

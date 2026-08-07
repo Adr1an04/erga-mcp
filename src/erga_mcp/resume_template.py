@@ -21,7 +21,7 @@ from .resume_settings import update_settings
 from .resume_sources import ResumeSource, load_resume_source
 from .resume_tailoring import latex_to_text
 
-TEMPLATE_GENERATION_VERSION = 13
+TEMPLATE_GENERATION_VERSION = 15
 _PAGE_MARKER = re.compile(r"^\[Page \d+\]$")
 _BULLET_PREFIX = re.compile(r"^(?:[•●▪◦‣⁃*]|[-–—]\s)\s*")
 _SPACE = re.compile(r"\s+")
@@ -29,7 +29,8 @@ _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?;])\s+(?=[A-Z0-9])")
 _SECTION_KEY = re.compile(r"[^a-z0-9]+")
 _LAYOUT_INDENT_MARKER = "[[ERGA-LAYOUT-INDENT]]"
 _LAYOUT_COLUMN_MARKER = "[[ERGA-LAYOUT-COLUMN]]"
-_SEMANTIC_TEMPLATE_MARKER = "% Erga semantic resume template version: 13"
+_SEMANTIC_TEMPLATE_MARKER = "% Erga semantic resume template version: 15"
+_VISUAL_SPACING_MARKER = "% Erga visual spacing is template-controlled."
 _SECTION_ALIASES = {
     "activities": "Activities",
     "awards": "Awards",
@@ -100,6 +101,7 @@ class ResumeLayoutProfile:
     section_order: tuple[str, ...]
     editable_sections: tuple[str, ...]
     repeatable_sections: tuple[str, ...]
+    section_entry_item_counts: dict[str, tuple[int, ...]]
     section_item_counts: dict[str, int]
     project_count: int
 
@@ -108,6 +110,9 @@ class ResumeLayoutProfile:
             "editable_sections": list(self.editable_sections),
             "project_count": self.project_count,
             "repeatable_sections": list(self.repeatable_sections),
+            "section_entry_item_counts": {
+                section: list(counts) for section, counts in self.section_entry_item_counts.items()
+            },
             "section_item_counts": self.section_item_counts,
             "section_order": list(self.section_order),
         }
@@ -119,23 +124,43 @@ class ResumeVisualProfile:
 
     body_font_size_pt: float
     body_leading_pt: float
+    bullet_left_margin_in: float
+    bottom_margin_in: float
+    entry_spacing_pt: float
     header_font_size_pt: float
     item_spacing_pt: float
+    left_margin_in: float
     margin_in: float
+    right_margin_in: float
+    section_after_spacing_pt: float
     section_bold: bool
+    section_before_spacing_pt: float
     section_font_size_pt: float
+    section_rule: bool
+    section_rule_width_pt: float
     section_small_caps: bool
+    top_margin_in: float
 
     def as_json(self) -> dict[str, object]:
         return {
             "body_font_size_pt": self.body_font_size_pt,
             "body_leading_pt": self.body_leading_pt,
+            "bullet_left_margin_in": self.bullet_left_margin_in,
+            "bottom_margin_in": self.bottom_margin_in,
+            "entry_spacing_pt": self.entry_spacing_pt,
             "header_font_size_pt": self.header_font_size_pt,
             "item_spacing_pt": self.item_spacing_pt,
+            "left_margin_in": self.left_margin_in,
             "margin_in": self.margin_in,
+            "right_margin_in": self.right_margin_in,
+            "section_after_spacing_pt": self.section_after_spacing_pt,
             "section_bold": self.section_bold,
+            "section_before_spacing_pt": self.section_before_spacing_pt,
             "section_font_size_pt": self.section_font_size_pt,
+            "section_rule": self.section_rule,
+            "section_rule_width_pt": self.section_rule_width_pt,
             "section_small_caps": self.section_small_caps,
+            "top_margin_in": self.top_margin_in,
         }
 
 
@@ -308,6 +333,7 @@ def infer_resume_layout_profile(source: str) -> ResumeLayoutProfile:
     document = source[document_start:] if document_start >= 0 else source
     matches = list(re.finditer(r"^\s*\\section\{(?P<name>[^}]+)\}\s*$", document, re.MULTILINE))
     section_order: list[str] = []
+    section_entry_item_counts: dict[str, tuple[int, ...]] = {}
     section_item_counts: dict[str, int] = {}
     editable_sections: list[str] = []
     repeatable_sections: list[str] = []
@@ -319,11 +345,37 @@ def infer_resume_layout_profile(source: str) -> ResumeLayoutProfile:
         end = matches[index + 1].start() if index + 1 < len(matches) else len(document)
         body = document[match.end() : end]
         item_count = len(re.findall(r"\\resumeItem\s*\{", body))
+        normalized = _SECTION_KEY.sub("", name.casefold())
+        heading_command = (
+            "resumeProjectHeading"
+            if normalized == "projects"
+            else "resumeSubheading"
+            if normalized == "experience"
+            else ""
+        )
+        entry_counts: tuple[int, ...] = ()
+        if heading_command:
+            headings = list(re.finditer(rf"\\{heading_command}\s*\{{", body))
+            entry_counts = tuple(
+                len(
+                    re.findall(
+                        r"\\resumeItem\s*\{",
+                        body[
+                            heading.end() : (
+                                headings[heading_index + 1].start()
+                                if heading_index + 1 < len(headings)
+                                else len(body)
+                            )
+                        ],
+                    )
+                )
+                for heading_index, heading in enumerate(headings)
+            )
         section_order.append(name)
+        section_entry_item_counts[name] = entry_counts
         section_item_counts[name] = item_count
         if item_count:
             repeatable_sections.append(name)
-        normalized = _SECTION_KEY.sub("", name.casefold())
         if normalized in {"experience", "projects", "technicalskills"}:
             editable_sections.append(name)
         if normalized == "projects":
@@ -332,6 +384,7 @@ def infer_resume_layout_profile(source: str) -> ResumeLayoutProfile:
         section_order=tuple(section_order),
         editable_sections=tuple(editable_sections),
         repeatable_sections=tuple(repeatable_sections),
+        section_entry_item_counts=section_entry_item_counts,
         section_item_counts=section_item_counts,
         project_count=max(1, project_count),
     )
@@ -346,6 +399,7 @@ def infer_source_layout_profile(source: ResumeSource) -> ResumeLayoutProfile:
     item_counts = {
         name: sum(_is_layout_indented(line) for line in lines) for name, lines in sections
     }
+    entry_item_counts = {name: _grouped_entry_item_counts(lines) for name, lines in sections}
     repeatable = tuple(name for name in section_order if item_counts[name])
     editable = tuple(
         name
@@ -357,23 +411,28 @@ def infer_source_layout_profile(source: ResumeSource) -> ResumeLayoutProfile:
         section_order=section_order,
         editable_sections=editable,
         repeatable_sections=repeatable,
+        section_entry_item_counts=entry_item_counts,
         section_item_counts=item_counts,
         project_count=max(1, _grouped_entry_count(project_lines)),
     )
 
 
 def _grouped_entry_count(lines: list[str]) -> int:
-    groups = 0
-    has_bullets = False
+    return len(_grouped_entry_item_counts(lines))
+
+
+def _grouped_entry_item_counts(lines: list[str]) -> tuple[int, ...]:
+    counts: list[int] = []
+    current = 0
     for line in lines:
         if _is_layout_indented(line):
-            has_bullets = True
-        elif has_bullets:
-            groups += 1
-            has_bullets = False
-    if has_bullets:
-        groups += 1
-    return groups
+            current += 1
+        elif current:
+            counts.append(current)
+            current = 0
+    if current:
+        counts.append(current)
+    return tuple(counts)
 
 
 def _observed_project_count(source: ResumeSource) -> int:
@@ -399,6 +458,16 @@ def _pdf_visual_profile(source: ResumeSource) -> ResumeVisualProfile | None:
         return None
 
     fragments: list[tuple[str, float, float, float, str]] = []
+    horizontal_rules: list[tuple[float, float, float, float]] = []
+    current_line_width = 0.4
+    path_start: tuple[float, float] | None = None
+    path_end: tuple[float, float] | None = None
+
+    def transformed_point(x: float, y: float, matrix: Any) -> tuple[float, float]:
+        return (
+            x * float(matrix[0]) + y * float(matrix[2]) + float(matrix[4]),
+            x * float(matrix[1]) + y * float(matrix[3]) + float(matrix[5]),
+        )
 
     def visitor(
         text: str,
@@ -413,16 +482,7 @@ def _pdf_visual_profile(source: ResumeSource) -> ResumeVisualProfile | None:
         try:
             text_x = float(text_matrix[4])
             text_y = float(text_matrix[5])
-            x = (
-                text_x * float(current_transform[0])
-                + text_y * float(current_transform[2])
-                + float(current_transform[4])
-            )
-            y = (
-                text_x * float(current_transform[1])
-                + text_y * float(current_transform[3])
-                + float(current_transform[5])
-            )
+            x, y = transformed_point(text_x, text_y, current_transform)
             size = float(font_size)
         except (IndexError, TypeError, ValueError):
             try:
@@ -434,8 +494,29 @@ def _pdf_visual_profile(source: ResumeSource) -> ResumeVisualProfile | None:
         font_name = str(font.get("/BaseFont", "")) if isinstance(font, dict) else ""
         fragments.append((rendered, x, y, size, font_name))
 
+    def drawing_visitor(operator: bytes, operands: Any, matrix: Any, _text_matrix: Any) -> None:
+        nonlocal current_line_width, path_end, path_start
+        try:
+            if operator == b"w":
+                current_line_width = float(operands[0])
+            elif operator == b"m":
+                path_start = transformed_point(float(operands[0]), float(operands[1]), matrix)
+                path_end = path_start
+            elif operator == b"l":
+                path_end = transformed_point(float(operands[0]), float(operands[1]), matrix)
+            elif operator in {b"S", b"s"} and path_start is not None and path_end is not None:
+                if abs(path_start[1] - path_end[1]) <= 1:
+                    horizontal_rules.append(
+                        (path_start[0], path_end[0], path_start[1], current_line_width)
+                    )
+                path_start = None
+                path_end = None
+        except (IndexError, TypeError, ValueError):
+            path_start = None
+            path_end = None
+
     try:
-        page.extract_text(visitor_text=visitor)
+        page.extract_text(visitor_text=visitor, visitor_operand_before=drawing_visitor)
     except (KeyError, TypeError, ValueError):
         return None
     candidates = [item for item in fragments if 8 <= item[3] <= 14]
@@ -453,7 +534,21 @@ def _pdf_visual_profile(source: ResumeSource) -> ResumeVisualProfile | None:
     margin_x = min(
         (item[1] for item in section_fragments), default=min(item[1] for item in candidates)
     )
-    margin_in = max(0.4, min(1.0, margin_x / 72.0))
+    page_width = float(page.mediabox.width)
+    broad_rules = [rule for rule in horizontal_rules if abs(rule[1] - rule[0]) >= page_width * 0.5]
+    left_margin_pt = (
+        float(statistics.median(min(rule[0], rule[1]) for rule in broad_rules))
+        if broad_rules
+        else margin_x
+    )
+    right_margin_pt = (
+        page_width - float(statistics.median(max(rule[0], rule[1]) for rule in broad_rules))
+        if broad_rules
+        else margin_x
+    )
+    left_margin_in = max(0.3, min(1.25, left_margin_pt / 72.0))
+    right_margin_in = max(0.3, min(1.25, right_margin_pt / 72.0))
+    margin_in = float(statistics.median((left_margin_in, right_margin_in)))
 
     body_baselines = sorted(
         (item[2] for item in candidates if abs(item[3] - body_size) <= 0.35), reverse=True
@@ -471,17 +566,107 @@ def _pdf_visual_profile(source: ResumeSource) -> ResumeVisualProfile | None:
     ]
     body_leading = max(body_size + 1, min(body_size + 3, body_size * 1.2))
     observed_gap = float(statistics.median(gaps)) if gaps else body_leading
-    item_spacing = max(0.0, min(3.0, observed_gap - body_leading))
+    bullet_fragments = [
+        item
+        for item in fragments
+        if item[3] < 8 and item[0].strip() in {"•", "●", "▪", "◦", "‣", "⁃"}
+    ]
+    bullet_baselines = sorted({round(item[2], 2) for item in bullet_fragments}, reverse=True)
+    bullet_gaps = [
+        first - second
+        for first, second in zip(bullet_baselines, bullet_baselines[1:], strict=False)
+        if body_leading <= first - second <= body_leading + 6
+    ]
+    observed_bullet_gap = float(statistics.median(bullet_gaps)) if bullet_gaps else observed_gap
+    item_spacing = max(0.0, min(4.0, observed_bullet_gap - body_leading))
+
+    line_baselines: list[float] = []
+    for baseline in sorted((item[2] for item in candidates), reverse=True):
+        if line_baselines and abs(line_baselines[-1] - baseline) <= 2:
+            line_baselines[-1] = (line_baselines[-1] + baseline) / 2
+        else:
+            line_baselines.append(baseline)
+    before_gaps: list[float] = []
+    after_gaps: list[float] = []
+    for section in section_fragments:
+        closest = min(
+            range(len(line_baselines)), key=lambda index: abs(line_baselines[index] - section[2])
+        )
+        if closest:
+            before_gaps.append(line_baselines[closest - 1] - line_baselines[closest])
+        if closest + 1 < len(line_baselines):
+            after_gaps.append(line_baselines[closest] - line_baselines[closest + 1])
+    section_before_spacing = max(
+        0.0,
+        min(
+            12.0,
+            (float(statistics.median(before_gaps)) if before_gaps else body_leading * 1.5)
+            - body_leading * 2,
+        ),
+    )
+    section_after_spacing = max(
+        0.0,
+        min(
+            10.0,
+            (float(statistics.median(after_gaps)) if after_gaps else body_leading) - body_leading,
+        ),
+    )
+
+    heading_fragments = [
+        item
+        for item in candidates
+        if "bold" in item[4].casefold()
+        and margin_x + 3 <= item[1] <= margin_x + 20
+        and _section_name(item[0]) is None
+    ]
+    entry_gaps = [
+        bullet_y - heading[2]
+        for heading in heading_fragments
+        for bullet_y in bullet_baselines
+        if body_leading < bullet_y - heading[2] <= body_leading + 15
+    ]
+    entry_spacing = max(
+        0.0,
+        min(
+            8.0,
+            (float(statistics.median(entry_gaps)) if entry_gaps else body_leading)
+            - body_leading
+            - item_spacing
+            - 4,
+        ),
+    )
+    entry_x = min((item[1] for item in heading_fragments), default=margin_x + 10.8)
+    bullet_x = min((item[1] for item in bullet_fragments), default=entry_x + 13)
+    bullet_left_margin_in = max(0.12, min(0.35, (bullet_x - entry_x) / 72.0))
+    section_rule_matches = sum(
+        any(0 <= section[2] - rule[2] <= 8 for rule in broad_rules) for section in section_fragments
+    )
+    section_rule = bool(section_fragments) and section_rule_matches >= max(
+        1, len(section_fragments) // 2
+    )
+    section_rule_width = (
+        float(statistics.median(rule[3] for rule in broad_rules)) if broad_rules else 0.4
+    )
     header_size = max((item[3] for item in fragments), default=body_size * 2)
     return ResumeVisualProfile(
         body_font_size_pt=round(body_size, 2),
         body_leading_pt=round(body_leading, 2),
+        bullet_left_margin_in=round(bullet_left_margin_in, 3),
+        bottom_margin_in=round(margin_in, 2),
+        entry_spacing_pt=round(entry_spacing, 2),
         header_font_size_pt=round(max(body_size * 1.6, min(28.0, header_size)), 2),
         item_spacing_pt=round(item_spacing, 2),
+        left_margin_in=round(left_margin_in, 2),
         margin_in=round(margin_in, 2),
+        right_margin_in=round(right_margin_in, 2),
+        section_after_spacing_pt=round(section_after_spacing, 2),
         section_bold=any("bold" in name for name in section_fonts),
+        section_before_spacing_pt=round(section_before_spacing, 2),
         section_font_size_pt=round(section_size, 2),
+        section_rule=section_rule,
+        section_rule_width_pt=round(section_rule_width, 2),
         section_small_caps=any("caps" in name for name in section_fonts),
+        top_margin_in=round(margin_in, 2),
     )
 
 
@@ -662,8 +847,24 @@ def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
     sections = _ordered_sections(parsed_sections, style)
     visual = _pdf_visual_profile(style) if style is not None else None
     font_size = "10pt"
-    margin = f"{_measure(visual.margin_in)}in" if visual is not None else "0.50in"
+    geometry = (
+        "left="
+        f"{_measure(visual.left_margin_in)}in,right={_measure(visual.right_margin_in)}in,"
+        f"top={_measure(visual.top_margin_in)}in,bottom={_measure(visual.bottom_margin_in)}in"
+        if visual is not None
+        else "margin=0.50in"
+    )
     item_spacing = _measure(visual.item_spacing_pt) if visual is not None else "1"
+    # enumitem positions the bullet glyph slightly inside its configured left margin. Compensate
+    # for that label box so the rendered glyph offset matches the measured reference PDF.
+    bullet_left_margin = (
+        _measure(visual.bullet_left_margin_in + 0.024) if visual is not None else "0.18"
+    )
+    entry_spacing = _measure(visual.entry_spacing_pt) if visual is not None else "0"
+    section_before_spacing = (
+        _measure(visual.section_before_spacing_pt) if visual is not None else "5"
+    )
+    section_after_spacing = _measure(visual.section_after_spacing_pt) if visual is not None else "2"
     if visual is None:
         section_style = r"\large\bfseries"
     else:
@@ -677,17 +878,29 @@ def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
             section_style += r"\bfseries"
     body = "\n\n".join(_render_section(name, lines) for name, lines in sections)
     rendered_header = _render_header(header, visual)
+    section_rule = (
+        r"[\ergasectionrule]"
+        if visual is not None and visual.section_rule
+        else (r"[\titlerule]" if visual is None else "")
+    )
+    section_rule_definition = (
+        rf"\newcommand{{\ergasectionrule}}{{\titlerule[{_measure(visual.section_rule_width_pt)}pt]}}"
+        "\n"
+        if visual is not None and visual.section_rule
+        else ""
+    )
     preamble = (
         f"% Generated by Erga from approved master resume SHA-256: {master.sha256}\n"
         "% Factual text below comes only from that approved master source.\n"
         f"{_SEMANTIC_TEMPLATE_MARKER}\n"
-        rf"\documentclass[letterpaper,{font_size}]{{article}}"
+        + (f"{_VISUAL_SPACING_MARKER}\n" if style is not None else "")
+        + rf"\documentclass[letterpaper,{font_size}]{{article}}"
         "\n"
         r"\usepackage[T1]{fontenc}"
         "\n"
         r"\usepackage[utf8]{inputenc}"
         "\n"
-        rf"\usepackage[margin={margin}]{{geometry}}"
+        rf"\usepackage[{geometry}]{{geometry}}"
         "\n"
         r"\usepackage[hidelinks]{hyperref}"
         "\n"
@@ -707,9 +920,11 @@ def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
         "\n"
         r"\setlist[itemize]{nosep}"
         "\n"
-        rf"\titleformat{{\section}}{{{section_style}}}{{}}{{0em}}{{}}[\titlerule]"
+        + section_rule_definition
+        + rf"\titleformat{{\section}}{{{section_style}}}{{}}{{0em}}{{}}{section_rule}"
         "\n"
-        r"\titlespacing*{\section}{0pt}{5pt}{2pt}"
+        rf"\titlespacing*{{\section}}{{0pt}}{{{section_before_spacing}pt}}"
+        rf"{{{section_after_spacing}pt}}"
         "\n"
         r"\newcommand{\resumeItem}[1]{\item #1}"
         "\n"
@@ -723,10 +938,11 @@ def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
         "\n"
         r"\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}"
         "\n"
-        r"\newcommand{\resumeItemListStart}{\begin{itemize}[leftmargin=0.18in,label=\textbullet,"
+        rf"\newcommand{{\resumeItemListStart}}{{\begin{{itemize}}[leftmargin={bullet_left_margin}in,"
+        r"label=\textbullet,"
         rf"itemsep={item_spacing}pt,topsep={item_spacing}pt,parsep=0pt,partopsep=0pt]}}"
         "\n"
-        r"\newcommand{\resumeItemListEnd}{\end{itemize}}"
+        rf"\newcommand{{\resumeItemListEnd}}{{\end{{itemize}}\vspace{{{entry_spacing}pt}}}}"
         "\n"
         r"\newcommand{\resumeSubheading}[4]{\item[] \textbf{#1}\hfill #2\\[-1pt]"
         r"\textit{#3}\hfill\textit{#4}}"

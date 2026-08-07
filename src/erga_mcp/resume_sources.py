@@ -320,7 +320,8 @@ def resume_source_context(
             "page count",
             "section order",
             "content density",
-            "typography and margins",
+            "typography, rules, spacing, and margins",
+            "bullets per entry",
         ]
         preferences["rendered_layout_control"] = "editable-latex-template"
         preferences["not_automatically_transformed"] = []
@@ -346,7 +347,12 @@ def resume_source_context(
             if isinstance(profile_applied, list):
                 profile_applied.extend(
                     value
-                    for value in ("section presence", "section order", "project count")
+                    for value in (
+                        "section presence",
+                        "section order",
+                        "project count",
+                        "bullets per entry",
+                    )
                     if value not in profile_applied
                 )
         if isinstance(metadata, dict) and isinstance(metadata.get("style_layout_profile"), dict):
@@ -357,7 +363,10 @@ def resume_source_context(
             if isinstance(profile_applied, list):
                 profile_applied.extend(
                     value
-                    for value in ("content density", "typography and margins")
+                    for value in (
+                        "content density",
+                        "typography, rules, spacing, and margins",
+                    )
                     if value not in profile_applied
                 )
     return {

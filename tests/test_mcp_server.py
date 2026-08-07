@@ -26,11 +26,13 @@ from erga_mcp.mcp_server import (
     _ai_tailored_project_enrichment,
     _compile_intake_proposal,
     _create_render_packed_automatic_resume_proposal,
+    _entry_limits_for_item_state,
     _generated_density_states,
     _layout_safe_project_selection,
     _metadata_from_url,
     _project_enrichment_for_tailoring,
     _refresh_generated_package_template,
+    _repeat_entry_patterns,
     _require_constraint_valid_proposal,
     _require_master_template_parity,
     _select_rendered_project_bullet_density,
@@ -111,6 +113,22 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(states[1]["Experience"], 3)
         self.assertEqual(states[2]["Projects"], 2)
 
+    def test_visual_bullet_pattern_repeats_across_available_factual_entries(self) -> None:
+        self.assertEqual(
+            _repeat_entry_patterns(
+                {"Experience": (3, 2), "Projects": (1,)},
+                {"Experience": 3, "Projects": 4},
+            ),
+            {"Experience": (3, 2, 3), "Projects": (1, 1, 1, 1)},
+        )
+        self.assertEqual(
+            _entry_limits_for_item_state(
+                {"Experience": (3, 3), "Projects": (2, 2, 2)},
+                {"Experience": 4, "Projects": 5},
+            ),
+            {"Experience": (3, 0), "Projects": (2, 2, 0)},
+        )
+
     def test_generated_template_packer_keeps_the_fullest_valid_render(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -181,7 +199,7 @@ class McpServerTests(unittest.TestCase):
             self.assertEqual(packing["strategy"], "fullest_valid_one_page_render")
             self.assertFalse(packing["spacing_fallback"])
 
-    def test_generated_template_packer_honors_style_content_budget(self) -> None:
+    def test_generated_template_packer_uses_style_budget_as_a_target_not_a_hard_cap(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             resume = root / "resume.tex"
@@ -245,10 +263,10 @@ class McpServerTests(unittest.TestCase):
 
             proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
             packing = cast(dict[str, Any], result.project_selection["rendered_content_packing"])
-            self.assertEqual(proposed.count(r"\resumeItem{"), 4)
+            self.assertEqual(proposed.count(r"\resumeItem{"), 8)
             self.assertEqual(
                 packing["section_item_limits"],
-                {"Experience": 2, "Projects": 2},
+                {"Experience": 4, "Projects": 4},
             )
             self.assertEqual(packing["style_reference_item_budget"], 4)
 
@@ -334,7 +352,10 @@ class McpServerTests(unittest.TestCase):
                 json.dumps(
                     {
                         "style_sha256": "b" * 64,
-                        "style_layout_profile": {"section_item_counts": {"Projects": 4}},
+                        "style_layout_profile": {
+                            "section_entry_item_counts": {"Projects": [1, 2]},
+                            "section_item_counts": {"Projects": 3},
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -370,7 +391,7 @@ class McpServerTests(unittest.TestCase):
 
             with patch(
                 "erga_mcp.mcp_server._project_density_trial",
-                side_effect=[(True, 0.60), (True, 0.65), (True, 0.70)],
+                side_effect=[(True, 0.60), (True, 0.65)],
             ) as trial:
                 selected, requires_spacing, fill_ratio = _select_rendered_project_bullet_density(
                     resume_path=resume,
@@ -380,10 +401,10 @@ class McpServerTests(unittest.TestCase):
                     config=config,
                 )
 
-            self.assertEqual([len(item.bullet_evidence_ids) for item in selected], [2, 2])
-            self.assertTrue(requires_spacing)
-            self.assertEqual(fill_ratio, 0.70)
-            self.assertEqual(trial.call_count, 3)
+            self.assertEqual([len(item.bullet_evidence_ids) for item in selected], [1, 2])
+            self.assertFalse(requires_spacing)
+            self.assertEqual(fill_ratio, 0.65)
+            self.assertEqual(trial.call_count, 2)
 
     def test_rendered_density_uses_more_claims_before_spacing(self) -> None:
         latexmk = shutil.which("latexmk")
@@ -2057,6 +2078,42 @@ class McpServerTests(unittest.TestCase):
             self.assertEqual(result.minimum_page_fill_ratio, 0.82)
             self.assertIn("fills 67.0%", result.skipped or "")
             self.assertFalse(proposal.with_suffix(".pdf").exists())
+
+    def test_compile_accepts_the_fullest_page_when_visual_template_owns_spacing(self) -> None:
+        with TemporaryDirectory() as directory:
+            proposal = Path(directory) / "proposal.tex"
+            proposal.write_text(
+                "% Erga visual spacing is template-controlled.\nsynthetic",
+                encoding="utf-8",
+            )
+            validation = LatexValidation(command=("latexmk",), returncode=0, stdout="", stderr="")
+
+            def compile_sparse_page(proposal_path: Path, **_: Any) -> LatexValidation:
+                proposal_path.with_suffix(".pdf").write_bytes(
+                    b"%PDF-1.4\n1 0 obj<</Type /Page>>endobj\n%%EOF"
+                )
+                return validation
+
+            with (
+                patch(
+                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    side_effect=compile_sparse_page,
+                ),
+                patch("erga_mcp.mcp_server.pdf_page_count", return_value=1),
+                patch("erga_mcp.mcp_server.pdf_page_fill") as page_fill,
+            ):
+                result = _compile_intake_proposal(
+                    proposal,
+                    latexmk="latexmk",
+                    output_pdf_name="Candidate_Resume.pdf",
+                    max_pages=1,
+                    minimum_page_fill_ratio=0.82,
+                )
+
+            self.assertEqual(result.returncode, 0)
+            self.assertIsNone(result.minimum_page_fill_ratio)
+            self.assertFalse(page_fill.called)
+            self.assertTrue((proposal.parent / "Candidate_Resume.pdf").is_file())
 
     def test_primary_intake_writes_research_application_and_multicycle_obsidian_note(self) -> None:
         with TemporaryDirectory() as directory:

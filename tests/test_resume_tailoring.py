@@ -16,6 +16,7 @@ from erga_mcp.project_inventory import ProjectCandidate
 from erga_mcp.resume import validate_single_line_resume_items
 from erga_mcp.resume_tailoring import (
     TAILORING_VERSION,
+    _compact_generated_entry_section,
     _record_lead_verb_rewrites,
     _relevance,
     apply_adaptive_single_page_fill,
@@ -110,6 +111,37 @@ Software Engineering Intern \hfill May 2026 -- Present
 
 
 class AutomaticResumeTailoringTests(unittest.TestCase):
+    def test_entry_bullet_pattern_ignores_structural_category_headings(self) -> None:
+        section = r"""
+\section{Projects}
+\resumeSubHeadingListStart
+\resumeProjectHeading{\textit{Research Projects}}{}
+\resumeProjectHeading{\textbf{Alpha}}{}
+\resumeItemListStart
+\resumeItem{Alpha one}
+\resumeItem{Alpha two}
+\resumeItemListEnd
+\resumeProjectHeading{\textbf{Beta}}{}
+\resumeItemListStart
+\resumeItem{Beta one}
+\resumeItem{Beta two}
+\resumeItemListEnd
+\resumeSubHeadingListEnd
+"""
+
+        compacted, _ = _compact_generated_entry_section(
+            section,
+            heading_command="resumeProjectHeading",
+            maximum_items=3,
+            maximum_items_per_entry=(1, 2),
+        )
+
+        self.assertIn(r"\resumeProjectHeading{\textit{Research Projects}}", compacted)
+        alpha_start = compacted.index(r"\resumeProjectHeading{\textbf{Alpha}}")
+        beta_start = compacted.index(r"\resumeProjectHeading{\textbf{Beta}}")
+        self.assertEqual(compacted[alpha_start:beta_start].count(r"\resumeItem{"), 1)
+        self.assertEqual(compacted[beta_start:].count(r"\resumeItem{"), 2)
+
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
@@ -198,6 +230,11 @@ Synthetic University
         )
 
         self.assertEqual(apply_adaptive_single_page_fill(tiny), tiny)
+
+    def test_page_fill_preserves_user_template_spacing(self) -> None:
+        controlled = "% Erga visual spacing is template-controlled.\n" + _SPARSE_TEMPLATE
+
+        self.assertEqual(apply_adaptive_single_page_fill(controlled), controlled)
 
     def test_page_fill_uses_rendered_page_relative_coordinates(self) -> None:
         with TemporaryDirectory() as directory:

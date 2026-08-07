@@ -191,7 +191,7 @@ class ResumeTemplateTests(unittest.TestCase):
             generated = generate_latex_template(source, data_dir=root / "state")
             template = generated.path.read_text(encoding="utf-8")
 
-            self.assertIn("% Erga semantic resume template version: 13", template)
+            self.assertIn("% Erga semantic resume template version: 15", template)
             self.assertIn(r"\resumeEducationHeading{Example University}{Orlando, FL}", template)
             self.assertIn(r"\resumeEducationDetail{Bachelor of Science}{May 2027}", template)
             self.assertIn(
@@ -352,6 +352,44 @@ class ResumeTemplateTests(unittest.TestCase):
             self.assertNotIn("Tested the approved Alpha deployment", proposed)
             self.assertNotIn("Beta Website", proposed)
 
+    def test_generated_project_budget_preserves_template_bullets_per_entry(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = ResumeSource(
+                path=root / "master.pdf",
+                format="pdf",
+                sha256="e" * 64,
+                page_count=1,
+                text=(
+                    "Jane Candidate\nPROJECTS\nAlpha Platform\n"
+                    "   • Built the approved Alpha service.\n"
+                    "   • Tested the approved Alpha deployment.\n"
+                    "Beta Platform\n"
+                    "   • Built the approved Beta service.\n"
+                    "   • Tested the approved Beta deployment.\n"
+                    "TECHNICAL SKILLS\nLanguages: Python"
+                ),
+            )
+            generated = generate_latex_template(source, data_dir=root / "state")
+
+            result = create_automatic_resume_proposal(
+                resume_path=generated.path,
+                output_dir=root / "artifacts",
+                job_description="Alpha Beta service deployment",
+                evidence=[],
+                editable_sections=("Projects",),
+                max_pages=1,
+                generated_section_item_limits={"Projects": 3},
+                generated_section_entry_item_limits={"Projects": (1, 2)},
+            )
+
+            proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
+            alpha_start = proposed.index(r"\resumeProjectHeading{\textbf{Alpha Platform}}")
+            beta_start = proposed.index(r"\resumeProjectHeading{\textbf{Beta Platform}}")
+            section_end = proposed.index(r"\section{Technical Skills}")
+            self.assertEqual(proposed[alpha_start:beta_start].count(r"\resumeItem{"), 1)
+            self.assertEqual(proposed[beta_start:section_end].count(r"\resumeItem{"), 2)
+
     def test_pdf_master_generates_standalone_template_without_style_claims(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -432,8 +470,16 @@ class ResumeTemplateTests(unittest.TestCase):
             )
 
             class Page:
-                def extract_text(self, *, visitor_text: object) -> str:
+                mediabox = SimpleNamespace(width=612, height=792)
+
+                def extract_text(
+                    self,
+                    *,
+                    visitor_text: object,
+                    visitor_operand_before: object,
+                ) -> str:
                     visit = visitor_text  # type: ignore[assignment]
+                    draw = visitor_operand_before  # type: ignore[assignment]
                     fragments = (
                         ("Style Person", 220.0, 760.0, 24.8, "/Synthetic-Bold"),
                         ("Education", 36.0, 720.0, 12.0, "/Synthetic-Caps"),
@@ -451,6 +497,12 @@ class ResumeTemplateTests(unittest.TestCase):
                             {"/BaseFont": font},
                             size,
                         )
+                    for y in (716.0, 646.0, 616.0):
+                        matrix = (1, 0, 0, 1, 36, y)
+                        draw(b"w", [0.4], matrix, ())
+                        draw(b"m", [0, 0], matrix, ())
+                        draw(b"l", [540, 0], matrix, ())
+                        draw(b"S", [], matrix, ())
                     return ""
 
             reader = SimpleNamespace(pages=[Page()])
@@ -463,12 +515,21 @@ class ResumeTemplateTests(unittest.TestCase):
 
             self.assertEqual(style_profile.project_count, 3)
             self.assertEqual(style_profile.section_item_counts["Projects"], 6)
+            self.assertEqual(style_profile.section_entry_item_counts["Projects"], (2, 2, 2))
             self.assertEqual(generated.profile.project_count, 3)
             self.assertEqual(metadata["style_layout_profile"]["section_item_counts"]["Projects"], 6)
             self.assertEqual(metadata["visual_style_profile"]["body_font_size_pt"], 10.0)
+            self.assertTrue(metadata["visual_style_profile"]["section_rule"])
             self.assertIn(r"\fontsize{24.8pt}{29.76pt}\selectfont\bfseries", template)
             self.assertIn(r"\fontsize{10pt}{12pt}\selectfont", template)
             self.assertIn(r"\fontsize{12pt}{14.4pt}\selectfont\scshape", template)
+            self.assertIn(
+                r"\usepackage[left=0.5in,right=0.5in,top=0.5in,bottom=0.5in]{geometry}",
+                template,
+            )
+            self.assertIn(r"\newcommand{\ergasectionrule}{\titlerule[0.4pt]}", template)
+            self.assertIn(r"[\ergasectionrule]", template)
+            self.assertIn(r"leftmargin=0.2in", template)
             self.assertIn("itemsep=2pt,topsep=2pt", template)
 
     def test_generated_generic_items_are_tailorable_without_legacy_macros(self) -> None:

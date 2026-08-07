@@ -22,6 +22,7 @@ from .resume import ResumeProposal, latex_to_text, resolve_section_name
 
 _TOKEN = re.compile(r"[a-z0-9+#.]+")
 _PAGE_FILL_MARKER = "% ERGA-ADAPTIVE-PAGE-FILL"
+_VISUAL_SPACING_MARKER = "% Erga visual spacing is template-controlled."
 _SECTION_LINE = re.compile(r"(?m)^(?P<indent>[ \t]*)\\section\{")
 _ITEM_LIST_END_LINE = re.compile(r"(?m)^(?P<indent>[ \t]*)\\resumeItemListEnd[ \t]*$")
 _PAGE_FILL_SETUP = r"""
@@ -904,6 +905,7 @@ def _compact_generated_entry_section(
     *,
     heading_command: str,
     maximum_items: int,
+    maximum_items_per_entry: tuple[int, ...] | None = None,
 ) -> tuple[str, list[str]]:
     """Keep complete semantic entries while applying a rendered bullet budget."""
     prefix, entries, suffix = _entry_ranges(section, heading_command)
@@ -916,6 +918,7 @@ def _compact_generated_entry_section(
     selected_entries: list[str] = []
     omitted: list[str] = []
     remaining = maximum_items
+    content_entry_index = 0
     for entry in entries:
         bullets, _ = _ranked_commands(entry, "resumeItem", "", group_index=0)
         if not bullets:
@@ -924,7 +927,14 @@ def _compact_generated_entry_section(
             if remaining:
                 selected_entries.append(entry)
             continue
-        keep = min(remaining, len(bullets))
+        if maximum_items_per_entry is None:
+            entry_cap = remaining
+        elif content_entry_index < len(maximum_items_per_entry):
+            entry_cap = maximum_items_per_entry[content_entry_index]
+        else:
+            entry_cap = 0
+        content_entry_index += 1
+        keep = min(remaining, entry_cap, len(bullets))
         if keep:
             selected_entries.append(_replace_command_order(entry, "resumeItem", bullets[:keep]))
             remaining -= keep
@@ -937,6 +947,7 @@ def _compact_generated_resume(
     *,
     max_pages: int,
     section_item_limits: Mapping[str, int] | None = None,
+    section_entry_item_limits: Mapping[str, tuple[int, ...]] | None = None,
 ) -> tuple[str, tuple[str, ...], list[dict[str, str]]]:
     """Select bounded relevant items from a generated factual master for the page target."""
     if max_pages < 1 or _GENERATED_TEMPLATE_MARKER not in source:
@@ -967,12 +978,22 @@ def _compact_generated_resume(
                 current_section,
                 heading_command="resumeProjectHeading",
                 maximum_items=maximum_items * max_pages,
+                maximum_items_per_entry=(
+                    section_entry_item_limits.get(canonical)
+                    if section_entry_item_limits is not None
+                    else None
+                ),
             )
         elif r"\resumeSubheading" in current_section:
             section, omitted = _compact_generated_entry_section(
                 current_section,
                 heading_command="resumeSubheading",
                 maximum_items=maximum_items * max_pages,
+                maximum_items_per_entry=(
+                    section_entry_item_limits.get(canonical)
+                    if section_entry_item_limits is not None
+                    else None
+                ),
             )
         else:
             section, omitted = _compact_generated_section(
@@ -1292,7 +1313,7 @@ def _record_lead_verb_rewrites(
 
 def apply_adaptive_single_page_fill(source: str) -> str:
     """Distribute spare page height without changing claims, fonts, margins, or line widths."""
-    if _PAGE_FILL_MARKER in source:
+    if _PAGE_FILL_MARKER in source or _VISUAL_SPACING_MARKER in source:
         return source
     if source.count(r"\resumeItem{") < 6:
         return source
@@ -1386,6 +1407,7 @@ def create_automatic_resume_proposal(
     minimum_page_fill_ratio: float = 0,
     max_pages: int = 0,
     generated_section_item_limits: Mapping[str, int] | None = None,
+    generated_section_entry_item_limits: Mapping[str, tuple[int, ...]] | None = None,
     additional_project_quality_rejections: tuple[dict[str, object], ...] = (),
 ) -> AutomaticResumeProposal:
     """Tailor a résumé using only user-provided claims and approved project blocks."""
@@ -1499,6 +1521,7 @@ def create_automatic_resume_proposal(
         proposed,
         max_pages=max_pages,
         section_item_limits=generated_section_item_limits,
+        section_entry_item_limits=generated_section_entry_item_limits,
     )
     for compacted_section in compacted_sections:
         if compacted_section not in changed_sections:
@@ -1554,6 +1577,7 @@ def create_automatic_resume_proposal(
             proposed,
             max_pages=max_pages,
             section_item_limits=generated_section_item_limits,
+            section_entry_item_limits=generated_section_entry_item_limits,
         )
         changed_sections.extend(compacted_sections)
         lead_verb_report, _ = _lead_verb_report(proposed, required=enforce_unique_lead_verbs)

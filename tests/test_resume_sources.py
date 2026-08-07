@@ -170,7 +170,8 @@ class ResumeSourceTests(unittest.TestCase):
                     "page count",
                     "section order",
                     "content density",
-                    "typography and margins",
+                    "typography, rules, spacing, and margins",
+                    "bullets per entry",
                 ],
             )
             self.assertEqual(
@@ -258,8 +259,9 @@ class ResumeSourceTests(unittest.TestCase):
                     "section presence",
                     "section order",
                     "project count",
+                    "bullets per entry",
                     "content density",
-                    "typography and margins",
+                    "typography, rules, spacing, and margins",
                 ],
             )
 

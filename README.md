@@ -119,10 +119,17 @@ Both commands accept PDF, DOCX, and `.tex` files. Erga copies the selected file 
 state before using it. The master is facts only: its page count, margins, typography, spacing,
 section order, and visual quality never affect the generated layout. The template command preserves
 the master and reads only section presence,
-order, density, project slots, and bullet capacity from the selected file. For PDF templates it also
-measures margins, body/header/section typography, small-caps treatment, line height, and item
-spacing. These visual constraints survive the one-page packing pass; template wording can never
-introduce résumé claims. To remove the style/custom template and return to Erga's default
+order, density, project slots, and the exact bullets-per-entry pattern from the selected file. For
+PDF templates it also measures each page margin, body/header/section typography, small-caps
+treatment, section-rule presence and weight, line height, bullet indentation, section gaps, entry
+gaps, and item spacing. These visual constraints survive the one-page packing pass; Erga does not
+stretch a supplied template's gaps to fill the page, and template wording can never introduce
+résumé claims. A template with one bullet per project therefore produces one bullet per selected
+project; a template with a two/three/two pattern preserves and repeats that pattern across selected
+approved entries. Observed section totals guide density rather than acting as hard quotas, so Erga
+can use additional approved projects when the master has fewer experiences than the style example.
+If the chosen template is intentionally spacious, its fixed geometry also takes precedence over
+Erga's default page-fill threshold. To remove the style/custom template and return to Erga's default
 Jake-style layout, run:
 
 ```bash

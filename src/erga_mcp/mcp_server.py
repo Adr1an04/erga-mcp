@@ -111,6 +111,7 @@ from .tracker_view import (
 from .versioning import capabilities
 from .web_scraping import extract_page, scrape_page
 
+_VISUAL_SPACING_MARKER = "% Erga visual spacing is template-controlled."
 _READ_ONLY = ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
 )
@@ -497,6 +498,7 @@ def _generated_density_trial(
     job_description: str,
     evidence: list[Evidence],
     section_item_limits: Mapping[str, int],
+    section_entry_item_limits: Mapping[str, tuple[int, ...]],
     config: ErgaConfig,
 ) -> tuple[bool, float]:
     """Render one generated-template content budget without model calls or persistent writes."""
@@ -513,6 +515,7 @@ def _generated_density_trial(
         require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
         max_pages=1,
         generated_section_item_limits=section_item_limits,
+        generated_section_entry_item_limits=section_entry_item_limits,
     )
     if automatic.constraint_violations:
         return False, 0
@@ -576,51 +579,108 @@ def _style_section_item_caps(resume_path: Path) -> dict[str, int]:
     }
 
 
-def _effective_style_item_caps(
-    style_caps: Mapping[str, int], item_counts: Mapping[str, int]
-) -> dict[str, int]:
-    """Preserve section allocations, transferring only capacity a master cannot use."""
-    effective = {
-        section: min(total, style_caps.get(section, total))
-        for section, total in item_counts.items()
+def _style_section_entry_item_caps(resume_path: Path) -> dict[str, tuple[int, ...]]:
+    """Read exact bullets-per-entry patterns from the active visual reference."""
+    metadata_path = resume_path.with_name("template.json")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(metadata, dict) or not metadata.get("style_sha256"):
+        return {}
+    style_profile = metadata.get("style_layout_profile")
+    if not isinstance(style_profile, dict):
+        return {}
+    raw_patterns = style_profile.get("section_entry_item_counts")
+    if not isinstance(raw_patterns, dict):
+        return {}
+    patterns: dict[str, tuple[int, ...]] = {}
+    for section, raw_counts in raw_patterns.items():
+        if not isinstance(raw_counts, list):
+            continue
+        counts = tuple(
+            count
+            for count in raw_counts
+            if isinstance(count, int) and not isinstance(count, bool) and count > 0
+        )
+        if counts:
+            patterns[str(section)] = counts
+    return patterns
+
+
+def _generated_section_entry_counts(resume_path: Path) -> dict[str, int]:
+    """Read the available semantic entry count from the generated factual template."""
+    metadata_path = resume_path.with_name("template.json")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(metadata, dict):
+        return {}
+    layout_profile = metadata.get("layout_profile")
+    if not isinstance(layout_profile, dict):
+        return {}
+    raw_patterns = layout_profile.get("section_entry_item_counts")
+    if not isinstance(raw_patterns, dict):
+        return {}
+    return {
+        str(section): sum(
+            isinstance(count, int) and not isinstance(count, bool) and count > 0 for count in counts
+        )
+        for section, counts in raw_patterns.items()
+        if isinstance(counts, list) and counts
     }
-    transferable = sum(
-        max(0, cap - item_counts.get(section, 0)) for section, cap in style_caps.items()
-    )
-    priorities = sorted(
-        effective,
-        key=lambda section: (
-            {"Projects": 0, "Experience": 1, "Education": 2}.get(section, 3),
-            section.casefold(),
-        ),
-    )
-    for section in priorities:
-        available = item_counts[section] - effective[section]
-        added = min(transferable, available)
-        effective[section] += added
-        transferable -= added
-        if not transferable:
-            break
-    return effective
 
 
-def _style_project_bullet_cap(resume_path: Path, *, project_count: int) -> int | None:
+def _repeat_entry_patterns(
+    patterns: Mapping[str, tuple[int, ...]], entry_counts: Mapping[str, int]
+) -> dict[str, tuple[int, ...]]:
+    """Repeat visual bullet patterns across the factual entries available to fill the page."""
+    return {
+        section: tuple(
+            pattern[index % len(pattern)] for index in range(entry_counts.get(section, 0))
+        )
+        for section, pattern in patterns.items()
+        if pattern and entry_counts.get(section, 0) > 0
+    }
+
+
+def _entry_limits_for_item_state(
+    patterns: Mapping[str, tuple[int, ...]], item_limits: Mapping[str, int]
+) -> dict[str, tuple[int, ...]]:
+    """Fit complete template-shaped entries inside one aggregate density-search state."""
+    fitted: dict[str, tuple[int, ...]] = {}
+    for section, pattern in patterns.items():
+        remaining = max(0, item_limits.get(section, 0))
+        counts: list[int] = []
+        for cap in pattern:
+            if remaining >= cap:
+                counts.append(cap)
+                remaining -= cap
+            else:
+                counts.append(0)
+        fitted[section] = tuple(counts)
+    return fitted
+
+
+def _style_project_bullet_limits(
+    resume_path: Path, *, project_count: int
+) -> tuple[int, ...] | None:
     if project_count < 1:
         return None
+    patterns = _style_section_entry_item_caps(resume_path)
+    project_pattern = patterns.get("Projects")
+    if project_pattern:
+        if len(project_pattern) >= project_count:
+            return project_pattern[:project_count]
+        return project_pattern + (project_pattern[-1],) * (project_count - len(project_pattern))
     style_counts = _style_section_item_caps(resume_path)
     style_projects = style_counts.get("Projects")
     if style_projects is None:
         return None
-    try:
-        generated_counts = generated_resume_item_counts(resume_path.read_text(encoding="utf-8"))
-    except OSError:
-        generated_counts = {}
-    generated_non_projects = sum(
-        count for section, count in generated_counts.items() if section != "Projects"
-    )
-    total_style_budget = sum(style_counts.values())
-    transferable_budget = max(style_projects, total_style_budget - generated_non_projects)
-    return max(1, (transferable_budget + project_count - 1) // project_count)
+    average = max(1, style_projects // project_count)
+    remainder = style_projects % project_count
+    return tuple(average + (1 if index < remainder else 0) for index in range(project_count))
 
 
 def _create_render_packed_automatic_resume_proposal(
@@ -650,7 +710,16 @@ def _create_render_packed_automatic_resume_proposal(
         "additional_project_quality_rejections": additional_project_quality_rejections,
     }
     item_counts = generated_resume_item_counts(resume_path.read_text(encoding="utf-8"))
-    style_caps = _style_section_item_caps(resume_path)
+    profile_path = (
+        resume_path
+        if resume_path.with_name("template.json").is_file()
+        else config.resume.template_path or resume_path
+    )
+    style_caps = _style_section_item_caps(profile_path)
+    style_entry_caps = _repeat_entry_patterns(
+        _style_section_entry_item_caps(profile_path),
+        _generated_section_entry_counts(profile_path),
+    )
     should_pack = (
         config.resume.max_pages == 1
         and bool(config.resume.minimum_page_fill_ratio)
@@ -660,23 +729,18 @@ def _create_render_packed_automatic_resume_proposal(
     if not should_pack:
         return create_automatic_resume_proposal(
             output_dir=output_dir,
+            generated_section_entry_item_limits=style_entry_caps,
             minimum_page_fill_ratio=(
                 config.resume.minimum_page_fill_ratio if spacing_fallback_requested else 0
             ),
             **common,
         )
 
-    state_item_counts = (
-        _effective_style_item_caps(style_caps, item_counts) if style_caps else item_counts
-    )
+    # The reference provides a visual target, not a hard factual-section quota. Search all
+    # approved content so a user with fewer experiences can fill the same geometry with projects,
+    # while the repeated per-entry pattern still controls one-vs-two-vs-three bullet styling.
+    state_item_counts = item_counts
     states = _generated_density_states(state_item_counts)
-    if style_caps:
-        total_style_budget = sum(style_caps.values())
-        bounded_states = tuple(
-            state for state in states if sum(state.values()) <= total_style_budget
-        )
-        if bounded_states:
-            states = bounded_states
     best_index = -1
     best_fill = 0.0
     with TemporaryDirectory(prefix="erga-generated-density-") as density_directory:
@@ -692,6 +756,9 @@ def _create_render_packed_automatic_resume_proposal(
                 job_description=job_description,
                 evidence=evidence,
                 section_item_limits=states[middle],
+                section_entry_item_limits=_entry_limits_for_item_state(
+                    style_entry_caps, states[middle]
+                ),
                 config=config,
             )
             trial_number += 1
@@ -704,16 +771,19 @@ def _create_render_packed_automatic_resume_proposal(
     if best_index < 0:
         raise ValueError("minimum approved resume content did not fit the one-page layout")
 
-    requires_spacing = best_fill < config.resume.minimum_page_fill_ratio
+    requires_spacing = not style_caps and best_fill < config.resume.minimum_page_fill_ratio
+    final_entry_limits = _entry_limits_for_item_state(style_entry_caps, states[best_index])
     automatic = create_automatic_resume_proposal(
         output_dir=output_dir,
         minimum_page_fill_ratio=(config.resume.minimum_page_fill_ratio if requires_spacing else 0),
         generated_section_item_limits=states[best_index],
+        generated_section_entry_item_limits=final_entry_limits,
         **common,
     )
     packing: dict[str, object] = {
         "agent_independent": True,
         "natural_page_fill_ratio": best_fill,
+        "section_entry_item_limits": final_entry_limits,
         "section_item_limits": states[best_index],
         "spacing_fallback": requires_spacing,
         "strategy": "fullest_valid_one_page_render",
@@ -746,16 +816,16 @@ def _select_rendered_project_bullet_density(
     if len(selected_candidates) != config.resume.project_count:
         raise ValueError("adaptive bullet density requires the exact selected project count")
 
-    style_cap = _style_project_bullet_cap(
+    style_limits = _style_project_bullet_limits(
         resume_path,
         project_count=config.resume.project_count,
     )
     density_candidates = (
         tuple(
-            limit_project_candidate_bullets(candidate, style_cap)
-            for candidate in selected_candidates
+            limit_project_candidate_bullets(candidate, style_limits[index])
+            for index, candidate in enumerate(selected_candidates)
         )
-        if style_cap is not None
+        if style_limits is not None
         else selected_candidates
     )
     counts = [1 for _ in density_candidates]
@@ -809,7 +879,11 @@ def _select_rendered_project_bullet_density(
             if not accepted_in_tier:
                 break
             tier += 1
-    return current, fill_ratio < config.resume.minimum_page_fill_ratio, fill_ratio
+    return (
+        current,
+        style_limits is None and fill_ratio < config.resume.minimum_page_fill_ratio,
+        fill_ratio,
+    )
 
 
 def _require_single_line_resume_layout(
@@ -1257,7 +1331,8 @@ def _compile_intake_proposal(
     minimum_page_fill_ratio: float = 0,
 ) -> IntakeValidationResult:
     """Compile, enforce page geometry constraints, and select the exact attachment PDF."""
-    structure_issues = semantic_resume_structure_issues(proposal_path.read_text(encoding="utf-8"))
+    proposal_source = proposal_path.read_text(encoding="utf-8")
+    structure_issues = semantic_resume_structure_issues(proposal_source)
     if structure_issues:
         return IntakeValidationResult(
             returncode=1,
@@ -1306,8 +1381,14 @@ def _compile_intake_proposal(
                 ),
             )
 
+    # A user-supplied visual reference may intentionally use more whitespace than Erga's default
+    # density target. Its fixed, measured gaps are authoritative, so page fill remains informative
+    # rather than a rejection gate after the render search has selected the fullest valid content.
+    effective_minimum_fill = (
+        0 if _VISUAL_SPACING_MARKER in proposal_source else minimum_page_fill_ratio
+    )
     page_fill_ratio: float | None = None
-    if minimum_page_fill_ratio:
+    if effective_minimum_fill:
         try:
             fill = pdf_page_fill(proposal_pdf)
         except ValueError as error:
@@ -1316,21 +1397,21 @@ def _compile_intake_proposal(
                 returncode=1,
                 pdf=None,
                 page_count=page_count,
-                minimum_page_fill_ratio=minimum_page_fill_ratio,
+                minimum_page_fill_ratio=effective_minimum_fill,
                 skipped=f"PDF page-fill validation failed: {error}",
             )
         page_fill_ratio = fill.fill_ratio
-        if page_fill_ratio < minimum_page_fill_ratio:
+        if page_fill_ratio < effective_minimum_fill:
             proposal_pdf.unlink(missing_ok=True)
             return IntakeValidationResult(
                 returncode=1,
                 pdf=None,
                 page_count=page_count,
                 page_fill_ratio=page_fill_ratio,
-                minimum_page_fill_ratio=minimum_page_fill_ratio,
+                minimum_page_fill_ratio=effective_minimum_fill,
                 skipped=(
                     f"Tailored resume fills {page_fill_ratio:.1%} of the page; required minimum "
-                    f"is {minimum_page_fill_ratio:.1%}."
+                    f"is {effective_minimum_fill:.1%}."
                 ),
             )
 
@@ -1342,7 +1423,7 @@ def _compile_intake_proposal(
         pdf=str(output_pdf),
         page_count=page_count,
         page_fill_ratio=page_fill_ratio,
-        minimum_page_fill_ratio=(minimum_page_fill_ratio or None),
+        minimum_page_fill_ratio=(effective_minimum_fill or None),
     )
 
 
