@@ -1,21 +1,31 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from erga_mcp.config import DEFAULT_CONFIG, load_config
 from erga_mcp.discord_backends import DiscordBackendName
 from erga_mcp.discord_bridge import (
+    ERGA_INK,
+    ERGA_LEAF,
+    ERGA_ORBIT_VIOLET,
+    ERGA_SUN,
     DiscordBridgeSettings,
     DiscordProcessRecord,
     _backend_environment,
     _backend_prompt,
+    _create_discord_client,
+    _progress_card,
     _record_matches_process,
+    _response_state,
+    _result_cards,
     build_backend_command,
     discord_status,
     is_authorized_discord_user,
@@ -30,6 +40,110 @@ from erga_mcp.discord_setup import parse_discord_identities
 
 
 class DiscordBridgeTests(unittest.TestCase):
+    def test_resume_progress_card_uses_erga_active_color_and_truthful_status(self) -> None:
+        card = _progress_card(
+            "make a résumé for https://jobs.example.test/role",
+            elapsed_seconds=42,
+        )
+
+        self.assertEqual(card.color, ERGA_ORBIT_VIOLET)
+        self.assertEqual(card.title, "✦ Tailoring your résumé")
+        self.assertIn("Evidence selection, tailoring, and validation", card.description)
+        self.assertEqual(card.fields[0].value, "Working through the one-page pipeline")
+        self.assertEqual(card.fields[1].value, "42s")
+        self.assertIn("no submission", card.fields[2].value)
+
+    def test_result_cards_use_semantic_orbit_colors(self) -> None:
+        success = _result_cards(
+            "Your validated PDF is ready at /private/resume.pdf",
+            resume_request=True,
+            elapsed_seconds=75,
+        )
+        warning = _result_cards(
+            "⚠️ Résumé not ready. Validation failed.",
+            resume_request=True,
+            elapsed_seconds=12,
+        )
+        neutral = _result_cards(
+            "Application tracker updated.", resume_request=False, elapsed_seconds=3
+        )
+
+        self.assertEqual(_response_state(success[0].description), "success")
+        self.assertEqual(success[0].color, ERGA_LEAF)
+        self.assertEqual(success[0].fields[1].value, "1m 15s")
+        self.assertEqual(warning[0].color, ERGA_SUN)
+        self.assertEqual(neutral[0].color, ERGA_INK)
+
+    def test_discord_turn_edits_one_progress_card_into_the_result(self) -> None:
+        class FakeIntents:
+            message_content = False
+
+            @classmethod
+            def default(cls) -> FakeIntents:
+                return cls()
+
+        class FakeEmbed:
+            def __init__(self, **kwargs: object) -> None:
+                self.title = kwargs["title"]
+                self.description = kwargs["description"]
+                self.color = kwargs["color"]
+                self.fields: list[dict[str, object]] = []
+                self.footer = ""
+
+            def add_field(self, **kwargs: object) -> None:
+                self.fields.append(kwargs)
+
+            def set_footer(self, *, text: str) -> None:
+                self.footer = text
+
+        class FakeClient:
+            def __init__(self, **_: object) -> None:
+                self.user = SimpleNamespace(id=777)
+
+        class Typing:
+            async def __aenter__(self) -> None:
+                return None
+
+            async def __aexit__(self, *_: object) -> None:
+                return None
+
+        fake_discord = SimpleNamespace(Intents=FakeIntents, Client=FakeClient, Embed=FakeEmbed)
+        status_message = SimpleNamespace(edit=AsyncMock())
+        reply = AsyncMock(return_value=status_message)
+        message = SimpleNamespace(
+            author=SimpleNamespace(id=123456789, name="student", bot=False),
+            guild=None,
+            mentions=[],
+            content="make a resume for https://jobs.example.test/role",
+            channel=SimpleNamespace(typing=lambda: Typing()),
+            reply=reply,
+        )
+
+        with (
+            patch("erga_mcp.discord_bridge._discord_module", return_value=fake_discord),
+            patch(
+                "erga_mcp.discord_bridge.run_backend",
+                return_value="Validated PDF ready at /private/resume.pdf",
+            ),
+        ):
+            client = _create_discord_client(
+                DiscordBridgeSettings(
+                    backend="codex",
+                    backend_command="/private/codex",
+                    project_dir=Path("/private/project"),
+                    allowed_user_ids=(123456789,),
+                )
+            )
+            asyncio.run(client.on_message(message))
+
+        first_embed = reply.await_args_list[0].kwargs["embed"]
+        final_embed = status_message.edit.await_args_list[-1].kwargs["embed"]
+        self.assertEqual(reply.await_count, 1)
+        self.assertEqual(first_embed.title, "✦ Tailoring your résumé")
+        self.assertEqual(first_embed.color, ERGA_ORBIT_VIOLET)
+        self.assertEqual(final_embed.title, "✓ Résumé ready for review")
+        self.assertEqual(final_embed.color, ERGA_LEAF)
+
     def test_backend_prompt_requires_canonical_validated_job_intake(self) -> None:
         prompt = _backend_prompt("make a resume for https://jobs.example.test/role")
 

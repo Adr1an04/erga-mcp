@@ -23,6 +23,7 @@ Message Content Intent, and invite it with only:
 
 - View Channels
 - Send Messages
+- Embed Links
 - Read Message History
 
 Then run:
@@ -81,6 +82,28 @@ Direct messages from trusted users are accepted. Server messages require an expl
 unless the owner knowingly disables that safeguard during configuration. Bot-authored messages
 are always ignored, only one backend turn runs at a time, incoming content is bounded, and long
 responses are split below Discord's message limit.
+
+## Live request experience and color system
+
+Erga acknowledges an accepted request immediately with one live Discord card. For résumé work, the
+card shows the evidence/tailoring/validation pipeline, a truthful current status, elapsed time, and
+the review-only safety boundary. It refreshes in place every 12 seconds while the local backend
+works, then becomes the final result card. This avoids both a silent multi-minute wait and a channel
+full of disposable progress messages. Long results continue in matching detail cards.
+
+The visual system follows a 60–30–10 hierarchy derived from Erga's existing wordmark, onboarding,
+and orbit mark:
+
+- **60% — Erga Ink (`#171717`)** comes from the wordmark and provides the structural foundation.
+- **30% — Orbit Violet (`#7C5CFF`)** identifies active work and live progress.
+- **10% — orbit accents** communicate outcomes: Leaf (`#83FE7F`) for validated/ready, Sun
+  (`#FEF17F`) for review-required, Coral (`#FE7F7F`) for a stopped turn, and Sky (`#7FC2FE`) for
+  continuation details.
+
+Discord owns the light or dark message canvas, so Erga applies this hierarchy to the embed rail,
+titles, fields, and status language rather than forcing a background color that may become
+unreadable in the user's theme. Progress text never claims a pipeline stage has completed unless
+Erga has actually returned the result.
 
 Résumé requests that contain a job URL are routed through Erga's canonical `intake_job_url`
 operation. The reasoning backend is instructed not to hand-edit generated files or invoke a PDF

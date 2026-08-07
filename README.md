@@ -226,6 +226,10 @@ the operating-system credential store, and never makes the selected backend a re
 Erga's local core. Codex-backed Discord turns run noninteractively with Codex approvals and
 sandboxing bypassed so write-capable Erga tools cannot be canceled while no terminal is present.
 They use ephemeral `gpt-5.6-terra` sessions, so turns do not share conversation memory.
+Accepted requests receive one live, in-place Erga card with elapsed time and honest workflow
+status; résumé cards become color-coded ready, review-required, or safely-stopped results when
+processing finishes. The palette follows Erga's documented 60–30–10 Ink, Orbit Violet, and
+semantic-accent system.
 Keep the bot private and the Discord allowlist minimal; the bridge can access everything available
 to its OS account. See the [Discord bridge guide](docs/discord.md).
 

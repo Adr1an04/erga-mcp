@@ -231,7 +231,7 @@ def configure_discord_interactive(
     questionary.print(
         "\nCreate a Discord application and bot at "
         "https://discord.com/developers/applications. Enable Message Content Intent, "
-        "then invite it with View Channels, Send Messages, and Read Message History.",
+        "then invite it with View Channels, Send Messages, Embed Links, and Read Message History.",
         style="fg:#e0aa55",
     )
     token = str(

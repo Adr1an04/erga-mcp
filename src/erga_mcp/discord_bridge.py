@@ -18,7 +18,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import keyring
 from keyring.errors import KeyringError, PasswordDeleteError
@@ -36,10 +36,22 @@ _PID_NAME = "discord-bridge-process.json"
 _LOG_NAME = "discord-bridge.log"
 _READY_NAME = "discord-bridge-ready.json"
 _MAX_DISCORD_MESSAGE = 1_900
+_MAX_EMBED_DESCRIPTION = 3_800
 _MAX_INCOMING_MESSAGE = 16_000
 _STARTUP_TIMEOUT_SECONDS = 20.0
 _STARTUP_POLL_SECONDS = 0.1
+_PROGRESS_REFRESH_SECONDS = 12.0
 _ALLOWED_ARGUMENT_FIELDS = ("{prompt}", "{project_dir}", "{output_path}")
+
+# Erga's 60–30–10 system: Ink is the structural foundation, Orbit Violet carries active states,
+# and the orbit colors are reserved for outcomes. Discord controls the canvas itself, so these
+# values appear in the embed rail and hierarchy instead of fighting the user's light/dark theme.
+ERGA_INK = 0x171717
+ERGA_ORBIT_VIOLET = 0x7C5CFF
+ERGA_CORAL = 0xFE7F7F
+ERGA_LEAF = 0x83FE7F
+ERGA_SUN = 0xFEF17F
+ERGA_SKY = 0x7FC2FE
 _BACKEND_ENVIRONMENT_ALLOWLIST = frozenset(
     {
         "APPDATA",
@@ -90,6 +102,22 @@ class DiscordProcessRecord:
     pid: int
     nonce: str
     config_path: str
+
+
+@dataclass(frozen=True)
+class DiscordCardField:
+    name: str
+    value: str
+    inline: bool = True
+
+
+@dataclass(frozen=True)
+class DiscordCard:
+    title: str
+    description: str
+    color: int
+    fields: tuple[DiscordCardField, ...] = ()
+    footer: str = "Private by default • Erga never submits applications"
 
 
 def settings_path(config_path: Path) -> Path:
@@ -455,12 +483,188 @@ def run_backend(settings: DiscordBridgeSettings, message: str) -> str:
 
 
 def split_discord_message(value: str) -> list[str]:
-    if not value:
-        return []
-    return [
-        value[index : index + _MAX_DISCORD_MESSAGE]
-        for index in range(0, len(value), _MAX_DISCORD_MESSAGE)
+    return _split_discord_text(value, limit=_MAX_DISCORD_MESSAGE)
+
+
+def _split_discord_text(value: str, *, limit: int) -> list[str]:
+    """Split Discord copy at a readable boundary, falling back to a hard safe limit."""
+    remaining = value.strip()
+    chunks: list[str] = []
+    while remaining:
+        if len(remaining) <= limit:
+            chunks.append(remaining)
+            break
+        boundary = max(remaining.rfind("\n", 0, limit + 1), remaining.rfind(" ", 0, limit + 1))
+        if boundary < limit // 2:
+            boundary = limit
+        chunks.append(remaining[:boundary].rstrip())
+        remaining = remaining[boundary:].lstrip()
+    return chunks
+
+
+def _is_resume_request(content: str) -> bool:
+    normalized = content.casefold()
+    return "resume" in normalized or "résumé" in normalized
+
+
+def _elapsed_label(elapsed_seconds: float) -> str:
+    seconds = max(0, round(elapsed_seconds))
+    minutes, seconds = divmod(seconds, 60)
+    return f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s"
+
+
+def _progress_card(content: str, *, elapsed_seconds: float = 0) -> DiscordCard:
+    resume_request = _is_resume_request(content)
+    if resume_request:
+        title = "✦ Tailoring your résumé"
+        description = (
+            "**● Request received**\n"
+            "**◌ Evidence selection, tailoring, and validation**\n"
+            "○ Review-ready PDF\n\n"
+            "Erga is working privately with your approved career evidence. Complex templates "
+            "can take a few minutes while each one-page candidate is rendered and checked."
+        )
+        status = (
+            "Running final layout checks"
+            if elapsed_seconds >= 120
+            else "Working through the one-page pipeline"
+            if elapsed_seconds >= 30
+            else "Starting a private résumé workspace"
+        )
+    else:
+        title = "✦ Erga is working"
+        description = (
+            "**● Request received**\n**◌ Private Erga turn in progress**\n○ Result ready for review"
+        )
+        status = "Working privately"
+    return DiscordCard(
+        title=title,
+        description=description,
+        color=ERGA_ORBIT_VIOLET,
+        fields=(
+            DiscordCardField("Status", status, inline=False),
+            DiscordCardField("Elapsed", _elapsed_label(elapsed_seconds)),
+            DiscordCardField("Boundary", "Review only • no submission"),
+        ),
+        footer="Erga Orbit • Private, evidence-backed, reviewable",
+    )
+
+
+def _response_state(response: str) -> Literal["success", "warning", "neutral"]:
+    normalized = response.casefold()
+    failure_markers = (
+        "résumé not ready",
+        "resume not ready",
+        "couldn’t safely create",
+        "couldn't safely create",
+        "could not complete",
+        "couldn’t create",
+        "couldn't create",
+        "validation failed",
+        "no validated pdf was produced",
+    )
+    if any(marker in normalized for marker in failure_markers) or normalized.startswith("⚠️"):
+        return "warning"
+    success_markers = ("résumé ready", "resume ready", "validated pdf", ".pdf")
+    if any(marker in normalized for marker in success_markers):
+        return "success"
+    return "neutral"
+
+
+def _result_cards(
+    response: str, *, resume_request: bool, elapsed_seconds: float
+) -> tuple[DiscordCard, ...]:
+    chunks = _split_discord_text(response, limit=_MAX_EMBED_DESCRIPTION)
+    if not chunks:
+        chunks = ["Erga completed the turn without a written result."]
+    state = _response_state(response)
+    if state == "success":
+        title = "✓ Résumé ready for review" if resume_request else "✓ Erga finished"
+        color = ERGA_LEAF
+        status = "Validated"
+    elif state == "warning":
+        title = "! Résumé needs attention" if resume_request else "! Erga needs attention"
+        color = ERGA_SUN
+        status = "Review required"
+    else:
+        title = "Erga finished"
+        color = ERGA_INK
+        status = "Complete"
+    cards = [
+        DiscordCard(
+            title=title,
+            description=chunks[0],
+            color=color,
+            fields=(
+                DiscordCardField("Status", status),
+                DiscordCardField("Completed in", _elapsed_label(elapsed_seconds)),
+            ),
+        )
     ]
+    cards.extend(
+        DiscordCard(
+            title=f"Details · {index}/{len(chunks)}",
+            description=chunk,
+            color=ERGA_SKY,
+            footer="Erga Orbit • Continued result",
+        )
+        for index, chunk in enumerate(chunks[1:], start=2)
+    )
+    return tuple(cards)
+
+
+def _failure_card(*, resume_request: bool, elapsed_seconds: float) -> DiscordCard:
+    return DiscordCard(
+        title="× Résumé generation stopped" if resume_request else "× Erga could not finish",
+        description=(
+            "Erga could not complete this request. Your local career data is unchanged. "
+            "Check the private bridge log for the technical details, then retry."
+        ),
+        color=ERGA_CORAL,
+        fields=(
+            DiscordCardField("Status", "Stopped safely"),
+            DiscordCardField("Elapsed", _elapsed_label(elapsed_seconds)),
+        ),
+    )
+
+
+def _discord_embed(discord: Any, card: DiscordCard) -> Any:
+    embed = discord.Embed(
+        title=card.title,
+        description=card.description,
+        color=card.color,
+        timestamp=datetime.now(UTC),
+    )
+    for field in card.fields:
+        embed.add_field(name=field.name, value=field.value, inline=field.inline)
+    embed.set_footer(text=card.footer)
+    return embed
+
+
+async def _refresh_progress_message(
+    status_message: Any,
+    *,
+    discord: Any,
+    content: str,
+    started: float,
+    completed: asyncio.Event,
+) -> None:
+    """Refresh one progress card without producing a stream of disposable Discord messages."""
+    while True:
+        try:
+            await asyncio.wait_for(completed.wait(), timeout=_PROGRESS_REFRESH_SECONDS)
+            return
+        except TimeoutError:
+            try:
+                await status_message.edit(
+                    embed=_discord_embed(
+                        discord,
+                        _progress_card(content, elapsed_seconds=time.monotonic() - started),
+                    )
+                )
+            except Exception as error:
+                print(f"Discord progress update failed: {error}", file=sys.stderr, flush=True)
+                return
 
 
 def is_authorized_discord_user(
@@ -536,18 +740,50 @@ def _create_discord_client(
                 content = content.replace(f"<@{self.user.id}>", "").strip()
             if not content:
                 return
-            async with message.channel.typing():
-                try:
+            started = time.monotonic()
+            completed = asyncio.Event()
+            resume_request = _is_resume_request(content)
+            status_message = await message.reply(
+                embed=_discord_embed(discord, _progress_card(content)),
+                mention_author=False,
+            )
+            progress_task = asyncio.create_task(
+                _refresh_progress_message(
+                    status_message,
+                    discord=discord,
+                    content=content,
+                    started=started,
+                    completed=completed,
+                )
+            )
+            try:
+                async with message.channel.typing():
                     async with self._backend_lock:
                         response = await asyncio.to_thread(run_backend, settings, content)
-                except Exception as error:
-                    print(f"Discord bridge turn failed: {error}", file=sys.stderr, flush=True)
-                    response = (
-                        "Erga could not complete that request. Check the private bridge log "
-                        "for details."
+            except Exception as error:
+                print(f"Discord bridge turn failed: {error}", file=sys.stderr, flush=True)
+                completed.set()
+                await progress_task
+                await status_message.edit(
+                    embed=_discord_embed(
+                        discord,
+                        _failure_card(
+                            resume_request=resume_request,
+                            elapsed_seconds=time.monotonic() - started,
+                        ),
                     )
-            for chunk in split_discord_message(response):
-                await message.reply(chunk, mention_author=False)
+                )
+                return
+            completed.set()
+            await progress_task
+            cards = _result_cards(
+                response,
+                resume_request=resume_request,
+                elapsed_seconds=time.monotonic() - started,
+            )
+            await status_message.edit(embed=_discord_embed(discord, cards[0]))
+            for card in cards[1:]:
+                await message.reply(embed=_discord_embed(discord, card), mention_author=False)
 
     return ErgaDiscordClient()
 
