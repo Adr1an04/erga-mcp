@@ -123,20 +123,21 @@ order, density, project slots, and the exact bullets-per-entry pattern from the 
 PDF templates it also measures each page margin, body/header/section typography, small-caps
 treatment, section-rule presence and weight, line height, entry inset, bullet-glyph size, label gap,
 bullet-text indentation, section gaps, entry gaps, and item spacing. These visual constraints survive
-the one-page packing pass; Erga does not
-stretch a supplied template's gaps to fill the page, and template wording can never introduce
-résumé claims. A template with one bullet per project therefore produces one bullet per selected
+the one-page packing pass, and template wording can never introduce résumé claims. Erga first uses
+all approved, layout-safe content that fits. If the resulting one-page PDF is still under the configured
+fill target, it adds only the measured amount of whitespace between completed semantic groups (never inside a line,
+bullet, margin, or measured base gap) so the page uses its vertical space without changing the template's
+typography or claims. A template with one bullet per project therefore produces one bullet per selected
 project; a template with a two/three/two pattern preserves and repeats that pattern across selected
 approved entries. Observed section totals guide density rather than acting as hard quotas, so Erga
 can use additional approved projects when the master has fewer experiences than the style example.
 Generated templates also enforce fit rules that do not depend on an AI host: contact details remain
 one centered row (scaling only when necessary), project dates reserve a right-hand column while a
-long title or technology list wraps on the left, and technical-skill labels reserve their own width
+long title wraps on the left, project technology stacks occupy their own single measured line (scaling
+only when necessary), and technical-skill labels reserve their own width
 so skill values wrap cleanly instead of crossing the right margin. Existing generated templates are
 refreshed automatically when this layout schema changes.
-If the chosen template is intentionally spacious, its fixed geometry also takes precedence over
-Erga's default page-fill threshold. To remove the style/custom template and return to Erga's default
-Jake-style layout, run:
+To remove the style/custom template and return to Erga's default Jake-style layout, run:
 
 ```bash
 uv run erga resume template reset

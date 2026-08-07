@@ -193,7 +193,7 @@ class ResumeTemplateTests(unittest.TestCase):
             generated = generate_latex_template(source, data_dir=root / "state")
             template = generated.path.read_text(encoding="utf-8")
 
-            self.assertIn("% Erga semantic resume template version: 17", template)
+            self.assertIn("% Erga semantic resume template version: 18", template)
             self.assertIn(r"\resumeEducationHeading{Example University}{Orlando, FL}", template)
             self.assertIn(r"\resumeEducationDetail{Bachelor of Science}{May 2027}", template)
             self.assertIn(
@@ -201,7 +201,7 @@ class ResumeTemplateTests(unittest.TestCase):
                 r"{Jan 2025 - Present}",
                 template,
             )
-            self.assertIn(r"\resumeProjectHeading{\textbf{Compiler Project}}{Feb 2026}", template)
+            self.assertIn(r"\resumeProjectHeading{\textbf{Compiler Project}}{}{Feb 2026}", template)
 
     def test_generated_template_keeps_header_dates_and_skill_rows_within_the_text_width(
         self,
@@ -234,9 +234,12 @@ class ResumeTemplateTests(unittest.TestCase):
             self.assertIn(r"\newcommand{\resumeContactLine}[1]", template)
             self.assertIn(r"\resizebox{\textwidth}{!}{#1}", template)
             self.assertIn(r"\resumeContactLine{\small \mbox{", template)
-            self.assertIn(r"\newcommand{\resumeProjectHeading}[2]", template)
+            self.assertIn(r"\NewDocumentCommand{\resumeProjectHeading}{m m g}", template)
             self.assertIn(r"p{0.78\linewidth}", template)
-            self.assertIn(r"\raggedright #1 & \mbox{#2}", template)
+            self.assertIn(r"\raggedright #1 & \mbox{#3}", template)
+            self.assertIn(r"\newcommand{\ergaProjectTechnologyLine}[1]", template)
+            self.assertIn(r"\resizebox{\linewidth}{!}{#1}", template)
+            self.assertIn(r"\multicolumn{2}{@{}l@{}}{\ergaProjectTechnologyLine{#2}}", template)
             self.assertIn(r"\newcommand{\resumeSkillRow}[2]", template)
             self.assertIn(
                 r"\parbox[t]{\dimexpr\linewidth-\ergaSkillLabelWidth-0.35em\relax}"
@@ -246,6 +249,12 @@ class ResumeTemplateTests(unittest.TestCase):
             self.assertIn(
                 r"\resumeSkillRow{Languages and Developer Tools}{Python, C++, TypeScript, "
                 r"JavaScript, Bash, Git, Docker, Kubernetes, GitHub Actions}",
+                template,
+            )
+            self.assertIn(
+                r"\resumeProjectHeading{\textbf{A Long Systems Project Title}}"
+                r"{\textit{Python, CUDA, Distributed Systems, Machine Learning, Observability}}"
+                r"{Summer 2027}",
                 template,
             )
 

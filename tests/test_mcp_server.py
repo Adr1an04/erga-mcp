@@ -269,6 +269,7 @@ class McpServerTests(unittest.TestCase):
                 {"Experience": 4, "Projects": 4},
             )
             self.assertEqual(packing["style_reference_item_budget"], 4)
+            self.assertTrue(packing["spacing_fallback"])
 
     def test_project_bullet_density_adds_supported_bullets_until_page_is_filled(self) -> None:
         with TemporaryDirectory() as directory:
@@ -402,7 +403,7 @@ class McpServerTests(unittest.TestCase):
                 )
 
             self.assertEqual([len(item.bullet_evidence_ids) for item in selected], [1, 2])
-            self.assertFalse(requires_spacing)
+            self.assertTrue(requires_spacing)
             self.assertEqual(fill_ratio, 0.65)
             self.assertEqual(trial.call_count, 2)
 
@@ -1935,7 +1936,7 @@ class McpServerTests(unittest.TestCase):
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
             self.assertTrue(result["tailoring_meaningful_change"])
             self.assertEqual(result["tailoring_changed_sections"], ["Experience"])
-            self.assertEqual(result["tailoring_version"], 26)
+            self.assertEqual(result["tailoring_version"], 27)
             self.assertEqual(result["git_project_research"], [])
             output_pdf = Path(result["validation"]["pdf"])
             self.assertEqual(output_pdf.name, "Candidate_Resume.pdf")
@@ -1944,7 +1945,7 @@ class McpServerTests(unittest.TestCase):
                 (Path(result["package_dir"]) / "package.json").read_text(encoding="utf-8")
             )
             self.assertTrue(manifest["tailoring"]["meaningful_change"])
-        self.assertEqual(manifest["tailoring"]["version"], 26)
+        self.assertEqual(manifest["tailoring"]["version"], 27)
 
     def test_rebuilds_an_incomplete_legacy_package_and_preserves_its_files(self) -> None:
         with TemporaryDirectory() as directory:
@@ -2013,7 +2014,7 @@ class McpServerTests(unittest.TestCase):
             )
             manifest = json.loads((repaired / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["legacy_backup"], "legacy-backup")
-            self.assertEqual(manifest["tailoring"]["version"], 26)
+            self.assertEqual(manifest["tailoring"]["version"], 27)
             self.assertIn("Legacy package preserved", result["integration_warnings"][-1])
 
     def test_compile_rejects_a_pdf_over_the_configured_page_cap(self) -> None:
@@ -2081,7 +2082,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("fills 67.0%", result.skipped or "")
             self.assertFalse(proposal.with_suffix(".pdf").exists())
 
-    def test_compile_accepts_the_fullest_page_when_visual_template_owns_spacing(self) -> None:
+    def test_compile_rejects_an_underfilled_visual_template_resume(self) -> None:
         with TemporaryDirectory() as directory:
             proposal = Path(directory) / "proposal.tex"
             proposal.write_text(
@@ -2102,7 +2103,10 @@ class McpServerTests(unittest.TestCase):
                     side_effect=compile_sparse_page,
                 ),
                 patch("erga_mcp.mcp_server.pdf_page_count", return_value=1),
-                patch("erga_mcp.mcp_server.pdf_page_fill") as page_fill,
+                patch(
+                    "erga_mcp.mcp_server.pdf_page_fill",
+                    return_value=SimpleNamespace(fill_ratio=0.67),
+                ),
             ):
                 result = _compile_intake_proposal(
                     proposal,
@@ -2112,10 +2116,10 @@ class McpServerTests(unittest.TestCase):
                     minimum_page_fill_ratio=0.82,
                 )
 
-            self.assertEqual(result.returncode, 0)
-            self.assertIsNone(result.minimum_page_fill_ratio)
-            self.assertFalse(page_fill.called)
-            self.assertTrue((proposal.parent / "Candidate_Resume.pdf").is_file())
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.minimum_page_fill_ratio, 0.82)
+            self.assertIn("fills 67.0%", result.skipped or "")
+            self.assertFalse((proposal.parent / "Candidate_Resume.pdf").is_file())
 
     def test_primary_intake_writes_research_application_and_multicycle_obsidian_note(self) -> None:
         with TemporaryDirectory() as directory:

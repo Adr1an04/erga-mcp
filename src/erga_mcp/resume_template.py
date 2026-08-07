@@ -21,7 +21,7 @@ from .resume_settings import update_settings
 from .resume_sources import ResumeSource, load_resume_source
 from .resume_tailoring import latex_to_text
 
-TEMPLATE_GENERATION_VERSION = 17
+TEMPLATE_GENERATION_VERSION = 18
 _PAGE_MARKER = re.compile(r"^\[Page \d+\]$")
 _BULLET_PREFIX = re.compile(r"^(?:[•●▪◦‣⁃*]|[-–—]\s)\s*")
 _SPACE = re.compile(r"\s+")
@@ -29,7 +29,7 @@ _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?;])\s+(?=[A-Z0-9])")
 _SECTION_KEY = re.compile(r"[^a-z0-9]+")
 _LAYOUT_INDENT_MARKER = "[[ERGA-LAYOUT-INDENT]]"
 _LAYOUT_COLUMN_MARKER = "[[ERGA-LAYOUT-COLUMN]]"
-_SEMANTIC_TEMPLATE_MARKER = "% Erga semantic resume template version: 17"
+_SEMANTIC_TEMPLATE_MARKER = "% Erga semantic resume template version: 18"
 _VISUAL_SPACING_MARKER = "% Erga visual spacing is template-controlled."
 _SECTION_ALIASES = {
     "activities": "Activities",
@@ -193,6 +193,14 @@ def _flatten_columns(line: str) -> str:
 def _split_columns(line: str) -> tuple[str, str]:
     left, separator, right = _plain_line(line).partition(_LAYOUT_COLUMN_MARKER)
     return left.strip(), right.strip() if separator else ""
+
+
+def _split_project_title_and_technologies(value: str) -> tuple[str, str]:
+    """Separate a project title from its visible technology stack when supplied."""
+    title, separator, technologies = value.partition(" | ")
+    if separator and title.strip() and technologies.strip():
+        return title.strip(), technologies.strip()
+    return value.strip(), ""
 
 
 def _is_layout_indented(line: str) -> bool:
@@ -816,12 +824,17 @@ def _render_grouped_section(name: str, lines: list[str]) -> list[str]:
                 category, category_right = _split_columns(detail)
                 rendered.append(
                     rf"\resumeProjectHeading{{\textit{{{_latex_escape(category)}}}}}"
-                    rf"{{{_latex_escape(category_right)}}}"
+                    rf"{{}}{{{_latex_escape(category_right)}}}"
                 )
             title = details[-1] if details else name
             title_left, title_right = _split_columns(title)
+            project_title, technologies = _split_project_title_and_technologies(title_left)
+            rendered_technologies = (
+                rf"\textit{{{_latex_escape(technologies)}}}" if technologies else ""
+            )
             rendered.append(
-                rf"\resumeProjectHeading{{\textbf{{{_latex_escape(title_left)}}}}}"
+                rf"\resumeProjectHeading{{\textbf{{{_latex_escape(project_title)}}}}}"
+                rf"{{{rendered_technologies}}}"
                 rf"{{{_latex_escape(title_right)}}}"
             )
         else:
@@ -839,7 +852,7 @@ def _render_grouped_section(name: str, lines: list[str]) -> list[str]:
             detail, detail_right = _split_columns(line)
             rendered.append(
                 rf"\resumeProjectHeading{{\textit{{{_latex_escape(detail)}}}}}"
-                rf"{{{_latex_escape(detail_right)}}}"
+                rf"{{}}{{{_latex_escape(detail_right)}}}"
             )
     else:
         for line in pending_details:
@@ -983,6 +996,8 @@ def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
         "\n"
         r"\usepackage{graphicx}"
         "\n"
+        r"\usepackage{xparse}"
+        "\n"
         r"\usepackage{titlesec}"
         "\n"
         r"\pagestyle{empty}"
@@ -1008,6 +1023,8 @@ def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
         r"\newlength{\ergaContactWidth}"
         "\n"
         r"\newlength{\ergaSkillLabelWidth}"
+        "\n"
+        r"\newlength{\ergaProjectTechnologyWidth}"
         "\n"
         r"\newcommand{\resumeContactLine}[1]{%"
         "\n"
@@ -1056,13 +1073,51 @@ def _render_template(master: ResumeSource, style: ResumeSource | None) -> str:
         r"\newcommand{\resumeSubheading}[4]{\item[] \textbf{#1}\hfill #2\\[-1pt]"
         r"\textit{#3}\hfill\textit{#4}}"
         "\n"
-        r"\newcommand{\resumeProjectHeading}[2]{%"
+        r"\newcommand{\ergaProjectTechnologyLine}[1]{%"
+        "\n"
+        r"  \settowidth{\ergaProjectTechnologyWidth}{#1}%"
+        "\n"
+        r"  \ifdim\ergaProjectTechnologyWidth>\linewidth"
+        "\n"
+        r"    \resizebox{\linewidth}{!}{#1}%"
+        "\n"
+        r"  \else #1\fi"
+        "\n"
+        r"}"
+        "\n"
+        r"\newcommand{\ergaLegacyProjectHeading}[2]{%"
         "\n"
         r"  \item[]\begin{tabular*}{\linewidth}{@{}p{0.78\linewidth}@{\extracolsep{\fill}}r@{}}"
         "\n"
         r"    \raggedright #1 & \mbox{#2}\\[-1pt]"
         "\n"
         r"  \end{tabular*}%"
+        "\n"
+        r"}"
+        "\n"
+        r"\newcommand{\ergaStructuredProjectHeading}[3]{%"
+        "\n"
+        r"  \item[]\begin{tabular*}{\linewidth}{@{}p{0.78\linewidth}@{\extracolsep{\fill}}r@{}}"
+        "\n"
+        r"    \raggedright #1 & \mbox{#3}\\[-1pt]"
+        "\n"
+        r"    \if\relax\detokenize{#2}\relax"
+        "\n"
+        r"    \else"
+        "\n"
+        r"      \multicolumn{2}{@{}l@{}}{\ergaProjectTechnologyLine{#2}}\\[-1pt]"
+        "\n"
+        r"    \fi"
+        "\n"
+        r"  \end{tabular*}%"
+        "\n"
+        r"}"
+        "\n"
+        r"\NewDocumentCommand{\resumeProjectHeading}{m m g}{%"
+        "\n"
+        r"  \IfNoValueTF{#3}{\ergaLegacyProjectHeading{#1}{#2}}"
+        "\n"
+        r"    {\ergaStructuredProjectHeading{#1}{#2}{#3}}%"
         "\n"
         r"}"
         "\n"
