@@ -89,14 +89,40 @@ separate model API key.
 
 Onboarding labels the master résumé as factual knowledge and a second, optional résumé as
 style-only. Use that second file only when you are confident it is a useful reference. A PDF page
-count prefills the maximum-page setting; section order and density are recorded as descriptive
-metadata, while the editable `.tex` template controls rendered layout. Reference wording can never
-authorize claims. The wizard also exposes page and bullet-length controls. Users may enter
+count prefills the maximum-page setting; section presence, order, repeatable content pools, and
+project slots become a private layout profile that drives the standalone `.tex` template and every
+later tailoring run. Erga generates that template from the master's approved text. Users may
+provide PDF or DOCX input without creating LaTeX. Reference wording can never authorize claims.
+The wizard also exposes page and bullet-length controls. Users may enter
 minimum/target/maximum character counts directly or paste one or two example bullets to calibrate
 those numbers. Example wording is discarded immediately and is never stored as evidence. The
 configured range is enforced when CLI or MCP workflows author new `\resumeItem{...}` bullets.
 Complete source context and derived style-reference metadata remain behind the explicit
 `career-private` profile; the recommended `career` profile does not receive either document.
+
+### Change or reset the résumé template
+
+Use another PDF, DOCX, or `.tex` résumé as a style template while keeping the master as the only
+factual source:
+
+```bash
+uv run erga resume sources import \
+  --master "/absolute/path/to/master-resume.pdf" \
+  --style "/absolute/path/to/preferred-template.pdf"
+```
+
+Erga reads section presence, order, density, and project slots from `--style`; wording from that
+file cannot introduce résumé claims. To remove the style/custom template and return to Erga's
+default Jake-style layout, run:
+
+```bash
+uv run erga resume template reset
+```
+
+Reset preserves the approved master résumé, evidence, and application history. It clears only the
+configured style/template pointers, generates a new private template from the master, and keeps
+the previous content-addressed template files recoverable. Use `--config /path/to/config.toml` with
+either command when not using the default configuration.
 
 By default Erga's private machine state is independent of any optional vault:
 
@@ -138,8 +164,12 @@ lead verbs, unsafe LaTeX, rendered overflow, and one-page PDFs whose text occupi
 configured page-height ratio (82% by default). Lead-verb uniqueness is required even for older
 configs that contain the former `false` default. Project bullet count is automatic rather than a
 setup choice: the model produces one bounded pool of up to four evidence-backed bullets per project,
-then local PDF trials begin with one bullet per project and add supported bullets until the page-fill
-target is met or the next addition would wrap or create a second page. Only remaining whitespace
+then local PDF trials begin with one bullet per project and add every supported bullet that still
+fits without wrapping or creating a second page, rather than stopping at the minimum fill threshold.
+PDF/DOCX-derived templates use the same agent-independent render search across semantic experience,
+project, open-source, and skills groups. Layout-preserving PDF extraction keeps wrapped source
+bullets attached to their headings, and a binary render search retains the fullest valid one-page
+content budget. Only remaining whitespace
 receives layout spacing, so the density pass spends no extra model tokens, rewrites no claims, and
 adds no filler text. The
 deterministic approved-copy path remains the fallback when sampling, GitHub, or a selected repository
@@ -168,13 +198,16 @@ gateway already manages Discord, connect Erga through MCP there instead of opera
 ```bash
 uv sync --extra discord
 uv run erga discord configure
-uv run erga discord start
+uv run erga discord connect
 ```
 
 The bridge supports the same presets plus an advanced custom argument array. It accepts current
 Discord usernames such as `emperor_sai` or stable numeric user IDs, stores the bot token only in
 the operating-system credential store, and never makes the selected backend a requirement for
-Erga's local core. See the [Discord bridge guide](docs/discord.md).
+Erga's local core. Codex-backed Discord turns run noninteractively with Codex approvals and
+sandboxing bypassed so write-capable Erga tools cannot be canceled while no terminal is present.
+Keep the bot private and the Discord allowlist minimal; the bridge can access everything available
+to its OS account. See the [Discord bridge guide](docs/discord.md).
 
 ### Add evidence and a draft application
 
@@ -239,7 +272,7 @@ The recommended `career` MCP profile includes:
 | `intake_job_url` | Research one job and build local review artifacts end to end |
 | `prepare_job_workspace` | Create a bounded local job package from a supplied URL |
 | `create_tailored_resume` | Create a proposal, diff, and evidence report |
-| `validate_tailored_resume` | Run the configured local LaTeX compiler |
+| `validate_tailored_resume` | Run the configured local compiler and enforce page-count and fill guarantees |
 | `propose_project_metrics` | Analyze one explicit local Git worktree for author-attributed engineering context and deterministic test-case, HTTP-route, and CLI-command scope; excludes generated assets, dependencies, locks, snapshots, docs, and data, and never promotes commit, file, language, or line counts into résumé claims |
 
 Private archive export, full writing-style source context, mail integration, Hermes monitors, and

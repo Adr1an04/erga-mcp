@@ -8,13 +8,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from erga_mcp.config import DEFAULT_CONFIG, load_config
 from erga_mcp.discord_backends import DiscordBackendName
 from erga_mcp.discord_bridge import (
     DiscordBridgeSettings,
     DiscordProcessRecord,
     _backend_environment,
+    _backend_prompt,
     _record_matches_process,
     build_backend_command,
+    discord_status,
     is_authorized_discord_user,
     load_discord_settings,
     resolve_backend_command,
@@ -27,6 +30,13 @@ from erga_mcp.discord_setup import parse_discord_identities
 
 
 class DiscordBridgeTests(unittest.TestCase):
+    def test_backend_prompt_requires_canonical_validated_job_intake(self) -> None:
+        prompt = _backend_prompt("make a resume for https://jobs.example.test/role")
+
+        self.assertIn("use intake_job_url as the canonical end-to-end operation", prompt)
+        self.assertIn("do not hand-edit proposal files", prompt)
+        self.assertIn("one-page fill check", prompt)
+
     def _settings(
         self,
         root: Path,
@@ -55,6 +65,32 @@ class DiscordBridgeTests(unittest.TestCase):
             self.assertNotIn("token", content.casefold())
             if os.name != "nt":
                 self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+
+    def test_load_migrates_the_previous_client_settings_schema(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.toml"
+            command = root / "codex"
+            command.write_text("", encoding="utf-8")
+            target = root / "discord-bridge.json"
+            target.write_text(
+                json.dumps(
+                    {
+                        "client": "codex",
+                        "client_command": str(command),
+                        "project_dir": str(root),
+                        "allowed_user_ids": [123],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            settings = load_discord_settings(config)
+            migrated = json.loads(target.read_text(encoding="utf-8"))
+
+            self.assertEqual(settings.backend, "codex")
+            self.assertEqual(migrated["backend"], "codex")
+            self.assertNotIn("client", migrated)
 
     def test_resolves_codex_bundled_inside_a_desktop_app(self) -> None:
         with TemporaryDirectory() as directory:
@@ -151,6 +187,9 @@ class DiscordBridgeTests(unittest.TestCase):
             )
 
             self.assertEqual(codex[1], "exec")
+            self.assertIn("--ephemeral", codex)
+            self.assertIn("--dangerously-bypass-approvals-and-sandbox", codex)
+            self.assertNotIn("workspace-write", codex)
             self.assertIn("--output-last-message", codex)
             self.assertIn("--print", claude)
             self.assertIn("acceptEdits", claude)
@@ -159,6 +198,12 @@ class DiscordBridgeTests(unittest.TestCase):
             self.assertIn("--allowed-mcp-server-names", gemini)
             self.assertIn("--approve-mcps", cursor)
             self.assertIn("--allow-tool=erga-mcp", copilot)
+
+            codex_probe = build_backend_command(
+                self._settings(root, "codex"), "prompt", output, probe=True
+            )
+            self.assertIn("--ephemeral", codex_probe)
+            self.assertIn("read-only", codex_probe)
 
     def test_backend_processes_receive_only_allowlisted_runtime_environment(self) -> None:
         with patch.dict(
@@ -323,6 +368,37 @@ class DiscordBridgeTests(unittest.TestCase):
                 return_value=command,
             ):
                 self.assertFalse(_record_matches_process(record))
+
+    def test_status_distinguishes_running_from_gateway_ready(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.toml"
+            config.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            write_discord_settings(config, self._settings(root))
+            data_dir = load_config(config).data_dir
+            data_dir.mkdir(parents=True)
+            record = DiscordProcessRecord(
+                pid=4321,
+                nonce="private-nonce",
+                config_path=str(config.absolute()),
+            )
+            (data_dir / "discord-bridge-process.json").write_text(
+                json.dumps(record.__dict__), encoding="utf-8"
+            )
+
+            with (
+                patch("erga_mcp.discord_bridge.os.kill"),
+                patch("erga_mcp.discord_bridge._record_matches_process", return_value=True),
+            ):
+                starting = discord_status(config)
+                (data_dir / "discord-bridge-ready.json").write_text(
+                    json.dumps({"pid": 4321}), encoding="utf-8"
+                )
+                ready = discord_status(config)
+
+            self.assertTrue(starting["running"])
+            self.assertFalse(starting["ready"])
+            self.assertTrue(ready["ready"])
 
     def test_settings_json_is_parseable(self) -> None:
         with TemporaryDirectory() as directory:

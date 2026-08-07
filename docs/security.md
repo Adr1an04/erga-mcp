@@ -69,6 +69,13 @@ login the user chose. The advanced custom backend receives a reviewed argument a
 required `{prompt}` placeholder; shell command strings are not accepted. Full backend errors stay
 in the owner-only local log and are not returned to Discord.
 
+The Codex backend deliberately launches accepted messages with
+`--dangerously-bypass-approvals-and-sandbox`. This prevents local-write Erga MCP calls from being
+canceled when the unattended process cannot answer a prompt, but it also gives that turn the
+permissions of the OS account running the bridge. Treat the Discord allowlist as remote access to
+that account. Codex bridge probes and accepted turns also use `--ephemeral`; their session rollout
+files are not persisted and later Discord messages cannot resume them.
+
 Background process records contain a random nonce. Status and stop operations compare that nonce,
 the exact private config path, and the bridge module against the live process command before
 signaling it. A stale or reused PID is removed without killing the unrelated process.
@@ -105,7 +112,7 @@ The server declares tool annotations so MCP clients can distinguish its capabili
 | `install_mail_monitor_scripts` | local-write | Writes deterministic, credential-free runner scripts for an explicitly configured Hermes profile. |
 | `export_data` | local-read + local-write | Creates an explicit private ZIP containing local records and generated job packages. |
 
-No MCP tool creates remote applications, approves evidence, connects to mail, sends a message, mutates remote mail, or submits a job. Local-write and local-exec tools require explicit user approval in the invoking client. Enabling the optional Hermes job-link router establishes a narrower standing rule: a recognized job link in the current user message is explicit authorization for `intake_job_url` to create local review artifacts. The router respects explicit opt-outs such as “summarize only” and “don't run the pipeline”; a request such as “don't just summarize—run the pipeline” is affirmative authorization. The rule grants no authority for submissions, messages, remote résumé changes, or other tools.
+No MCP tool creates remote applications, approves evidence, connects to mail, sends a message, mutates remote mail, or submits a job. Interactive clients may require explicit approval for local-write and local-exec tools. The native Discord bridge instead treats an accepted message from an allowlisted identity as authorization for the requested local Erga work because it cannot display an approval prompt. Enabling the optional Hermes job-link router establishes a narrower standing rule: a recognized job link in the current user message is explicit authorization for `intake_job_url` to create local review artifacts. The router respects explicit opt-outs such as “summarize only” and “don't run the pipeline”; a request such as “don't just summarize—run the pipeline” is affirmative authorization. Neither path grants authority for submissions, messages, remote résumé changes, or other tools.
 
 The router requires Hermes Agent 0.18.2 or newer and calls the documented synchronous
 `ctx.dispatch_tool(name, args)` interface. During gateway startup it may retry only the exact

@@ -546,12 +546,6 @@ def fetch_job_snapshot(job_url: str) -> str:
 
     Direct pinned sockets intentionally ignore ambient HTTP proxy variables for SSRF safety.
     """
-    parsed = urlsplit(job_url)
-    path_parts = [part.casefold() for part in parsed.path.split("/") if part]
-    if not path_parts or path_parts[0] in {"namespace", "namespaces", "assets", "static"}:
-        raise ValueError(
-            "job URL must point to a specific job posting, not a homepage or site resource"
-        )
     page = fetch_public_page(job_url)
     text = build_job_snapshot(page)
     if _is_shopify_careers_url(job_url):

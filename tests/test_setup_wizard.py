@@ -27,6 +27,36 @@ from erga_mcp.store import ErgaStore
 
 
 class SetupWizardTests(unittest.TestCase):
+    def test_core_setup_infers_non_project_resume_capabilities(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master = root / "experience-only.tex"
+            master.write_text(
+                r"""\section{Experience}
+\resumeItem{Built an approved synthetic service.}
+\section{Technical Skills}
+Languages: Python
+""",
+                encoding="utf-8",
+            )
+
+            selections = CoreSetupSelections(
+                config_path=root / "private" / "config.toml",
+                master_resume=master,
+            )
+            apply_core_setup(selections)
+            config = load_config(selections.config_path)
+
+            self.assertEqual(
+                config.resume.editable_sections,
+                ("Experience", "Technical Skills"),
+            )
+            self.assertEqual(config.resume.project_selection_mode, "template_only")
+            self.assertNotIn(
+                r"\section{Projects}",
+                config.resume.template_path.read_text(encoding="utf-8"),  # type: ignore[union-attr]
+            )
+
     def test_core_setup_is_ready_without_obsidian_or_an_external_client(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

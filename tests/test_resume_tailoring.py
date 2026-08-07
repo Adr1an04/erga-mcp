@@ -23,6 +23,7 @@ from erga_mcp.resume_tailoring import (
     create_automatic_resume_proposal,
     pdf_page_count,
     pdf_page_fill,
+    semantic_resume_structure_issues,
 )
 
 _TEMPLATE = r"""
@@ -112,7 +113,65 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 18)
+        self.assertEqual(TAILORING_VERSION, 22)
+
+    def test_semantic_layout_gate_rejects_flattened_generated_resume(self) -> None:
+        flattened = r"""
+% Erga semantic resume template version: 8
+\begin{document}
+\begin{center}\Large Synthetic Candidate\end{center}
+\section{Education}
+Synthetic University
+\section{Experience}
+\resumeItem{Built a verified synthetic service.}
+\section{Projects}
+\resumeItem{Created project one.}
+\resumeItem{Created project two.}
+\resumeItem{Created project three.}
+\resumeItem{Created project four.}
+\section{Technical Skills}
+% No approved skills were extracted from the master resume.
+\end{document}
+"""
+
+        issues = semantic_resume_structure_issues(flattened)
+
+        self.assertIn("education heading hierarchy is missing", issues)
+        self.assertIn("experience subheadings are missing", issues)
+        self.assertIn("projects subheadings are missing", issues)
+        self.assertIn("projects were flattened into too few semantic groups", issues)
+        self.assertIn("projects bullet structure is missing", issues)
+        self.assertIn("technical skills rows are missing", issues)
+
+    def test_semantic_layout_gate_accepts_structured_generated_resume(self) -> None:
+        structured = r"""
+% Erga semantic resume template version: 8
+\begin{document}
+\begin{center}\LARGE Synthetic Candidate\end{center}
+\section{Education}
+\resumeEducationHeading{Synthetic University}{Example, CO}
+\section{Experience}
+\resumeSubheading{Engineer}{Remote}{Synthetic Lab}{2026}
+\resumeItemListStart
+\resumeItem{Built a verified synthetic service.}
+\resumeItemListEnd
+\section{Projects}
+\resumeProjectHeading{\textbf{One}}{}
+\resumeItemListStart
+\resumeItem{Created project one.}
+\resumeItem{Created project two.}
+\resumeItemListEnd
+\resumeProjectHeading{\textbf{Two}}{}
+\resumeItemListStart
+\resumeItem{Created project three.}
+\resumeItem{Created project four.}
+\resumeItemListEnd
+\section{Technical Skills}
+\textbf{Languages:} Python, C++ \\
+\end{document}
+"""
+
+        self.assertEqual(semantic_resume_structure_issues(structured), ())
 
     def test_adaptive_page_fill_is_template_agnostic_and_idempotent(self) -> None:
         compact = _SPARSE_TEMPLATE.replace("[10pt]", "[9pt]")

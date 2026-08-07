@@ -18,10 +18,12 @@ from .cover_letter_settings import as_json as cover_letter_settings_as_json
 from .cover_letter_settings import update_settings as update_cover_letter_settings
 from .cron_setup import install_hermes_monitor_scripts
 from .discord_bridge import (
+    connect_discord_bridge,
     discord_status,
     run_discord_bridge,
     start_discord_bridge,
     stop_discord_bridge,
+    store_discord_token,
 )
 from .discord_setup import (
     collect_optional_discord,
@@ -74,6 +76,7 @@ from .resume_sources import (
     resume_source_context,
     snapshot_resume_source,
 )
+from .resume_template import ensure_resume_template, reset_resume_template
 from .setup_wizard import (
     WizardCancelled,
     apply_core_setup,
@@ -187,9 +190,11 @@ def _parser() -> argparse.ArgumentParser:
     discord_configure.add_argument("--project-dir", type=Path, default=Path.cwd())
     for name, help_text in (
         ("run", "run the configured Discord bridge in the foreground"),
-        ("start", "start the configured Discord bridge in the background"),
+        ("connect", "reconnect using the existing Discord and coding-host setup"),
+        ("start", "start the configured Discord bridge and wait for readiness"),
         ("status", "show whether the optional Discord bridge is configured and running"),
         ("stop", "stop the recorded background Discord bridge"),
+        ("set-token", "replace the saved Discord bot token without rerunning setup"),
     ):
         discord_command = discord_commands.add_parser(name, help=help_text)
         _config_argument(discord_command)
@@ -339,6 +344,21 @@ def _parser() -> argparse.ArgumentParser:
     _config_argument(resume_validate)
     resume_validate.add_argument("--proposal", type=Path, required=True)
     resume_validate.add_argument("--latexmk", type=Path, default=Path("latexmk"))
+    resume_template = resume_commands.add_parser(
+        "template", help="generate or inspect the private editable LaTeX template"
+    )
+    resume_template_commands = resume_template.add_subparsers(
+        dest="resume_template_command", required=True
+    )
+    resume_template_ensure = resume_template_commands.add_parser(
+        "ensure", help="generate or reuse a template from the approved master"
+    )
+    _config_argument(resume_template_ensure)
+    resume_template_reset = resume_template_commands.add_parser(
+        "reset",
+        help="clear the style/custom template and regenerate Erga's default Jake-style template",
+    )
+    _config_argument(resume_template_reset)
     resume_settings = resume_commands.add_parser("settings", help="manage generic resume settings")
     resume_settings_commands = resume_settings.add_subparsers(
         dest="resume_settings_command", required=True
@@ -697,10 +717,18 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 return 0
             if args.discord_command == "run":
                 return run_discord_bridge(args.config)
-            if args.discord_command == "start":
+            if args.discord_command == "connect":
+                _print_json(connect_discord_bridge(args.config))
+            elif args.discord_command == "start":
                 _print_json(start_discord_bridge(args.config))
             elif args.discord_command == "stop":
                 _print_json(stop_discord_bridge(args.config))
+            elif args.discord_command == "set-token":
+                token = getpass.getpass(
+                    "Discord bot token (stored only in the OS credential store): "
+                )
+                store_discord_token(args.config, token)
+                _print_json({"stored": "OS credential store"})
             else:
                 _print_json(discord_status(args.config))
             return 0
@@ -1063,13 +1091,31 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 "reference_path": str(style_source.path) if style_source is not None else "",
             },
         )
+        template_path = ensure_resume_template(args.config)
         _print_json(
             {
                 "evidence_id": evidence.id,
                 "master_path": str(settings.master_path),
                 "style_path": str(settings.reference_path) if settings.reference_path else None,
+                "template_path": str(template_path),
             }
         )
+        return 0
+    if args.command == "resume" and args.resume_command == "template":
+        if args.resume_template_command == "reset":
+            master_path = load_config(args.config).resume.master_path
+            template_path = reset_resume_template(args.config)
+            _print_json(
+                {
+                    "master_path": str(master_path),
+                    "reset": True,
+                    "style_path": None,
+                    "template_path": str(template_path),
+                }
+            )
+            return 0
+        template_path = ensure_resume_template(args.config)
+        _print_json({"generated_or_reused": True, "template_path": str(template_path)})
         return 0
     if args.command == "resume" and args.resume_command == "create-package":
         package = create_job_package(
@@ -1083,7 +1129,10 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if args.command == "resume" and args.resume_command == "tailor":
         settings = load_config(args.config).resume
         if settings.template_path is None:
-            raise ValueError("resume template_path must be configured before tailoring")
+            ensure_resume_template(args.config)
+            settings = load_config(args.config).resume
+        if settings.template_path is None:
+            raise ValueError("resume template could not be generated from the approved master")
         if args.section.casefold() not in {item.casefold() for item in settings.editable_sections}:
             raise ValueError("requested section is not configured as editable")
         proposal = create_section_resume_proposal(

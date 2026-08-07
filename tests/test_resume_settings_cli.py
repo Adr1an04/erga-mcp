@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.cli import main
+from erga_mcp.config import load_config
 from erga_mcp.resume_settings import update_settings
 
 
@@ -145,6 +146,55 @@ class ResumeSettingsCliTests(unittest.TestCase):
             self.assertEqual(
                 context["style_reference"]["observed_section_order"],  # type: ignore[index]
                 ["Education", "Experience", "Projects"],
+            )
+
+    def test_resets_to_default_template_without_replacing_the_master(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            master = root / "master.tex"
+            style = root / "style.tex"
+            master.write_text(
+                "Jane Candidate\nExperience\nBuilt an approved service.\n",
+                encoding="utf-8",
+            )
+            style.write_text("Projects\nTechnical Skills\n", encoding="utf-8")
+            main(["init", "--config", str(config_path)])
+            self._json_command(
+                [
+                    "resume",
+                    "sources",
+                    "import",
+                    "--config",
+                    str(config_path),
+                    "--master",
+                    str(master),
+                    "--style",
+                    str(style),
+                ]
+            )
+            before = load_config(config_path).resume
+            assert before.master_path is not None
+            assert before.template_path is not None
+            managed_master = before.master_path
+            previous_template = before.template_path
+
+            result = self._json_command(
+                ["resume", "template", "reset", "--config", str(config_path)]
+            )
+            after = load_config(config_path).resume
+
+            self.assertTrue(result["reset"])
+            self.assertEqual(result["master_path"], str(managed_master))
+            self.assertIsNone(result["style_path"])
+            self.assertEqual(after.master_path, managed_master)
+            self.assertIsNone(after.reference_path)
+            self.assertNotEqual(after.template_path, previous_template)
+            self.assertTrue(previous_template.is_file())
+            self.assertTrue(after.template_path.is_file())  # type: ignore[union-attr]
+            self.assertIn(
+                "% Erga semantic resume template version:",
+                after.template_path.read_text(encoding="utf-8"),  # type: ignore[union-attr]
             )
 
     def test_creates_a_package_using_the_configured_output_root(self) -> None:

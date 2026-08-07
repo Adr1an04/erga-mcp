@@ -14,6 +14,10 @@ project_inventory_path = "projects.json"
 project_count = 4
 ```
 
+`erga setup` infers `project_count` from an explicit style/template résumé. Without one, Erga uses
+up to four project slots for its default one-page layout. If the inferred layout has no Projects
+section, project selection is disabled rather than adding that section.
+
 When `project_inventory_path` is empty or absent, Erga keeps the legacy reorder-only behavior.
 
 ## Inventory format

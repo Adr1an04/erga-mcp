@@ -68,18 +68,33 @@ uv run erga discord run --config ~/.config/erga-mcp/config.toml
 Then use the optional background lifecycle:
 
 ```bash
-uv run erga discord start --config ~/.config/erga-mcp/config.toml
+uv run erga discord connect --config ~/.config/erga-mcp/config.toml
 uv run erga discord status --config ~/.config/erga-mcp/config.toml
 uv run erga discord stop --config ~/.config/erga-mcp/config.toml
 ```
+
+`connect` reuses the existing settings and keyring token after a restart and returns only after the
+Discord gateway reports ready. If Discord rotates the token, run `erga discord set-token` and
+connect again; full setup is unnecessary.
 
 Direct messages from trusted users are accepted. Server messages require an explicit bot mention
 unless the owner knowingly disables that safeguard during configuration. Bot-authored messages
 are always ignored, only one backend turn runs at a time, incoming content is bounded, and long
 responses are split below Discord's message limit.
 
+Résumé requests that contain a job URL are routed through Erga's canonical `intake_job_url`
+operation. The reasoning backend is instructed not to hand-edit generated files or invoke a PDF
+renderer directly, and it may report a PDF as ready only after Erga's one-page fill validation
+succeeds. The same rule is injected for every supported reasoning backend.
+
 Private runtime settings live beside Erga's private config. Logs and the nonce-bearing background
 process record live in Erga's owner-only data directory.
+
+Codex-backed turns use `--dangerously-bypass-approvals-and-sandbox` because a background process
+cannot answer MCP approval prompts. An allowlisted Discord identity therefore has the permissions
+of the OS account running Erga, not merely access to the configured project. Use a private bot and
+the smallest possible allowlist. Each invocation also uses `--ephemeral`, so Codex does not persist
+session rollout files and no Discord turn is resumed by a later message.
 
 ## Failure boundaries
 

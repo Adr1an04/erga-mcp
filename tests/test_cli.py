@@ -17,6 +17,59 @@ from erga_mcp.store import ErgaStore
 
 
 class CliTests(unittest.TestCase):
+    def test_resume_template_ensure_reports_generated_or_reused_path(self) -> None:
+        output = StringIO()
+        template = Path("/private/generated/resume.tex")
+
+        with (
+            patch("erga_mcp.cli.ensure_resume_template", return_value=template) as ensure,
+            redirect_stdout(output),
+        ):
+            exit_code = main(["resume", "template", "ensure"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            json.loads(output.getvalue()),
+            {"generated_or_reused": True, "template_path": str(template)},
+        )
+        ensure.assert_called_once()
+
+    def test_discord_connect_reuses_existing_setup(self) -> None:
+        output = StringIO()
+        connected = {
+            "configured": True,
+            "running": True,
+            "ready": True,
+            "pid": 4321,
+            "log_path": "/private/discord.log",
+        }
+
+        with (
+            patch("erga_mcp.cli.connect_discord_bridge", return_value=connected) as connect,
+            redirect_stdout(output),
+        ):
+            exit_code = main(["discord", "connect"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(output.getvalue()), connected)
+        connect.assert_called_once()
+
+    def test_discord_token_can_be_replaced_without_rerunning_setup(self) -> None:
+        output = StringIO()
+
+        with (
+            patch("erga_mcp.cli.getpass.getpass", return_value="replacement") as prompt,
+            patch("erga_mcp.cli.store_discord_token") as store,
+            redirect_stdout(output),
+        ):
+            exit_code = main(["discord", "set-token"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(output.getvalue()), {"stored": "OS credential store"})
+        prompt.assert_called_once()
+        store.assert_called_once()
+        self.assertNotIn("replacement", output.getvalue())
+
     def test_init_creates_a_non_secret_config_and_local_database(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config" / "config.toml"

@@ -38,6 +38,7 @@ DISCORD_BACKENDS: dict[DiscordBackendName, DiscordBackend] = {
         status_arguments=("login", "status"),
         probe_arguments=(
             "exec",
+            "--ephemeral",
             "--cd",
             "{project_dir}",
             "--sandbox",
@@ -51,10 +52,10 @@ DISCORD_BACKENDS: dict[DiscordBackendName, DiscordBackend] = {
         ),
         run_arguments=(
             "exec",
+            "--ephemeral",
             "--cd",
             "{project_dir}",
-            "--sandbox",
-            "workspace-write",
+            "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
             "--color",
             "never",

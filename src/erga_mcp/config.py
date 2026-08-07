@@ -16,6 +16,7 @@ vault_path = ""
 [resume]
 # Configure these per template. Empty/zero values mean no constraint has been selected yet.
 # The master is approved factual knowledge; the reference contributes layout metadata only.
+# template_path may be omitted; Erga generates a private standalone LaTeX template from the master.
 master_path = ""
 template_path = ""
 reference_path = ""

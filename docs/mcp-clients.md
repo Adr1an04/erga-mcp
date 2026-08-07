@@ -124,6 +124,11 @@ ERGA_MCP_CONFIG = "/absolute/path/to/erga-mcp-config.toml"
 ERGA_MCP_TOOL_PROFILE = "career"
 ```
 
+Interactive Codex sessions keep their configured write approvals. The optional native Discord
+bridge is different: accepted messages run `codex exec` with
+`--dangerously-bypass-approvals-and-sandbox` because no terminal is present to approve Erga's
+write-capable tools. Use a private bot and a minimal allowlist.
+
 ## VS Code
 
 Create or update `.vscode/mcp.json` (or the user `mcp.json`) through **MCP: Add Server**:

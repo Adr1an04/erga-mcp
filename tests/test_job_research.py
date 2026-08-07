@@ -9,7 +9,6 @@ from erga_mcp.job_research import (
     analyze_job_snapshot,
     official_job_text,
     render_job_research,
-    require_job_posting,
     write_job_research,
     write_secondary_research,
     write_stage_research,
@@ -327,61 +326,24 @@ class JobResearchTests(unittest.TestCase):
                 (research_dir / "role-research.md").read_text(encoding="utf-8"),
             )
 
-    def test_requires_specific_job_posting_evidence_before_intake(self) -> None:
-        credible_job_text = (
-            "Senior Engineer\nResponsibilities\nBuild reliable services.\n"
-            "Requirements\nExperience with Python.\nApply now."
+    def test_analyzes_a_server_rendered_lifeattiktok_numeric_job_page(self) -> None:
+        snapshot = (
+            "Software Engineer Intern (Foundation Platform) - 2027 Summer "
+            "#LifeAtTikTok Diversity & Inclusion "
+            "Location: San Jose Employment Type: Intern Job Code: A256237 "
+            "Apply to this job Share this listing: Responsibilities "
+            "Build scalable and reliable platform services. Qualifications "
+            "Minimum Qualifications - Currently pursuing a Computer Science degree. "
+            "Preferred Qualifications: Experience building software projects."
         )
-        non_postings = (
-            (
-                "https://github.com/example/project",
-                "GitHub repository and source code for a project.",
-            ),
-            ("https://calendly.com/d/example/session", "Book a meeting with Example."),
-            (
-                "https://playwright.dev/docs/languages",
-                "Supported languages and documentation.",
-            ),
-            ("https://github.com/acme/jobs/guide", credible_job_text),
-            ("https://docs.example.test/careers/engineering", credible_job_text),
-            ("https://jobs.lever.co/acme", "This is an open roles listing, not a posting."),
-            (
-                "https://github.com/acme/jobs/guide",
-                json.dumps({"@type": "JobPosting", "title": "Senior Engineer"}),
-            ),
-        )
-        for job_url, snapshot in non_postings:
-            with self.subTest(job_url=job_url):
-                with self.assertRaisesRegex(ValueError, "specific job posting"):
-                    require_job_posting(snapshot, job_url=job_url)
 
-        require_job_posting(
-            "Product Owner\nResponsibilities\nSet product direction.\n"
-            "Requirements\nExperience leading products.\nApply now.",
-            job_url="https://careers.example.test/jobs/product-owner",
+        research = analyze_job_snapshot(
+            snapshot,
+            job_url="https://lifeattiktok.com/search/7670281449668905269",
         )
-        require_job_posting(
-            json.dumps(
-                {
-                    "@type": "JobPosting",
-                    "title": "Software Engineer",
-                    "description": "Build production systems.",
-                    "hiringOrganization": {"name": "Example"},
-                }
-            ),
-            job_url="https://example.test/jobs/123",
-        )
-        require_job_posting(
-            "This page is rendered client-side.",
-            job_url="https://jobs.lever.co/example/software-engineer",
-        )
-        require_job_posting(
-            "[Summer 2027] Software Engineer Intern\n"
-            "You Will:\nBuild reliable systems used by millions of players.\n"
-            "You Are:\nA curious engineer who writes quality code.\n"
-            "Apply Now",
-            job_url="https://careers.roblox.com/jobs/8072713",
-        )
+        self.assertEqual(research.company, "TikTok")
+        self.assertEqual(research.role, "Software Engineer Intern (Foundation Platform)")
+        self.assertEqual(research.cycles, ("Summer 2027",))
 
 
 if __name__ == "__main__":

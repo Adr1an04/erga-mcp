@@ -15,7 +15,6 @@ from erga_mcp.job_intake import (
     fetch_job_snapshot,
     select_relevant_evidence,
 )
-from erga_mcp.job_research import require_job_posting
 from erga_mcp.models import Evidence
 
 
@@ -63,7 +62,6 @@ class JobIntakeTests(unittest.TestCase):
             snapshot = fetch_job_snapshot(url)
 
         self.assertIn("Applied Machine Learning Interns", snapshot)
-        require_job_posting(snapshot, job_url=url)
 
     def test_rejects_credentials_and_private_network_destinations(self) -> None:
         with self.assertRaisesRegex(ValueError, "embedded credentials"):

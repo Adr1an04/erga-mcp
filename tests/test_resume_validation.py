@@ -92,6 +92,41 @@ class ResumeValidationTests(unittest.TestCase):
 
             self.assertEqual(resolved, latexmk)
 
+    def test_falls_back_to_tectonic_when_default_latexmk_is_unavailable(self) -> None:
+        tectonic = "/opt/tools/tectonic"
+
+        def which(command: str) -> str | None:
+            return tectonic if command == "tectonic" else None
+
+        with (
+            patch("erga_mcp.resume.sys.platform", "linux"),
+            patch("erga_mcp.resume.shutil.which", side_effect=which),
+        ):
+            resolved = resolve_latexmk_executable(Path("latexmk"))
+
+        self.assertEqual(resolved, Path(tectonic))
+
+    def test_tectonic_uses_its_native_non_shell_compilation_arguments(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            proposal = root / "proposal.tex"
+            proposal.write_text("\\begin{document}ok\\end{document}\n", encoding="utf-8")
+            tectonic = root / "tectonic"
+            tectonic.write_text("synthetic compiler", encoding="utf-8")
+            completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+
+            with (
+                patch("erga_mcp.resume.shutil.which", return_value=str(tectonic)),
+                patch("erga_mcp.resume.subprocess.run", return_value=completed) as run,
+            ):
+                result = validate_latex_proposal(proposal, latexmk=Path("tectonic"))
+
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(
+                run.call_args.args[0],
+                (str(tectonic), "--keep-logs", "proposal.tex"),
+            )
+
     def test_adds_compiler_directory_to_child_path(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

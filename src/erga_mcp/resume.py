@@ -97,7 +97,7 @@ def resolve_section_name(source: str, requested_name: str) -> str:
 
 
 def resolve_latexmk_executable(latexmk: Path = Path("latexmk")) -> Path:
-    """Resolve latexmk even when a macOS launch agent omits MacTeX from PATH."""
+    """Resolve the configured compiler, with MacTeX and Tectonic fallbacks."""
     configured = latexmk.expanduser()
     discovered = shutil.which(str(configured))
     if discovered is not None:
@@ -108,6 +108,11 @@ def resolve_latexmk_executable(latexmk: Path = Path("latexmk")) -> Path:
         if mactex_executable.is_file() and os.access(mactex_executable, os.X_OK):
             return mactex_executable
 
+    if configured == Path("latexmk"):
+        tectonic = shutil.which("tectonic")
+        if tectonic is not None:
+            return Path(tectonic).absolute()
+
     raise FileNotFoundError(
         errno.ENOENT,
         (
@@ -117,6 +122,7 @@ def resolve_latexmk_executable(latexmk: Path = Path("latexmk")) -> Path:
                 if sys.platform == "darwin" and configured.parent == Path(".")
                 else ""
             )
+            + (" and Tectonic was unavailable" if configured == Path("latexmk") else "")
         ),
         str(configured),
     )
@@ -524,13 +530,21 @@ def validate_latex_proposal(
     if proposal_path.suffix.lower() != ".tex" or not proposal_path.is_file():
         raise ValueError("proposal_path must point to an existing .tex proposal")
     latexmk_executable = resolve_latexmk_executable(latexmk)
-    command = (
-        str(latexmk_executable),
-        "-pdf",
-        "-no-shell-escape",
-        "-interaction=nonstopmode",
-        proposal_path.name,
-    )
+    command: tuple[str, ...]
+    if latexmk_executable.name.casefold() == "tectonic":
+        command = (
+            str(latexmk_executable),
+            "--keep-logs",
+            proposal_path.name,
+        )
+    else:
+        command = (
+            str(latexmk_executable),
+            "-pdf",
+            "-no-shell-escape",
+            "-interaction=nonstopmode",
+            proposal_path.name,
+        )
     environment = os.environ.copy()
     executable_directory = str(latexmk_executable.parent)
     path_entries = environment.get("PATH", "").split(os.pathsep)
