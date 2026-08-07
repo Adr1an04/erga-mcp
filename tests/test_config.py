@@ -8,6 +8,9 @@ from erga_mcp.config import DEFAULT_CONFIG, load_config
 
 
 class ConfigTests(unittest.TestCase):
+    def test_default_config_does_not_ask_users_for_a_project_bullet_count(self) -> None:
+        self.assertNotIn("project_min_bullets", DEFAULT_CONFIG)
+
     def test_loads_client_neutral_career_tool_profile(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"

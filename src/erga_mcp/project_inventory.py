@@ -301,6 +301,66 @@ def with_canonical_project_link(candidate: ProjectCandidate) -> ProjectCandidate
     )
 
 
+def limit_project_candidate_bullets(
+    candidate: ProjectCandidate, maximum_bullets: int
+) -> ProjectCandidate:
+    """Keep the strongest leading bullets while preserving exact per-bullet provenance."""
+    if maximum_bullets < 1:
+        raise ValueError("maximum_bullets must be positive")
+    if len(candidate.bullet_evidence_ids) <= maximum_bullets:
+        return candidate
+
+    spans: list[tuple[int, int]] = []
+    position = 0
+    needle = r"\resumeItem"
+    while True:
+        command_start = candidate.latex.find(needle, position)
+        if command_start < 0:
+            break
+        opening = command_start + len(needle)
+        while opening < len(candidate.latex) and candidate.latex[opening].isspace():
+            opening += 1
+        if opening >= len(candidate.latex) or candidate.latex[opening] != "{":
+            position = command_start + len(needle)
+            continue
+        depth = 0
+        closing = opening
+        while closing < len(candidate.latex):
+            character = candidate.latex[closing]
+            escaped = closing > 0 and candidate.latex[closing - 1] == "\\"
+            if character == "{" and not escaped:
+                depth += 1
+            elif character == "}" and not escaped:
+                depth -= 1
+                if depth == 0:
+                    spans.append((command_start, closing + 1))
+                    position = closing + 1
+                    break
+            closing += 1
+        else:
+            raise ValueError("project candidate contains an unterminated resume bullet")
+
+    if len(spans) != len(candidate.bullet_evidence_ids):
+        raise ValueError("project candidate bullet provenance is out of sync with LaTeX")
+    removed = spans[maximum_bullets:]
+    chunks: list[str] = []
+    cursor = 0
+    for start, end in removed:
+        chunks.append(candidate.latex[cursor:start])
+        cursor = end
+    chunks.append(candidate.latex[cursor:])
+    bullet_evidence_ids = candidate.bullet_evidence_ids[:maximum_bullets]
+    evidence_ids = tuple(
+        dict.fromkeys(evidence_id for ids in bullet_evidence_ids for evidence_id in ids)
+    )
+    return replace(
+        candidate,
+        latex="".join(chunks),
+        evidence_ids=evidence_ids,
+        bullet_evidence_ids=bullet_evidence_ids,
+    )
+
+
 def _terms(value: str) -> frozenset[str]:
     return frozenset(
         term

@@ -119,6 +119,8 @@ class AIResumeTailoringTests(unittest.TestCase):
         *,
         retry_feedback: str = "",
         required_project_ids: tuple[str, ...] = (),
+        maximum_bullets: int = 2,
+        minimum_bullets: int | None = None,
     ):
         with TemporaryDirectory() as directory:
             resume = Path(directory) / "resume.tex"
@@ -208,7 +210,8 @@ class AIResumeTailoringTests(unittest.TestCase):
                         },
                     ),
                     project_count=1,
-                    bullets_per_project=2,
+                    bullets_per_project=maximum_bullets,
+                    minimum_bullets_per_project=minimum_bullets,
                     bullet_min_chars=90,
                     bullet_target_chars=105,
                     bullet_max_chars=116,
@@ -218,6 +221,36 @@ class AIResumeTailoringTests(unittest.TestCase):
                 )
             )
             return result, session
+
+    def test_model_returns_a_variable_bullet_pool_without_user_configuration(self) -> None:
+        result, session = self._draft(
+            {
+                "projects": [
+                    {
+                        "project_id": "api-platform",
+                        "bullets": [
+                            {
+                                "text": "Engineered a Python API serving 100 users safely.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                            {
+                                "text": "Validated 20 API routes across request failures.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                        ],
+                    }
+                ]
+            },
+            minimum_bullets=1,
+            maximum_bullets=4,
+        )
+
+        self.assertEqual(len(result.candidates[0].bullet_evidence_ids), 2)
+        schema = session.calls[0]["tools"][0].input_schema["properties"]["projects"]["items"][
+            "properties"
+        ]["bullets"]
+        self.assertEqual(schema["minItems"], 1)
+        self.assertEqual(schema["maxItems"], 4)
 
     def test_model_can_synthesize_new_bullets_with_project_scoped_evidence(self) -> None:
         result, session = self._draft(
@@ -276,7 +309,7 @@ class AIResumeTailoringTests(unittest.TestCase):
         self.assertNotIn("implementation files", json.dumps(prompt))
         self.assertIn("verified_git_functional_scope_evidence", json.dumps(prompt))
         self.assertEqual(prompt["master_project_quantitative_coverage_percent"], 100)
-        self.assertEqual(prompt["required_quantified_bullets_per_project"], 2)
+        self.assertEqual(prompt["required_quantified_bullets_per_project_at_minimum"], 2)
 
     def test_retry_can_lock_the_semantic_project_selection_during_copy_repair(self) -> None:
         result, session = self._draft(

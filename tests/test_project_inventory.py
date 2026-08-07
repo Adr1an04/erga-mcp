@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from erga_mcp.models import Evidence
 from erga_mcp.project_inventory import (
     ProjectCandidate,
+    limit_project_candidate_bullets,
     load_project_inventory,
     project_quality_issues,
     select_project_rationales,
@@ -18,6 +19,35 @@ from erga_mcp.project_inventory import (
 
 
 class ProjectInventoryTests(unittest.TestCase):
+    def test_limits_project_bullets_without_losing_remaining_provenance(self) -> None:
+        candidate = ProjectCandidate(
+            id="adaptive-project",
+            title="Adaptive Project",
+            latex=(
+                r"\resumeProjectHeading{\textbf{Adaptive Project}}{}"
+                "\n"
+                r"\resumeItemListStart"
+                "\n"
+                r"\resumeItem{First supported result.}"
+                "\n"
+                r"\resumeItem{Second supported result with \textbf{nested markup}.}"
+                "\n"
+                r"\resumeItem{Third supported result.}"
+                "\n"
+                r"\resumeItemListEnd"
+            ),
+            evidence_ids=("ev_one", "ev_two", "ev_three"),
+            bullet_evidence_ids=(("ev_one",), ("ev_two",), ("ev_three",)),
+        )
+
+        limited = limit_project_candidate_bullets(candidate, 2)
+
+        self.assertEqual(limited.latex.count(r"\resumeItem{"), 2)
+        self.assertIn("nested markup", limited.latex)
+        self.assertNotIn("Third supported", limited.latex)
+        self.assertEqual(limited.evidence_ids, ("ev_one", "ev_two"))
+        self.assertEqual(limited.bullet_evidence_ids, (("ev_one",), ("ev_two",)))
+
     def test_sync_appends_missing_master_projects_without_replacing_catalogue_entries(self) -> None:
         existing = {
             "id": "custom-platform",

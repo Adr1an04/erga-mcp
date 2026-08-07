@@ -36,6 +36,7 @@ class GitProjectEnrichment:
     warnings: tuple[str, ...]
     catalogue_candidate_count: int
     quality_rejections: tuple[dict[str, object], ...] = ()
+    requires_spacing_fallback: bool = True
 
 
 def merge_github_project_catalogue(
@@ -200,6 +201,7 @@ def enrich_ranked_projects_from_git(
     job_description: str,
     project_count: int,
     bullets_per_project: int,
+    minimum_catalogue_bullets: int | None = None,
     bullet_min_characters: int,
     bullet_target_characters: int,
     bullet_max_characters: int,
@@ -208,17 +210,22 @@ def enrich_ranked_projects_from_git(
     selected_project_ids: tuple[str, ...] | None = None,
 ) -> GitProjectEnrichment:
     """Collect Git provenance for the exact résumé selection without rewriting its copy."""
+    resolved_minimum = (
+        bullets_per_project if minimum_catalogue_bullets is None else minimum_catalogue_bullets
+    )
+    if resolved_minimum < 1:
+        raise ValueError("minimum_catalogue_bullets must be positive")
     resume_candidates = tuple(
         candidate
         for candidate in candidates
-        if candidate.evidence_ids and len(candidate.bullet_evidence_ids) >= bullets_per_project
+        if candidate.evidence_ids and len(candidate.bullet_evidence_ids) >= resolved_minimum
     )
     if selected_project_ids is None:
         ranked = select_projects(
             resume_candidates,
             job_description,
             max_projects=max(1, len(resume_candidates)),
-            minimum_bullets=bullets_per_project,
+            minimum_bullets=resolved_minimum,
             require_resume_quality=False,
         )
     else:

@@ -112,7 +112,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 17)
+        self.assertEqual(TAILORING_VERSION, 18)
 
     def test_adaptive_page_fill_is_template_agnostic_and_idempotent(self) -> None:
         compact = _SPARSE_TEMPLATE.replace("[10pt]", "[9pt]")

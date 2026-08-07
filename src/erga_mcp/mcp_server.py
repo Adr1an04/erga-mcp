@@ -76,6 +76,7 @@ from .job_workspace import create_job_workspace
 from .models import Evidence
 from .project_inventory import (
     ProjectCandidate,
+    limit_project_candidate_bullets,
     load_project_inventory,
     select_projects,
     sync_project_inventory_from_master,
@@ -213,6 +214,8 @@ _TOOL_PROFILES = {
     "write": _READ_TOOL_NAMES | _LOCAL_WRITE_TOOL_NAMES,
     "hermes": _READ_TOOL_NAMES | _HERMES_TOOL_NAMES,
 }
+_AUTO_PROJECT_BULLET_MIN = 1
+_AUTO_PROJECT_BULLET_MAX = 4
 
 
 def _selected_tool_profile(config: ErgaConfig, environment: Mapping[str, str]) -> str:
@@ -431,6 +434,132 @@ def _layout_safe_project_selection(
     raise ValueError("single-line project fallback exhausted the approved project inventory")
 
 
+def _project_density_trial(
+    *,
+    resume_path: Path,
+    output_dir: Path,
+    job_description: str,
+    evidence: list[Evidence],
+    project_candidates: tuple[ProjectCandidate, ...],
+    config: ErgaConfig,
+) -> tuple[bool, float]:
+    """Render one bullet-density tier locally; no model call or persistent package is involved."""
+    automatic = create_automatic_resume_proposal(
+        resume_path=resume_path,
+        output_dir=output_dir,
+        job_description=job_description,
+        evidence=evidence,
+        editable_sections=config.resume.editable_sections,
+        bullet_min_chars=config.resume.bullet_min_chars,
+        bullet_target_chars=config.resume.bullet_target_chars,
+        bullet_max_chars=config.resume.bullet_max_chars,
+        project_candidates=project_candidates,
+        project_count=config.resume.project_count,
+        require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+        minimum_page_fill_ratio=0,
+    )
+    if automatic.constraint_violations:
+        return False, 0
+    if set(_selected_project_ids(automatic.project_selection)) != {
+        candidate.id for candidate in project_candidates
+    }:
+        return False, 0
+    layout = validate_single_line_resume_items(
+        automatic.proposal.proposed_tex_path,
+        latexmk=Path(config.resume.latexmk),
+    )
+    if layout.returncode != 0 or layout.wrapped_item_indices:
+        return False, 0
+    checked = validate_latex_proposal(
+        automatic.proposal.proposed_tex_path,
+        latexmk=Path(config.resume.latexmk),
+    )
+    proposal_pdf = automatic.proposal.proposed_tex_path.with_suffix(".pdf")
+    if checked.returncode != 0 or not proposal_pdf.is_file():
+        return False, 0
+    try:
+        if pdf_page_count(proposal_pdf) != 1:
+            return False, 0
+        return True, pdf_page_fill(proposal_pdf).fill_ratio
+    except ValueError:
+        return False, 0
+
+
+def _select_rendered_project_bullet_density(
+    *,
+    resume_path: Path,
+    job_description: str,
+    evidence: list[Evidence],
+    selected_candidates: tuple[ProjectCandidate, ...],
+    config: ErgaConfig,
+) -> tuple[tuple[ProjectCandidate, ...], bool, float]:
+    """Add supported bullets until page-fill succeeds or the next addition breaks layout."""
+    if config.resume.max_pages != 1 or not config.resume.minimum_page_fill_ratio:
+        return selected_candidates, False, 0
+    if len(selected_candidates) != config.resume.project_count:
+        raise ValueError("adaptive bullet density requires the exact selected project count")
+
+    counts = [1 for _ in selected_candidates]
+
+    def candidates_for_counts() -> tuple[ProjectCandidate, ...]:
+        return tuple(
+            limit_project_candidate_bullets(candidate, counts[index])
+            for index, candidate in enumerate(selected_candidates)
+        )
+
+    with TemporaryDirectory(prefix="erga-project-density-") as density_directory:
+        root = Path(density_directory)
+        current = candidates_for_counts()
+        valid, fill_ratio = _project_density_trial(
+            resume_path=resume_path,
+            output_dir=root / "minimum",
+            job_description=job_description,
+            evidence=evidence,
+            project_candidates=current,
+            config=config,
+        )
+        if not valid:
+            raise ValueError("minimum project bullet density did not fit the one-page layout")
+        if fill_ratio >= config.resume.minimum_page_fill_ratio:
+            return current, False, fill_ratio
+
+        tier = 2
+        blocked_indices: set[int] = set()
+        while any(
+            index not in blocked_indices and count < len(candidate.bullet_evidence_ids)
+            for index, (count, candidate) in enumerate(
+                zip(counts, selected_candidates, strict=True)
+            )
+        ):
+            accepted_in_tier = False
+            for index, candidate in enumerate(selected_candidates):
+                if index in blocked_indices or counts[index] >= len(candidate.bullet_evidence_ids):
+                    continue
+                counts[index] += 1
+                trial = candidates_for_counts()
+                valid, trial_fill = _project_density_trial(
+                    resume_path=resume_path,
+                    output_dir=root / f"tier-{tier}-project-{index + 1}",
+                    job_description=job_description,
+                    evidence=evidence,
+                    project_candidates=trial,
+                    config=config,
+                )
+                if not valid:
+                    counts[index] -= 1
+                    blocked_indices.add(index)
+                    continue
+                accepted_in_tier = True
+                current = trial
+                fill_ratio = trial_fill
+                if fill_ratio >= config.resume.minimum_page_fill_ratio:
+                    return current, False, fill_ratio
+            if not accepted_in_tier:
+                break
+            tier += 1
+    return current, fill_ratio < config.resume.minimum_page_fill_ratio, fill_ratio
+
+
 def _require_single_line_resume_layout(
     proposal_path: Path,
     *,
@@ -512,8 +641,7 @@ def _git_enriched_inventory_candidates(
     eligible_candidates = tuple(
         candidate
         for candidate in candidates
-        if candidate.evidence_ids
-        and len(candidate.bullet_evidence_ids) >= config.resume.project_min_bullets
+        if candidate.evidence_ids and len(candidate.bullet_evidence_ids) >= _AUTO_PROJECT_BULLET_MIN
     )
     projects_editable = any(
         re.sub(r"[^a-z0-9]+", "", section.casefold()) == "projects"
@@ -527,7 +655,7 @@ def _git_enriched_inventory_candidates(
                 eligible_candidates,
                 job_description=job_description,
                 project_count=config.resume.project_count,
-                minimum_bullets=config.resume.project_min_bullets,
+                minimum_bullets=_AUTO_PROJECT_BULLET_MIN,
             )
         elif config.resume.bullet_max_chars:
             with TemporaryDirectory(prefix="erga-project-layout-") as layout_directory:
@@ -553,7 +681,8 @@ def _git_enriched_inventory_candidates(
         candidates=candidates,
         job_description=job_description,
         project_count=config.resume.project_count,
-        bullets_per_project=config.resume.project_min_bullets,
+        bullets_per_project=_AUTO_PROJECT_BULLET_MAX,
+        minimum_catalogue_bullets=_AUTO_PROJECT_BULLET_MIN,
         bullet_min_characters=config.resume.bullet_min_chars,
         bullet_target_characters=config.resume.bullet_target_chars,
         bullet_max_characters=config.resume.bullet_max_chars,
@@ -616,7 +745,8 @@ async def _ai_tailored_project_enrichment(
                 evidence=all_evidence,
                 reports=enrichment.reports,
                 project_count=config.resume.project_count,
-                bullets_per_project=config.resume.project_min_bullets,
+                bullets_per_project=_AUTO_PROJECT_BULLET_MAX,
+                minimum_bullets_per_project=_AUTO_PROJECT_BULLET_MIN,
                 bullet_min_chars=config.resume.bullet_min_chars if attempt == 0 else 0,
                 bullet_target_chars=(
                     min(config.resume.bullet_target_chars, max(1, model_max_chars - 5))
@@ -660,34 +790,17 @@ async def _ai_tailored_project_enrichment(
                     "every bullet within the hard maximum."
                 )
                 continue
-            with TemporaryDirectory(prefix="erga-ai-layout-") as layout_directory:
-                selected_ids, layout_rejections = _layout_safe_project_selection(
+            final_candidates, requires_spacing, natural_fill_ratio = (
+                _select_rendered_project_bullet_density(
                     resume_path=resume_path,
-                    output_dir=Path(layout_directory),
                     job_description=job_description,
                     evidence=all_evidence,
-                    project_candidates=drafted.candidates,
+                    selected_candidates=selection_plan.selected,
                     config=config,
                 )
-            if len(selected_ids) != config.resume.project_count or layout_rejections:
-                rejected = ", ".join(
-                    str(item.get("title", item.get("id", "project"))) for item in layout_rejections
-                )
-                if model_max_chars:
-                    model_max_chars = max(80, model_max_chars - 10)
-                last_error = ValueError(
-                    "AI-authored project bullets did not fit the configured one-line layout"
-                    + (f": {rejected}" if rejected else "")
-                )
-                feedback = (
-                    "The prior draft did not fit the configured one-line layout. "
-                    f"Rewrite these same projects shorter while preserving cited facts: "
-                    f"{rejected}. Do not replace any required project. "
-                    f"The hard character maximum for every retry bullet is {model_max_chars}; "
-                    "the former minimum is disabled for this correction."
-                )
-                continue
-            candidate_by_id = {candidate.id: candidate for candidate in drafted.candidates}
+            )
+            selected_ids = tuple(candidate.id for candidate in final_candidates)
+            candidate_by_id = {candidate.id: candidate for candidate in final_candidates}
             report_by_id = {
                 project_id: report
                 for report in enrichment.reports
@@ -708,6 +821,8 @@ async def _ai_tailored_project_enrichment(
                     ),
                     "resume_bullets_source": "host_model_evidence_synthesis",
                     "tailoring_model": drafted.model,
+                    "bullet_count_source": "automatic_rendered_page_density",
+                    "natural_page_fill_ratio": natural_fill_ratio,
                 }
                 for project_id in selected_ids
             )
@@ -717,10 +832,19 @@ async def _ai_tailored_project_enrichment(
                 reports=final_reports,
                 warnings=enrichment.warnings,
                 catalogue_candidate_count=enrichment.catalogue_candidate_count,
+                requires_spacing_fallback=requires_spacing,
             )
         except ValueError as error:
             last_error = error
-            feedback = f"The prior structured draft failed validation: {error}"
+            if model_max_chars and any(
+                marker in str(error).casefold() for marker in ("density", "layout", "wrap")
+            ):
+                model_max_chars = max(80, model_max_chars - 10)
+            feedback = (
+                f"The prior structured draft failed validation: {error}. Do not replace any "
+                "required project; rewrite the same projects more compactly while preserving "
+                "their cited facts."
+            )
     if last_error is not None:
         raise last_error
     raise ValueError("host-model tailoring did not produce a layout-safe project selection")
@@ -838,7 +962,8 @@ def _realign_git_project_research(
         candidates=enrichment.candidates,
         job_description=job_description,
         project_count=max(1, len(selected_ids)),
-        bullets_per_project=config.resume.project_min_bullets,
+        bullets_per_project=_AUTO_PROJECT_BULLET_MAX,
+        minimum_catalogue_bullets=_AUTO_PROJECT_BULLET_MIN,
         bullet_min_characters=config.resume.bullet_min_chars,
         bullet_target_characters=config.resume.bullet_target_chars,
         bullet_max_characters=config.resume.bullet_max_chars,
@@ -858,6 +983,7 @@ def _realign_git_project_research(
         warnings=(*discovery_warnings, *refreshed.warnings),
         catalogue_candidate_count=enrichment.catalogue_candidate_count,
         quality_rejections=enrichment.quality_rejections,
+        requires_spacing_fallback=enrichment.requires_spacing_fallback,
     )
 
 
@@ -1395,7 +1521,9 @@ def _upgrade_existing_tailoring(
         project_count=config.resume.project_count,
         require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
         minimum_page_fill_ratio=(
-            config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
+            config.resume.minimum_page_fill_ratio
+            if config.resume.max_pages == 1 and enrichment.requires_spacing_fallback
+            else 0
         ),
         additional_project_quality_rejections=enrichment.quality_rejections,
     )
@@ -2370,7 +2498,9 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 project_count=config.resume.project_count,
                 require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
                 minimum_page_fill_ratio=(
-                    config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
+                    config.resume.minimum_page_fill_ratio
+                    if config.resume.max_pages == 1 and enrichment.requires_spacing_fallback
+                    else 0
                 ),
                 additional_project_quality_rejections=enrichment.quality_rejections,
             )
@@ -2725,7 +2855,9 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             project_count=config.resume.project_count,
             require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
             minimum_page_fill_ratio=(
-                config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
+                config.resume.minimum_page_fill_ratio
+                if config.resume.max_pages == 1 and enrichment.requires_spacing_fallback
+                else 0
             ),
             additional_project_quality_rejections=enrichment.quality_rejections,
         )

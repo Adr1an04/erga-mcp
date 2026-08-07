@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import subprocess
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -30,16 +31,220 @@ from erga_mcp.mcp_server import (
     _project_enrichment_for_tailoring,
     _require_constraint_valid_proposal,
     _require_master_template_parity,
+    _select_rendered_project_bullet_density,
     build_server,
     build_streamable_http_app,
 )
 from erga_mcp.models import Evidence
 from erga_mcp.project_inventory import ProjectCandidate
 from erga_mcp.resume import LatexValidation, ResumeItemLayoutValidation
+from erga_mcp.resume_tailoring import create_automatic_resume_proposal
 from erga_mcp.store import ErgaStore
 
 
 class McpServerTests(unittest.TestCase):
+    def test_project_bullet_density_adds_supported_bullets_until_page_is_filled(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace("project_count = 4", "project_count = 2").replace(
+                    "max_pages = 0", "max_pages = 1"
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(config_path)
+            evidence = Evidence(
+                "ev_density",
+                "approved:density",
+                "Approved density evidence.",
+                True,
+                datetime.now(UTC),
+            )
+
+            def candidate(project_id: str) -> ProjectCandidate:
+                return ProjectCandidate(
+                    id=project_id,
+                    title=project_id.title(),
+                    latex=(
+                        rf"\resumeProjectHeading{{\textbf{{{project_id.title()}}}}}{{}}"
+                        "\n"
+                        r"\resumeItemListStart"
+                        "\n"
+                        rf"\resumeItem{{Primary supported {project_id} result.}}"
+                        "\n"
+                        rf"\resumeItem{{Secondary supported {project_id} result.}}"
+                        "\n"
+                        rf"\resumeItem{{Tertiary supported {project_id} result.}}"
+                        "\n"
+                        rf"\resumeItem{{Quaternary supported {project_id} result.}}"
+                        "\n"
+                        r"\resumeItemListEnd"
+                    ),
+                    evidence_ids=(evidence.id,),
+                    bullet_evidence_ids=(
+                        (evidence.id,),
+                        (evidence.id,),
+                        (evidence.id,),
+                        (evidence.id,),
+                    ),
+                )
+
+            candidates = (candidate("alpha"), candidate("beta"))
+            with patch(
+                "erga_mcp.mcp_server._project_density_trial",
+                side_effect=[
+                    (True, 0.68),
+                    (True, 0.73),
+                    (True, 0.77),
+                    (True, 0.80),
+                    (True, 0.81),
+                    (True, 0.819),
+                    (True, 0.84),
+                ],
+            ) as trial:
+                selected, requires_spacing, fill_ratio = _select_rendered_project_bullet_density(
+                    resume_path=root / "resume.tex",
+                    job_description="Python systems",
+                    evidence=[evidence],
+                    selected_candidates=candidates,
+                    config=config,
+                )
+
+            self.assertEqual([len(item.bullet_evidence_ids) for item in selected], [4, 4])
+            self.assertFalse(requires_spacing)
+            self.assertEqual(fill_ratio, 0.84)
+            self.assertEqual(trial.call_count, 7)
+
+    def test_rendered_density_uses_more_claims_before_spacing(self) -> None:
+        latexmk = shutil.which("latexmk")
+        if latexmk is None:
+            self.skipTest("latexmk is not installed")
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            resume = root / "resume.tex"
+            resume.write_text(
+                r"""
+\documentclass[10pt]{article}
+\usepackage[margin=0.8in]{geometry}
+\pagestyle{empty}
+\raggedbottom
+\newcommand{\resumeItemListStart}{\begin{itemize}}
+\newcommand{\resumeItemListEnd}{\end{itemize}}
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeProjectHeading}[2]{\item #1 \hfill #2}
+\newcommand{\resumeItem}[1]{\item \small #1}
+\begin{document}
+\begin{center}\Large Synthetic Candidate\\\small candidate@example.test\end{center}
+\section{Experience}
+\resumeItemListStart
+\resumeItem{Engineered a verified service from approved synthetic evidence.}
+\resumeItem{Validated deterministic releases through documented checks.}
+\resumeItemListEnd
+\section{Projects}
+\resumeSubHeadingListStart
+\resumeProjectHeading{\textbf{Placeholder One}}{}
+\resumeItemListStart
+\resumeItem{Created a placeholder Python project.}
+\resumeItemListEnd
+\resumeProjectHeading{\textbf{Placeholder Two}}{}
+\resumeItemListStart
+\resumeItem{Built a placeholder API project.}
+\resumeItemListEnd
+\resumeSubHeadingListEnd
+\section{Technical Skills}
+\textbf{Languages:} Python, C++, SQL\\
+\textbf{Tools:} Linux, Docker, Git
+\end{document}
+""".lstrip(),
+                encoding="utf-8",
+            )
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace("project_count = 4", "project_count = 2")
+                .replace("max_pages = 0", "max_pages = 1")
+                .replace("editable_sections = []", 'editable_sections = ["Projects"]')
+                .replace('latexmk = "latexmk"', f"latexmk = {json.dumps(latexmk)}"),
+                encoding="utf-8",
+            )
+            config = load_config(config_path)
+            evidence = [
+                Evidence(
+                    f"ev_{name}",
+                    f"approved:{name}",
+                    f"Approved {name} project outcomes with Python API evidence.",
+                    True,
+                    datetime.now(UTC),
+                )
+                for name in ("alpha", "beta")
+            ]
+
+            def candidate(name: str, leads: tuple[str, str, str]) -> ProjectCandidate:
+                evidence_id = f"ev_{name}"
+                return ProjectCandidate(
+                    id=name,
+                    title=name.title(),
+                    latex=(
+                        rf"\resumeProjectHeading{{\textbf{{{name.title()}}} $|$ "
+                        r"\textit{Python, API}}{}"
+                        "\n"
+                        r"\resumeItemListStart"
+                        "\n"
+                        rf"\resumeItem{{{leads[0]} the supported {name} Python API outcome.}}"
+                        "\n"
+                        rf"\resumeItem{{{leads[1]} a second verified {name} system result.}}"
+                        "\n"
+                        rf"\resumeItem{{{leads[2]} a third evidence-backed {name} result.}}"
+                        "\n"
+                        r"\resumeItemListEnd"
+                    ),
+                    evidence_ids=(evidence_id,),
+                    bullet_evidence_ids=((evidence_id,), (evidence_id,), (evidence_id,)),
+                    tags=("python", "api"),
+                )
+
+            candidates = (
+                candidate("alpha", ("Developed", "Optimized", "Produced")),
+                candidate("beta", ("Designed", "Automated", "Created")),
+            )
+            selected, requires_spacing, natural_fill = _select_rendered_project_bullet_density(
+                resume_path=resume,
+                job_description="Required: Python API systems",
+                evidence=evidence,
+                selected_candidates=candidates,
+                config=config,
+            )
+
+            self.assertEqual([len(item.bullet_evidence_ids) for item in selected], [3, 3])
+            self.assertLess(natural_fill, config.resume.minimum_page_fill_ratio)
+            self.assertTrue(requires_spacing)
+
+            automatic = create_automatic_resume_proposal(
+                resume_path=resume,
+                output_dir=root / "final",
+                job_description="Required: Python API systems",
+                evidence=evidence,
+                editable_sections=config.resume.editable_sections,
+                project_candidates=selected,
+                project_count=config.resume.project_count,
+                require_unique_lead_verbs=True,
+                minimum_page_fill_ratio=config.resume.minimum_page_fill_ratio,
+            )
+            validation = _compile_intake_proposal(
+                automatic.proposal.proposed_tex_path,
+                latexmk=latexmk,
+                output_pdf_name="Synthetic_Resume.pdf",
+                max_pages=1,
+                minimum_page_fill_ratio=config.resume.minimum_page_fill_ratio,
+            )
+
+            self.assertEqual(validation.returncode, 0)
+            self.assertGreaterEqual(
+                validation.page_fill_ratio or 0,
+                config.resume.minimum_page_fill_ratio,
+            )
+
     def test_application_tracker_returns_complete_paginated_cross_cycle_results(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -181,10 +386,10 @@ class McpServerTests(unittest.TestCase):
                 ) as draft,
                 patch("erga_mcp.mcp_server.plan_resume_project_selection", return_value=plan),
                 patch(
-                    "erga_mcp.mcp_server._layout_safe_project_selection",
+                    "erga_mcp.mcp_server._select_rendered_project_bullet_density",
                     side_effect=[
-                        (("api",), ({"id": "api", "title": "API", "reasons": ["wrap"]},)),
-                        (("api",), ()),
+                        ValueError("project bullet density did not fit the one-page layout"),
+                        ((candidate,), False, 0.86),
                     ],
                 ),
             ):
@@ -1422,7 +1627,7 @@ class McpServerTests(unittest.TestCase):
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
             self.assertTrue(result["tailoring_meaningful_change"])
             self.assertEqual(result["tailoring_changed_sections"], ["Experience"])
-            self.assertEqual(result["tailoring_version"], 17)
+            self.assertEqual(result["tailoring_version"], 18)
             self.assertEqual(result["git_project_research"], [])
             output_pdf = Path(result["validation"]["pdf"])
             self.assertEqual(output_pdf.name, "Candidate_Resume.pdf")
@@ -1431,7 +1636,7 @@ class McpServerTests(unittest.TestCase):
                 (Path(result["package_dir"]) / "package.json").read_text(encoding="utf-8")
             )
             self.assertTrue(manifest["tailoring"]["meaningful_change"])
-            self.assertEqual(manifest["tailoring"]["version"], 17)
+            self.assertEqual(manifest["tailoring"]["version"], 18)
 
     def test_rebuilds_an_incomplete_legacy_package_and_preserves_its_files(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1500,7 +1705,7 @@ class McpServerTests(unittest.TestCase):
             )
             manifest = json.loads((repaired / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["legacy_backup"], "legacy-backup")
-            self.assertEqual(manifest["tailoring"]["version"], 17)
+            self.assertEqual(manifest["tailoring"]["version"], 18)
             self.assertIn("Legacy package preserved", result["integration_warnings"][-1])
 
     def test_compile_rejects_a_pdf_over_the_configured_page_cap(self) -> None:

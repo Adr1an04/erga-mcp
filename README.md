@@ -136,10 +136,14 @@ and returns structured, role-specific project bullets with evidence IDs. Server-
 rejects unsupported numbers, cross-project citations, raw commit/file/line accounting, duplicate
 lead verbs, unsafe LaTeX, rendered overflow, and one-page PDFs whose text occupies less than the
 configured page-height ratio (82% by default). Lead-verb uniqueness is required even for older
-configs that contain the former `false` default. For a sufficiently populated but compact template,
-Erga distributes existing vertical whitespace before compiling; it does not spend another model
-call, rewrite claims, change margins or fonts, or add filler text. The deterministic approved-copy
-path remains the fallback when sampling, GitHub, or a selected repository is unavailable.
+configs that contain the former `false` default. Project bullet count is automatic rather than a
+setup choice: the model produces one bounded pool of up to four evidence-backed bullets per project,
+then local PDF trials begin with one bullet per project and add supported bullets until the page-fill
+target is met or the next addition would wrap or create a second page. Only remaining whitespace
+receives layout spacing, so the density pass spends no extra model tokens, rewrites no claims, and
+adds no filler text. The
+deterministic approved-copy path remains the fallback when sampling, GitHub, or a selected repository
+is unavailable.
 
 After core setup, optionally connect any number of coding assistants:
 
