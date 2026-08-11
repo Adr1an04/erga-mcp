@@ -1,7 +1,7 @@
 manifest_version: 1
 name: erga-mcp-router
-version: "0.11.0"
-description: Route job links, show Obsidian tracker summaries, run bounded mail sync, and manage private recruiting alerts/exports.
+version: "0.12.3"
+description: Route job links and render guided mobile onboarding, unified Git review, tracker, settings, mail, alert, and export workflows.
 author: Erga MCP contributors
 hermes_requires: ">=0.18.2"
 provides_hooks:

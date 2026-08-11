@@ -74,6 +74,384 @@ class HermesJobUrlRouterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.router = _load_router()
 
+    def test_component_tokens_are_user_bound_single_use_and_expire(self) -> None:
+        clock = _FakeClock()
+        tokens = self.router._ComponentTokenStore(
+            ttl_seconds=10,
+            monotonic=clock.monotonic,
+        )
+        token = tokens.issue("settings.show", {}, owner_user_id="42")
+
+        with self.assertRaisesRegex(ValueError, "different Discord user"):
+            tokens.consume(token, user_id="7")
+        action, payload = tokens.consume(token, user_id="42")
+        self.assertEqual((action, payload), ("settings.show", {}))
+        with self.assertRaisesRegex(ValueError, "no longer available"):
+            tokens.consume(token, user_id="42")
+
+        expired = tokens.issue("settings.show", {}, owner_user_id="42")
+        clock.sleep(11)
+        with self.assertRaisesRegex(ValueError, "expired"):
+            tokens.consume(expired, user_id="42")
+
+    def test_onboarding_and_settings_commands_render_shared_cards_without_components(self) -> None:
+        onboarding = {
+            "title": "Erga onboarding",
+            "summary": "2 of 5 stages configured.",
+            "fields": [{"name": "Skill inventory", "value": "2 configured", "inline": False}],
+            "actions": [
+                {
+                    "action_id": "onboarding.skills.set",
+                    "label": "Set skills",
+                    "instruction": "Use /erga-onboard skills set Python, FastAPI",
+                    "style": "secondary",
+                },
+            ],
+            "page": 1,
+            "page_count": 1,
+        }
+        settings = {
+            "title": "Erga settings",
+            "summary": "Credentials are redacted.",
+            "fields": [{"name": "Discord", "value": "Configured", "inline": False}],
+            "actions": [],
+            "page": 1,
+            "page_count": 1,
+        }
+        context = _FakePluginContext(results=[json.dumps(onboarding), json.dumps(settings)])
+        self.router.register(context)
+
+        onboarded = context.commands["erga-onboard"]("")
+        configured = context.commands["erga-settings"]("")
+
+        self.assertIn("Erga onboarding", onboarded)
+        self.assertIn("2 configured", onboarded)
+        self.assertIn("/erga-onboard skills set", onboarded)
+        self.assertIn("Erga settings", configured)
+        self.assertEqual(
+            context.calls,
+            [
+                ("mcp__erga_mcp__onboarding_status", {}),
+                (
+                    "mcp__erga_mcp__erga_settings_card",
+                    {"host_integration": "hermes"},
+                ),
+            ],
+        )
+
+    def test_mobile_settings_import_button_completes_skill_setup_and_refreshes(self) -> None:
+        class Button:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        class Response:
+            def __init__(self, *, text: str, buttons: tuple[Any, ...]) -> None:
+                self.text = text
+                self.buttons = buttons
+
+        missing = {
+            "title": "Erga settings",
+            "summary": "Tap a setup action for anything marked Needs setup.",
+            "fields": [
+                {
+                    "name": "Skills",
+                    "value": "Needs setup - import approved skills below.",
+                    "inline": False,
+                }
+            ],
+            "actions": [
+                {
+                    "action_id": "onboarding.skills.import",
+                    "label": "Import approved skills",
+                    "instruction": "One tap import.",
+                    "style": "primary",
+                }
+            ],
+            "page": 1,
+            "page_count": 1,
+        }
+        imported = {"skills": [{"skill": "Python"}], "evidence_created": False}
+        configured = {
+            **missing,
+            "fields": [{"name": "Skills", "value": "1 configured", "inline": False}],
+            "actions": [],
+        }
+        context = _FakePluginContext(
+            results=[json.dumps(missing), json.dumps(imported), json.dumps(configured)]
+        )
+        plugins = ModuleType("hermes_cli.plugins")
+        plugins.DiscordButton = Button
+        plugins.DiscordCommandResponse = Response
+        hermes_cli = ModuleType("hermes_cli")
+        hermes_cli.__version__ = "0.18.2"
+        hermes_cli.plugins = plugins
+
+        with patch.dict(
+            sys.modules,
+            {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins},
+        ):
+            self.router.register(context)
+            rendered = context.commands["erga-settings"]("")
+            interaction = type(
+                "Interaction",
+                (),
+                {"payload": rendered.buttons[0].payload, "user_id": "42"},
+            )()
+            refreshed = context.discord_button_handlers["erga.card.action"](interaction)
+
+        self.assertIsInstance(refreshed, Response)
+        self.assertIn("1 configured", refreshed.text)
+        self.assertEqual(
+            context.calls,
+            [
+                (
+                    "mcp__erga_mcp__erga_settings_card",
+                    {"host_integration": "hermes"},
+                ),
+                (
+                    "mcp__erga_mcp__update_skill_inventory",
+                    {"operation": "import_approved", "skill": "", "skill_csv": ""},
+                ),
+                (
+                    "mcp__erga_mcp__erga_settings_card",
+                    {"host_integration": "hermes"},
+                ),
+            ],
+        )
+
+    def test_git_review_card_uses_opaque_button_tokens_and_explicit_approval(self) -> None:
+        class Button:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        class Response:
+            def __init__(self, *, text: str, buttons: tuple[Any, ...]) -> None:
+                self.text = text
+                self.buttons = buttons
+
+        card = {
+            "title": "Git skill review",
+            "summary": "1 review group.",
+            "fields": [
+                {
+                    "name": "React - seeded_and_confirmed",
+                    "value": "Repositories: 1 | Confidence: 90%",
+                    "inline": False,
+                }
+            ],
+            "actions": [
+                {
+                    "action_id": "git.scan",
+                    "label": "Scan Git projects",
+                    "instruction": "Scan configured onboarding roots.",
+                    "style": "primary",
+                },
+                {
+                    "action_id": "git.group.approve:react",
+                    "label": "Approve React",
+                    "instruction": "Explicitly approve corroborated Git candidates.",
+                    "style": "primary",
+                },
+            ],
+            "page": 1,
+            "page_count": 1,
+        }
+        approved = {"approved_evidence_count": 1, "resume_changed": False}
+        context = _FakePluginContext(
+            results=[json.dumps(card), json.dumps(approved), json.dumps(card)]
+        )
+        plugins = ModuleType("hermes_cli.plugins")
+        plugins.DiscordButton = Button
+        plugins.DiscordCommandResponse = Response
+        hermes_cli = ModuleType("hermes_cli")
+        hermes_cli.__version__ = "0.18.2"
+        hermes_cli.plugins = plugins
+
+        with patch.dict(
+            sys.modules,
+            {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins},
+        ):
+            self.router.register(context)
+            rendered = context.commands["erga-git"]("")
+            self.assertIsInstance(rendered, Response)
+            self.assertEqual(len(rendered.buttons), 2)
+            button = next(item for item in rendered.buttons if item.label == "Approve React")
+            self.assertEqual(button.action_id, "erga.card.action")
+            self.assertNotIn("react", button.payload)
+            interaction = type(
+                "Interaction",
+                (),
+                {"payload": button.payload, "user_id": "42"},
+            )()
+            refreshed = context.discord_button_handlers["erga.card.action"](interaction)
+
+        self.assertIsInstance(refreshed, Response)
+        self.assertEqual(
+            context.calls,
+            [
+                (
+                    "mcp__erga_mcp__git_skill_review_card",
+                    {"page": 1, "page_size": 5, "source_filter": "", "seed_csv": ""},
+                ),
+                (
+                    "mcp__erga_mcp__review_git_skill_group",
+                    {"operation": "approve", "skill": "react"},
+                ),
+                (
+                    "mcp__erga_mcp__git_skill_review_card",
+                    {"page": 1, "page_size": 5, "source_filter": "", "seed_csv": ""},
+                ),
+            ],
+        )
+
+    def test_git_scan_button_runs_the_unified_pipeline_and_refreshes_the_ui(self) -> None:
+        class Button:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        class Response:
+            def __init__(self, *, text: str, buttons: tuple[Any, ...]) -> None:
+                self.text = text
+                self.buttons = buttons
+
+        card = {
+            "title": "Erga Git",
+            "summary": "Ready to scan configured roots.",
+            "fields": [{"name": "Results", "value": "No groups yet.", "inline": False}],
+            "actions": [
+                {
+                    "action_id": "git.scan",
+                    "label": "Scan Git projects",
+                    "instruction": "Scan configured onboarding roots.",
+                    "style": "primary",
+                }
+            ],
+            "page": 1,
+            "page_count": 1,
+        }
+        scanned = {
+            "repositories_scanned": 2,
+            "candidates_created": 3,
+            "observations_created": 3,
+            "research_drafts": 2,
+            "auto_approved": False,
+            "drafts": [],
+            "card": {
+                **card,
+                "summary": "Scan complete: 2 repositories and 3 candidates.",
+            },
+        }
+        context = _FakePluginContext(results=[json.dumps(card), json.dumps(scanned)])
+        plugins = ModuleType("hermes_cli.plugins")
+        plugins.DiscordButton = Button
+        plugins.DiscordCommandResponse = Response
+        hermes_cli = ModuleType("hermes_cli")
+        hermes_cli.__version__ = "0.18.2"
+        hermes_cli.plugins = plugins
+
+        with patch.dict(
+            sys.modules,
+            {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins},
+        ):
+            self.router.register(context)
+            rendered = context.commands["erga-git"]("")
+            interaction = type(
+                "Interaction",
+                (),
+                {"payload": rendered.buttons[0].payload, "user_id": "42"},
+            )()
+            refreshed = context.discord_button_handlers["erga.card.action"](interaction)
+
+        self.assertIsInstance(refreshed, Response)
+        self.assertIn("Scan complete: 2 repositories", refreshed.text)
+        self.assertEqual(
+            context.calls,
+            [
+                (
+                    "mcp__erga_mcp__git_skill_review_card",
+                    {"page": 1, "page_size": 5, "source_filter": "", "seed_csv": ""},
+                ),
+                ("mcp__erga_mcp__research_git_worktrees", {"roots": []}),
+            ],
+        )
+
+    def test_git_setup_button_adds_detected_root_and_continues_scan(self) -> None:
+        class Button:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        class Response:
+            def __init__(self, *, text: str, buttons: tuple[Any, ...]) -> None:
+                self.text = text
+                self.buttons = buttons
+
+        setup_card = {
+            "title": "Git skill review",
+            "summary": "Set up a root before scanning.",
+            "fields": [{"name": "Results", "value": "No groups yet.", "inline": False}],
+            "actions": [
+                {
+                    "action_id": "onboarding.roots.use_detected",
+                    "label": "Use detected folder and scan",
+                    "instruction": "Configure and continue.",
+                    "style": "primary",
+                }
+            ],
+            "page": 1,
+            "page_count": 1,
+        }
+        updated = {"roots": ["/synthetic/projects"]}
+        scanned_card = {
+            **setup_card,
+            "summary": "Scan complete: 2 repositories.",
+            "actions": [],
+        }
+        scanned = {
+            "repositories_scanned": 2,
+            "scan_started": True,
+            "setup_required": False,
+            "card": scanned_card,
+        }
+        context = _FakePluginContext(
+            results=[json.dumps(setup_card), json.dumps(updated), json.dumps(scanned)]
+        )
+        plugins = ModuleType("hermes_cli.plugins")
+        plugins.DiscordButton = Button
+        plugins.DiscordCommandResponse = Response
+        hermes_cli = ModuleType("hermes_cli")
+        hermes_cli.__version__ = "0.18.2"
+        hermes_cli.plugins = plugins
+
+        with patch.dict(
+            sys.modules,
+            {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins},
+        ):
+            self.router.register(context)
+            rendered = context.commands["erga-git"]("")
+            interaction = type(
+                "Interaction",
+                (),
+                {"payload": rendered.buttons[0].payload, "user_id": "42"},
+            )()
+            refreshed = context.discord_button_handlers["erga.card.action"](interaction)
+
+        self.assertIsInstance(refreshed, Response)
+        self.assertIn("Scan complete: 2 repositories", refreshed.text)
+        self.assertEqual(
+            context.calls,
+            [
+                (
+                    "mcp__erga_mcp__git_skill_review_card",
+                    {"page": 1, "page_size": 5, "source_filter": "", "seed_csv": ""},
+                ),
+                (
+                    "mcp__erga_mcp__manage_portfolio_roots",
+                    {"operation": "add_detected", "root": "", "roots": None},
+                ),
+                ("mcp__erga_mcp__research_git_worktrees", {"roots": []}),
+            ],
+        )
+
     def test_extracts_a_bare_ashby_url_unchanged(self) -> None:
         url = (
             "https://jobs.ashbyhq.com/example/"
@@ -477,7 +855,7 @@ class HermesJobUrlRouterTests(unittest.TestCase):
 
             self.assertIsNone(transformed)
 
-    def test_git_research_command_dispatches_explicit_roots_with_provenance_only(self) -> None:
+    def test_unified_git_scan_dispatches_explicit_roots_with_provenance_only(self) -> None:
         context = _FakePluginContext(
             result=json.dumps(
                 {
@@ -501,7 +879,7 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         )
         self.router.register(context)
 
-        response = context.commands["erga-git-research"]("/tmp/projects")
+        response = context.commands["erga-git"]("scan /tmp/projects")
 
         self.assertEqual(
             context.calls,
@@ -518,9 +896,7 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertNotIn("src/routes.py", response)
         self.assertNotIn("d" * 64, response)
 
-    def test_git_research_command_defaults_to_the_current_users_projects_root(self) -> None:
-        home = Path("/tmp/people")
-        default_root = str(home / "hermesworkspace" / "projects")
+    def test_unified_git_scan_uses_configured_roots_and_removes_redundant_command(self) -> None:
         context = _FakePluginContext(
             result=json.dumps(
                 {
@@ -532,17 +908,12 @@ class HermesJobUrlRouterTests(unittest.TestCase):
                 }
             )
         )
-        with (
-            patch.dict(os.environ, {"ERGA_MCP_GIT_RESEARCH_ROOT": ""}, clear=False),
-            patch.object(Path, "home", return_value=home),
-        ):
-            self.router.register(context)
-            response = context.commands["erga-git-research"]("")
+        self.router.register(context)
+        response = context.commands["erga-git"]("scan")
 
-        self.assertEqual(
-            context.calls, [("mcp__erga_mcp__research_git_worktrees", {"roots": [default_root]})]
-        )
+        self.assertEqual(context.calls, [("mcp__erga_mcp__research_git_worktrees", {"roots": []})])
         self.assertIn("Erga Git research complete", response)
+        self.assertNotIn("erga-git-research", context.commands)
 
     def test_erga_review_renders_one_manual_draft_without_approving_evidence(self) -> None:
         context = _FakePluginContext(
@@ -633,6 +1004,7 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertEqual(
             set(context.discord_button_handlers),
             {
+                "erga.card.action",
                 "erga.tracker.page",
                 "erga.review.back",
                 "erga.review.skip",

@@ -11,6 +11,49 @@ from erga_mcp.store import ErgaStore
 
 
 class StoreTests(unittest.TestCase):
+    def test_skill_seeds_are_normalized_review_state_not_resume_evidence(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = ErgaStore(Path(directory) / "erga.sqlite3")
+
+            records = store.set_skill_seeds(["Python", "fastapi", "React", "Python"])
+
+            self.assertEqual(
+                [(item.skill, item.normalized_skill) for item in records],
+                [("Python", "python"), ("fastapi", "fastapi"), ("React", "react")],
+            )
+            self.assertTrue(all(item.checked for item in records))
+            self.assertTrue(all(item.source == "self_reported" for item in records))
+            self.assertEqual(store.list_evidence(), [])
+
+            fastapi = store.set_skill_seed_checked("fastapi", checked=False)
+            self.assertFalse(fastapi.checked)
+            self.assertFalse(store.list_skill_seeds()[1].checked)
+
+            added = store.add_skill_seed("PostgreSQL")
+            self.assertEqual(added.normalized_skill, "postgresql")
+            imported = store.add_skill_seed("Docker", source="approved_evidence")
+            self.assertEqual(imported.source, "approved_evidence")
+            store.remove_skill_seed(added.id)
+            self.assertEqual(
+                [item.normalized_skill for item in store.list_skill_seeds()],
+                ["python", "fastapi", "react", "docker"],
+            )
+            self.assertEqual(store.list_evidence(), [])
+
+    def test_skill_seed_set_preserves_existing_ids_and_check_state(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = ErgaStore(Path(directory) / "erga.sqlite3")
+            original = store.set_skill_seeds(["Python", "React"])
+            store.set_skill_seed_checked("react", checked=False)
+
+            replaced = store.set_skill_seeds(["React", "FastAPI", "Python"])
+
+            by_skill = {item.normalized_skill: item for item in replaced}
+            self.assertEqual(by_skill["python"].id, original[0].id)
+            self.assertEqual(by_skill["react"].id, original[1].id)
+            self.assertFalse(by_skill["react"].checked)
+            self.assertTrue(by_skill["fastapi"].checked)
+
     def test_records_evidence_and_application_with_audit_trail(self) -> None:
         with TemporaryDirectory() as directory:
             store = ErgaStore(Path(directory) / "erga.sqlite3")

@@ -12,6 +12,8 @@ DEFAULT_CONFIG = """# Erga MCP stores private state outside this repository.
 # Relative paths resolve from this file's directory.
 data_dir = "state"
 vault_path = ""
+# Explicit existing directories only. Erga never crawls a home directory implicitly.
+portfolio_roots = []
 
 [resume]
 # Configure these per template. Empty/zero values mean no constraint has been selected yet.
@@ -130,6 +132,7 @@ class ErgaConfig:
     config_path: Path
     data_dir: Path
     vault_path: Path | None
+    portfolio_roots: tuple[Path, ...]
     resume: ResumeSettings
     cover_letter: CoverLetterSettings
     tracker: TrackerSettings
@@ -260,6 +263,21 @@ def load_config(config_path: Path) -> ErgaConfig:
     data_dir = _path(str(paths.get("data_dir", "state")), config_path.parent)
     vault_value = str(paths.get("vault_path", "")).strip()
     vault_path = _path(vault_value, config_path.parent) if vault_value else None
+    portfolio_roots_value = paths.get("portfolio_roots", [])
+    if not isinstance(portfolio_roots_value, list) or any(
+        not isinstance(value, str) or not value.strip() for value in portfolio_roots_value
+    ):
+        raise ValueError("paths portfolio_roots must be a list of non-empty directory paths")
+    portfolio_roots: list[Path] = []
+    for value in portfolio_roots_value:
+        candidate = _path(value.strip(), config_path.parent)
+        if candidate.is_symlink():
+            raise ValueError("paths portfolio_roots cannot contain symlinked directories")
+        if not candidate.is_dir():
+            raise ValueError("paths portfolio_roots must contain existing directories")
+        resolved = candidate.resolve(strict=True)
+        if resolved not in portfolio_roots:
+            portfolio_roots.append(resolved)
     cover_letter_template = str(cover_letter.get("template_path", "")).strip()
     cover_letter_sample = str(cover_letter.get("writing_sample_path", "")).strip()
     tracker_value = str(tracking.get("tracker_dir", "")).strip()
@@ -317,6 +335,7 @@ def load_config(config_path: Path) -> ErgaConfig:
         config_path=config_path,
         data_dir=data_dir,
         vault_path=vault_path,
+        portfolio_roots=tuple(portfolio_roots),
         resume=_resume_settings(document, config_path.parent),
         cover_letter=CoverLetterSettings(
             template_path=_path(cover_letter_template, config_path.parent)

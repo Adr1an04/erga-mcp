@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import secrets
 import shlex
 import shutil
 import tempfile
@@ -26,7 +27,12 @@ _DEFAULT_DISCOVERY_RESEARCH_TOOL_NAME = "mcp__erga_mcp__discover_job_research"
 _DEFAULT_MAIL_SYNC_TOOL_NAME = "mcp__erga_mcp__sync_recruiting_mail"
 _DEFAULT_GIT_RESEARCH_TOOL_NAME = "mcp__erga_mcp__research_git_worktrees"
 _DEFAULT_GIT_REVIEW_TOOL_NAME = "mcp__erga_mcp__review_git_drafts"
-_DEFAULT_GIT_RESEARCH_ROOT_ENV = "ERGA_MCP_GIT_RESEARCH_ROOT"
+_DEFAULT_ONBOARDING_TOOL_NAME = "mcp__erga_mcp__onboarding_status"
+_DEFAULT_SKILL_INVENTORY_TOOL_NAME = "mcp__erga_mcp__update_skill_inventory"
+_DEFAULT_PORTFOLIO_ROOTS_TOOL_NAME = "mcp__erga_mcp__manage_portfolio_roots"
+_DEFAULT_SETTINGS_CARD_TOOL_NAME = "mcp__erga_mcp__erga_settings_card"
+_DEFAULT_GIT_SKILL_CARD_TOOL_NAME = "mcp__erga_mcp__git_skill_review_card"
+_DEFAULT_GIT_SKILL_REVIEW_TOOL_NAME = "mcp__erga_mcp__review_git_skill_group"
 _DEFAULT_WEB_SEARCH_TOOL_NAME = "web_search"
 _DEFAULT_CRON_TOOL_NAME = "cronjob"
 _DEFAULT_TOKEN_TOOL_NAME = "mcp__erga_mcp__record_token_usage"
@@ -129,6 +135,102 @@ _PENDING_TOKEN_APPLICATIONS_LOCK = threading.Lock()
 _RECORDED_TOKEN_REQUESTS: OrderedDict[tuple[str, str, str], None] = OrderedDict()
 _RECORDED_TOKEN_REQUESTS_LOCK = threading.Lock()
 _NON_MESSAGING_PLATFORMS = frozenset({"", "api", "api_server", "cli", "local"})
+
+
+class _ComponentTokenStore:
+    """Small in-memory store for opaque, expiring, single-use Discord actions."""
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = 900,
+        monotonic: Callable[[], float] = time.monotonic,
+        maximum: int = 1_024,
+    ) -> None:
+        self._ttl_seconds = ttl_seconds
+        self._monotonic = monotonic
+        self._maximum = maximum
+        self._records: OrderedDict[str, tuple[float, str, dict[str, Any], str | None]] = (
+            OrderedDict()
+        )
+        self._lock = threading.Lock()
+
+    def issue(
+        self,
+        action: str,
+        payload: dict[str, Any],
+        *,
+        owner_user_id: str | None = None,
+    ) -> str:
+        token = secrets.token_urlsafe(18)
+        with self._lock:
+            self._purge_expired(self._monotonic())
+            self._records[token] = (
+                self._monotonic() + self._ttl_seconds,
+                action,
+                dict(payload),
+                owner_user_id,
+            )
+            while len(self._records) > self._maximum:
+                self._records.popitem(last=False)
+        return token
+
+    def consume(self, token: str, *, user_id: str) -> tuple[str, dict[str, Any]]:
+        with self._lock:
+            record = self._records.get(token)
+            if record is None:
+                raise ValueError("This control is no longer available.")
+            expires_at, action, payload, owner_user_id = record
+            if expires_at <= self._monotonic():
+                self._records.pop(token, None)
+                raise ValueError("This control expired. Run the command again.")
+            if owner_user_id is not None and owner_user_id != user_id:
+                raise ValueError("This control belongs to a different Discord user.")
+            self._records.pop(token, None)
+            return action, dict(payload)
+
+    def _purge_expired(self, now: float) -> None:
+        for token, record in tuple(self._records.items()):
+            if record[0] <= now:
+                self._records.pop(token, None)
+
+
+def _shared_card_payload(result: object) -> dict[str, Any] | None:
+    return next(
+        (
+            item
+            for item in _nested_objects(result)
+            if isinstance(item.get("title"), str)
+            and isinstance(item.get("summary"), str)
+            and isinstance(item.get("fields"), list)
+            and isinstance(item.get("actions"), list)
+        ),
+        None,
+    )
+
+
+def _render_shared_card_text(card: dict[str, Any]) -> str:
+    lines = [f"**{card['title']}**", str(card["summary"])]
+    for field in card.get("fields", []):
+        if (
+            isinstance(field, dict)
+            and isinstance(field.get("name"), str)
+            and isinstance(field.get("value"), str)
+        ):
+            lines.extend(["", f"**{field['name']}**", field["value"]])
+    actions = [item for item in card.get("actions", []) if isinstance(item, dict)]
+    if actions:
+        lines.extend(["", "**Available actions**"])
+        for action in actions:
+            label = action.get("label")
+            instruction = action.get("instruction")
+            if isinstance(label, str) and isinstance(instruction, str):
+                lines.append(f"• {label}: {instruction}")
+    page = card.get("page")
+    page_count = card.get("page_count")
+    if isinstance(page, int) and isinstance(page_count, int) and page_count > 1:
+        lines.extend(["", f"Page {page} of {page_count}"])
+    return "\n".join(lines)
 
 
 def supports_hermes_version(version: str) -> bool:
@@ -656,9 +758,26 @@ def register(
         "ERGA_MCP_GIT_RESEARCH_TOOL", _DEFAULT_GIT_RESEARCH_TOOL_NAME
     ).strip()
     git_review_tool = os.getenv("ERGA_MCP_GIT_REVIEW_TOOL", _DEFAULT_GIT_REVIEW_TOOL_NAME).strip()
+    onboarding_tool = os.getenv("ERGA_MCP_ONBOARDING_TOOL", _DEFAULT_ONBOARDING_TOOL_NAME).strip()
+    skill_inventory_tool = os.getenv(
+        "ERGA_MCP_SKILL_INVENTORY_TOOL", _DEFAULT_SKILL_INVENTORY_TOOL_NAME
+    ).strip()
+    portfolio_roots_tool = os.getenv(
+        "ERGA_MCP_PORTFOLIO_ROOTS_TOOL", _DEFAULT_PORTFOLIO_ROOTS_TOOL_NAME
+    ).strip()
+    settings_card_tool = os.getenv(
+        "ERGA_MCP_SETTINGS_CARD_TOOL", _DEFAULT_SETTINGS_CARD_TOOL_NAME
+    ).strip()
+    git_skill_card_tool = os.getenv(
+        "ERGA_MCP_GIT_SKILL_CARD_TOOL", _DEFAULT_GIT_SKILL_CARD_TOOL_NAME
+    ).strip()
+    git_skill_review_tool = os.getenv(
+        "ERGA_MCP_GIT_SKILL_REVIEW_TOOL", _DEFAULT_GIT_SKILL_REVIEW_TOOL_NAME
+    ).strip()
     cron_tool = os.getenv("ERGA_MCP_CRON_TOOL", _DEFAULT_CRON_TOOL_NAME).strip()
     token_tool = os.getenv("ERGA_MCP_TOKEN_TOOL", _DEFAULT_TOKEN_TOOL_NAME).strip()
     ready_timeout, retry_interval = _readiness_settings()
+    component_tokens = _ComponentTokenStore(monotonic=monotonic_clock)
 
     def dispatch(job_url: str) -> str:
         deadline = monotonic_clock() + ready_timeout
@@ -1015,6 +1134,305 @@ def register(
             return "Erga tracker failed: invalid pagination state. Run /erga-tracker again."
         return tracker_response(query, page)
 
+    def card_response(
+        result: object,
+        *,
+        owner_user_id: str | None = None,
+        view_state: dict[str, Any] | None = None,
+    ) -> object:
+        error_text = _dispatch_error_text(result)
+        if error_text:
+            return f"Erga card failed: {error_text}"
+        card = _shared_card_payload(result)
+        if card is None:
+            return "Erga card failed: the MCP tool returned no shared card."
+        rendered = _render_shared_card_text(card)
+        if not supports_discord_buttons:
+            return rendered
+        assert DiscordButton is not None
+        assert DiscordCommandResponse is not None
+        state = dict(view_state or {})
+        page = card.get("page")
+        buttons = []
+        for item in card.get("actions", []):
+            if not isinstance(item, dict):
+                continue
+            action_id = item.get("action_id")
+            label = item.get("label")
+            style = item.get("style", "secondary")
+            if not isinstance(action_id, str) or not isinstance(label, str):
+                continue
+            payload = dict(state)
+            if action_id == "git.review.next" and isinstance(page, int):
+                payload["page"] = page + 1
+            elif action_id == "git.review.previous" and isinstance(page, int):
+                payload["page"] = page - 1
+            elif action_id.startswith("git.group.approve:"):
+                payload["skill"] = action_id.partition(":")[2]
+            elif action_id.startswith("git.group.skip:"):
+                payload["skill"] = action_id.partition(":")[2]
+            elif action_id not in {
+                "settings.show",
+                "onboarding.status",
+                "onboarding.skills.help",
+                "onboarding.skills.import",
+                "onboarding.roots.help",
+                "onboarding.roots.use_detected",
+                "onboarding.resume.help",
+                "git.scan",
+                "git.review",
+                "tracker.show",
+            }:
+                # Actions requiring user input remain truthful command instructions in text.
+                continue
+            token = component_tokens.issue(
+                action_id,
+                payload,
+                owner_user_id=owner_user_id,
+            )
+            buttons.append(
+                DiscordButton(
+                    label=label[:80],
+                    action_id="erga.card.action",
+                    payload=token,
+                    style=style
+                    if style in {"primary", "secondary", "success", "danger"}
+                    else "secondary",
+                )
+            )
+            if len(buttons) == 25:
+                break
+        return DiscordCommandResponse(text=rendered, buttons=tuple(buttons))
+
+    def onboarding_status_response(*, owner_user_id: str | None = None) -> object:
+        try:
+            result = ctx.dispatch_tool(onboarding_tool, {})
+        except Exception as exc:
+            return f"Erga onboarding failed: {exc}"
+        return card_response(result, owner_user_id=owner_user_id, view_state={"view": "onboarding"})
+
+    def onboarding_command(raw_args: str) -> object:
+        try:
+            arguments = shlex.split(raw_args)
+        except ValueError:
+            return "Usage: /erga-onboard [skills|roots] ..."
+        if not arguments or arguments == ["status"]:
+            return onboarding_status_response()
+        if arguments[0] == "skills" and len(arguments) >= 2:
+            operation = arguments[1].casefold()
+            tool_arguments: dict[str, Any] = {"operation": operation}
+            if operation == "set" and len(arguments) >= 3:
+                tool_arguments["skill_csv"] = " ".join(arguments[2:])
+            elif operation in {"add", "check", "uncheck", "remove"} and len(arguments) >= 3:
+                tool_arguments["skill"] = " ".join(arguments[2:])
+            elif operation != "list" or len(arguments) != 2:
+                return (
+                    "Usage: /erga-onboard skills set <comma-separated skills> | "
+                    "add|check|uncheck|remove <skill> | list"
+                )
+            try:
+                result = ctx.dispatch_tool(skill_inventory_tool, tool_arguments)
+            except Exception as exc:
+                return f"Erga onboarding failed: {exc}"
+            return card_response(result, view_state={"view": "onboarding"})
+        if arguments[0] == "roots" and len(arguments) >= 2:
+            operation = arguments[1].casefold()
+            tool_arguments = {"operation": operation}
+            if operation in {"add", "remove"} and len(arguments) == 3:
+                tool_arguments["root"] = arguments[2]
+            elif operation != "list" or len(arguments) != 2:
+                return "Usage: /erga-onboard roots add|remove <existing-local-root> | list"
+            try:
+                result = ctx.dispatch_tool(portfolio_roots_tool, tool_arguments)
+            except Exception as exc:
+                return f"Erga onboarding failed: {exc}"
+            return card_response(result, view_state={"view": "onboarding"})
+        return "Usage: /erga-onboard [status|skills ...|roots ...]"
+
+    def settings_status_response(*, owner_user_id: str | None = None) -> object:
+        try:
+            result = ctx.dispatch_tool(settings_card_tool, {"host_integration": "hermes"})
+        except Exception as exc:
+            return f"Erga settings failed: {exc}"
+        return card_response(
+            result,
+            owner_user_id=owner_user_id,
+            view_state={"view": "settings"},
+        )
+
+    def settings_command(raw_args: str) -> object:
+        if raw_args.strip():
+            return "Usage: /erga-settings"
+        return settings_status_response()
+
+    def git_skill_response(
+        *,
+        page: int = 1,
+        source_filter: str = "",
+        owner_user_id: str | None = None,
+    ) -> object:
+        arguments = {
+            "page": page,
+            "page_size": 5,
+            "source_filter": source_filter,
+            "seed_csv": "",
+        }
+        try:
+            result = ctx.dispatch_tool(git_skill_card_tool, arguments)
+        except Exception as exc:
+            return f"Erga Git review failed: {exc}"
+        return card_response(
+            result,
+            owner_user_id=owner_user_id,
+            view_state={"view": "git", "page": page, "source_filter": source_filter},
+        )
+
+    def git_skill_command(raw_args: str) -> object:
+        try:
+            arguments = shlex.split(raw_args)
+        except ValueError:
+            return (
+                "Usage: /erga-git [scan [local-root ...] | review "
+                "[confirmed|unconfirmed|discovered] [page N]]"
+            )
+        if arguments and arguments[0].casefold() == "scan":
+            return git_scan_response(arguments[1:])
+        if arguments and arguments[0].casefold() == "review":
+            arguments = arguments[1:]
+        page = 1
+        source_filter = ""
+        filters = {
+            "confirmed": "seeded_and_confirmed",
+            "unconfirmed": "self_reported_unconfirmed",
+            "discovered": "git_discovered",
+        }
+        index = 0
+        while index < len(arguments):
+            value = arguments[index].casefold()
+            if value in filters and not source_filter:
+                source_filter = filters[value]
+                index += 1
+            elif value == "page" and index + 1 < len(arguments):
+                try:
+                    page = int(arguments[index + 1])
+                except ValueError:
+                    return (
+                        "Usage: /erga-git [scan [local-root ...] | review "
+                        "[confirmed|unconfirmed|discovered] [page N]]"
+                    )
+                index += 2
+            else:
+                return (
+                    "Usage: /erga-git [scan [local-root ...] | review "
+                    "[confirmed|unconfirmed|discovered] [page N]]"
+                )
+        if page < 1:
+            return (
+                "Usage: /erga-git [scan [local-root ...] | review "
+                "[confirmed|unconfirmed|discovered] [page N]]"
+            )
+        return git_skill_response(page=page, source_filter=source_filter)
+
+    def card_action_button(interaction: Any) -> object:
+        try:
+            action, payload = component_tokens.consume(
+                interaction.payload,
+                user_id=str(interaction.user_id),
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            return str(exc)
+        user_id = str(interaction.user_id)
+        if action == "settings.show":
+            return settings_status_response(owner_user_id=user_id)
+        if action == "onboarding.status":
+            return onboarding_status_response(owner_user_id=user_id)
+        if action == "onboarding.skills.help":
+            return (
+                "**Set up skills from mobile**\n"
+                "Send one command with skills you can personally explain:\n"
+                "`/erga-onboard skills set Python, JavaScript, React, Docker`\n\n"
+                "Edit the example before sending it. These are discovery hints only; they do "
+                "not become résumé evidence until corroborated and approved."
+            )
+        if action == "onboarding.roots.help":
+            return (
+                "**Choose your Git projects folder**\n"
+                "A Git root is the parent folder containing your repositories on the computer "
+                "running Erga. Common examples are `~/projects`, `~/Developer`, or "
+                "`~/Documents/GitHub`.\n\n"
+                "Send: `/erga-onboard roots add ~/projects`\n"
+                "Then run `/erga-git` and tap **Scan Git projects**. Erga scans only the folder "
+                "you explicitly choose."
+            )
+        if action == "onboarding.resume.help":
+            return (
+                "**Set up the master résumé**\n"
+                "On the computer running Erga, run:\n"
+                '`uv run erga resume master set "/path/to/master-resume.pdf"`\n\n'
+                "Erga keeps the file local and uses it as the quality/template baseline."
+            )
+        if action == "onboarding.skills.import":
+            try:
+                imported = ctx.dispatch_tool(
+                    skill_inventory_tool,
+                    {"operation": "import_approved", "skill": "", "skill_csv": ""},
+                )
+            except Exception as exc:
+                return f"Erga skill import failed: {exc}"
+            error_text = _dispatch_error_text(imported)
+            if error_text:
+                return f"Erga skill import failed: {error_text}"
+            return settings_status_response(owner_user_id=user_id)
+        if action == "onboarding.roots.use_detected":
+            try:
+                updated = ctx.dispatch_tool(
+                    portfolio_roots_tool,
+                    {"operation": "add_detected", "root": "", "roots": None},
+                )
+            except Exception as exc:
+                return f"Erga Git-root setup failed: {exc}"
+            error_text = _dispatch_error_text(updated)
+            if error_text:
+                return f"Erga Git-root setup failed: {error_text}"
+            if payload.get("view") == "git":
+                return git_scan_response([], owner_user_id=user_id)
+            return settings_status_response(owner_user_id=user_id)
+        if action == "tracker.show":
+            return tracker_response("", 1)
+        if action == "git.review" or action in {"git.review.next", "git.review.previous"}:
+            return git_skill_response(
+                page=int(payload.get("page", 1)),
+                source_filter=str(payload.get("source_filter", "")),
+                owner_user_id=user_id,
+            )
+        if action == "git.scan":
+            return git_scan_response([], owner_user_id=user_id)
+        if action.startswith(("git.group.approve:", "git.group.skip:")):
+            skill = payload.get("skill")
+            if not isinstance(skill, str) or not skill:
+                return "Erga Git review failed: invalid approval state. Run /erga-git again."
+            try:
+                reviewed = ctx.dispatch_tool(
+                    git_skill_review_tool,
+                    {
+                        "operation": (
+                            "approve" if action.startswith("git.group.approve:") else "skip"
+                        ),
+                        "skill": skill,
+                    },
+                )
+            except Exception as exc:
+                return f"Erga Git review failed: {exc}"
+            error_text = _dispatch_error_text(reviewed)
+            if error_text:
+                return f"Erga Git review failed: {error_text}"
+            return git_skill_response(
+                page=int(payload.get("page", 1)),
+                source_filter=str(payload.get("source_filter", "")),
+                owner_user_id=user_id,
+            )
+        return "This control is no longer supported. Run the command again."
+
     def discovery_research_command(raw_args: str) -> str:
         query = raw_args.strip()
         if not query:
@@ -1073,16 +1491,7 @@ def register(
             return "Erga mail sync failed: the mail-sync tool returned no display message."
         return str(payload["message"])
 
-    def git_research_command(raw_args: str) -> str:
-        try:
-            roots = shlex.split(raw_args)
-        except ValueError:
-            return "Usage: /erga-git-research <local-root> [additional-local-root ...]"
-        if not roots:
-            default_root = os.getenv(_DEFAULT_GIT_RESEARCH_ROOT_ENV, "").strip()
-            if not default_root:
-                default_root = str(Path.home() / "hermesworkspace" / "projects")
-            roots = [default_root]
+    def git_scan_response(roots: list[str], *, owner_user_id: str | None = None) -> object:
         try:
             research = ctx.dispatch_tool(git_research_tool, {"roots": roots})
         except Exception as exc:
@@ -1090,6 +1499,12 @@ def register(
         error_text = _dispatch_error_text(research)
         if error_text:
             return f"Erga Git research failed: {error_text}"
+        if _shared_card_payload(research) is not None:
+            return card_response(
+                research,
+                owner_user_id=owner_user_id,
+                view_state={"view": "git", "page": 1, "source_filter": ""},
+            )
         payload = next(
             (
                 item
@@ -1232,6 +1647,7 @@ def register(
 
     if supports_discord_buttons:
         ctx.register_discord_button_handler("erga.tracker.page", tracker_page_button)
+        ctx.register_discord_button_handler("erga.card.action", card_action_button)
         for action in ("back", "skip", "save", "next"):
             ctx.register_discord_button_handler(
                 f"erga.review.{action}",
@@ -1280,6 +1696,23 @@ def register(
         args_hint="[all|company|role|status|cycle] [page N]",
     )
     ctx.register_command(
+        "erga-onboard",
+        handler=onboarding_command,
+        description="Review or update Erga onboarding skills and explicit local Git roots.",
+        args_hint="[status|skills ...|roots ...]",
+    )
+    ctx.register_command(
+        "erga-settings",
+        handler=settings_command,
+        description="Show the redacted shared Erga settings dashboard.",
+    )
+    ctx.register_command(
+        "erga-git",
+        handler=git_skill_command,
+        description="Scan configured Git projects and review corroborated skills in one UI.",
+        args_hint="[scan [local-root ...]|review [confirmed|unconfirmed|discovered] [page N]]",
+    )
+    ctx.register_command(
         "erga-research",
         handler=discovery_research_command,
         description="Run bounded public research for one tracked Erga application.",
@@ -1291,14 +1724,6 @@ def register(
         description=(
             "Synchronize configured recruiting mail and summarize only metadata-safe results."
         ),
-    )
-    ctx.register_command(
-        "erga-git-research",
-        handler=git_research_command,
-        description=(
-            "Run local diff-based Git research below explicit roots; create review-only drafts."
-        ),
-        args_hint="<local-root> [additional-local-root ...]",
     )
     ctx.register_command(
         "erga-review",

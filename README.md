@@ -165,6 +165,37 @@ The configuration contains paths and feature settings, never credentials. Use
 `erga init` remains available as a low-level non-interactive initializer for advanced and scripted
 installations.
 
+### Revisit onboarding from any client
+
+The setup wizard can collect a comma-separated skill inventory and zero or more explicit existing
+project roots. The same state remains manageable without Discord or an MCP host:
+
+```bash
+uv run erga onboarding status
+uv run erga onboarding status --json
+uv run erga onboarding skills set --csv "Python, FastAPI, React, PostgreSQL"
+uv run erga onboarding skills list
+uv run erga onboarding skills check FastAPI
+uv run erga onboarding skills uncheck React
+uv run erga onboarding skills remove React
+uv run erga onboarding roots add /absolute/path/to/projects
+uv run erga onboarding roots list
+uv run erga settings --json
+
+# Scan only the roots the user explicitly saved; no home-directory crawl occurs.
+uv run erga git scan --configured-roots
+uv run erga git skills show --json
+uv run erga git skills show --filter seeded_and_confirmed
+uv run erga git skills approve fastapi
+uv run erga git skills skip react
+```
+
+Skill inventory entries are self-reported discovery hints. They improve audited alias matching,
+ordering, and review status, but never become approved evidence or résumé claims by themselves.
+`--seed-csv` can supply one-shot review hints to `erga git scan` without persisting them. A skill can
+enter approved evidence only when a Git candidate corroborates it and the user explicitly approves
+that group. Missing metrics remain missing.
+
 ### Git-backed project tailoring
 
 Project inventory entries may declare one or more GitHub repositories without embedding local
@@ -237,7 +268,6 @@ sandboxing bypassed so write-capable Erga tools cannot be canceled while no term
 They use ephemeral `gpt-5.6-terra` sessions, so turns do not share conversation memory.
 Accepted requests receive one live, in-place Erga card with elapsed time and honest workflow
 status; résumé cards become color-coded ready, review-required, or safely-stopped results when
-processing finishes. The palette follows Erga's documented 60–30–10 Ink, Orbit Violet, and
 semantic-accent system.
 Keep the bot private and the Discord allowlist minimal; the bridge can access everything available
 to its OS account. See the [Discord bridge guide](docs/discord.md).
@@ -301,6 +331,12 @@ The recommended `career` MCP profile includes:
 | `list_applications` | Read local application records |
 | `update_application_status` | Set an application to draft, applied, OA, assessment, interview, offer, rejected, or withdrawn in the private local database |
 | `application_tracker` | Render the optional configured Obsidian tracker as a compact, read-only message card |
+| `onboarding_status` | Render the shared onboarding completion card without changing state |
+| `erga_settings_card` | Render a redacted local settings dashboard without credentials or secret paths |
+| `git_skill_review_card` | Paginate self-reported, Git-confirmed, and Git-discovered skill groups without approving them |
+| `update_skill_inventory` | Explicitly set/add/check/uncheck/remove self-reported discovery hints; never creates evidence |
+| `manage_portfolio_roots` | Explicitly set/add/list/remove existing local roots; never performs an implicit home crawl |
+| `review_git_skill_group` | Inspect, skip, restore, or explicitly approve a Git-corroborated group |
 | `list_evidence` | Read local evidence records |
 | `intake_job_url` | Research one job and build local review artifacts end to end |
 | `prepare_job_workspace` | Create a bounded local job package from a supplied URL |
@@ -321,11 +357,28 @@ project evidence. If the combined evidence cannot meet the master résumé's qua
 stronger master project copy instead. Select another documented profile only when the connected
 host should receive additional capability.
 
-With the optional `erga-mcp-router` Hermes plugin enabled, `/erga-tracker` renders every configured
-cycle from that same local Obsidian tracker directly in the current chat. Discord receives compact
-Previous/Next pagination; `/erga-tracker all page 2` and searches such as
+With the optional `erga-mcp-router` Hermes plugin enabled, `/erga-onboard`, `/erga-settings`,
+`/erga-git`, and `/erga-tracker` render the same shared local cards directly in the current chat.
+Discord receives compact, allowlist-protected controls with opaque single-use state and a 15-minute
+expiry; text-only clients receive the same action instructions instead of false button success.
+`/erga-settings` marks incomplete stages as **Needs setup** and provides mobile-friendly actions:
+explicit audited skills can be imported from approved evidence in one tap, a conventional projects
+folder can be added in one tap when safely detected without crawling the home directory, and manual
+setup buttons return short copyable commands. When delivered through Hermes, the card reports the
+Hermes messaging connection instead of incorrectly requiring Erga's optional standalone Discord
+bridge.
+Starting a Git scan without a configured root returns this guided setup card instead of a backend
+error. Choosing the detected-folder action from the Git view configures that explicit root and
+continues the original scan immediately.
+`/erga-tracker all page 2` and searches such as
 `/erga-tracker applied page 2` work on text-only platforms too. Each available company links to its
-saved posting. `/erga-mail-sync` runs a bounded configured-mail sync. Both commands return compact
+saved posting. `/erga-git` is the only Discord Git entry point: its **Scan Git projects** control,
+or `/erga-git scan`, runs the candidate and diff-research pipeline over roots saved during
+onboarding and refreshes the same review UI. Explicit root overrides use
+`/erga-git scan /path/to/projects`; `/erga-git review confirmed page 2` filters the resulting skill
+queue. Changes that require user input stay explicit commands such as
+`/erga-onboard skills set Python, FastAPI`.
+`/erga-mail-sync` runs a bounded configured-mail sync. These commands return compact
 Markdown that remains readable across Discord, Signal, Telegram, Slack, and other Hermes platforms.
 The tracker does not write to the vault; the mail command stores metadata-only events and does not
 expose message bodies, previews, or credentials.

@@ -92,6 +92,33 @@ Languages: Python
             self.assertEqual(report.next_steps[0], "Run `erga status` to confirm your local setup.")
             self.assertIn("Private local application tracking", report.completed)
 
+    def test_core_setup_persists_seed_skills_and_explicit_git_roots_without_evidence(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master = root / "master.tex"
+            master.write_text("Approved factual master content", encoding="utf-8")
+            repositories = root / "repositories"
+            repositories.mkdir()
+            selections = CoreSetupSelections(
+                config_path=root / "private" / "config.toml",
+                master_resume=master,
+                skill_seed_csv="Python, FastAPI, React, Python",
+                portfolio_roots=(repositories,),
+            )
+
+            report = apply_core_setup(selections)
+            config = load_config(selections.config_path)
+            store = ErgaStore(config.data_dir / "erga.sqlite3")
+
+            self.assertEqual(config.portfolio_roots, (repositories.resolve(),))
+            self.assertEqual(
+                [item.normalized_skill for item in store.list_skill_seeds()],
+                ["python", "fastapi", "react"],
+            )
+            self.assertEqual(len(store.list_evidence()), 1)
+            self.assertEqual(report.skill_seed_count, 3)
+            self.assertEqual(report.portfolio_root_count, 1)
+
     def test_core_setup_optionally_configures_obsidian_projection(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -454,6 +481,8 @@ folder = "Recruiting"
                     "• Built a bounded local workflow for career evidence.",
                     "- Added deterministic validation for generated resumes.",
                     "Adrian_Osorio_Resume",
+                    "",
+                    "",
                 ]
             )
             confirm_answers = iter([False, True, False, True, True])

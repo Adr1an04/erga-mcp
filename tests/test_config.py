@@ -5,9 +5,62 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.config import DEFAULT_CONFIG, load_config
+from erga_mcp.portfolio_roots import detected_portfolio_root
 
 
 class ConfigTests(unittest.TestCase):
+    def test_detects_only_conventional_direct_project_roots_without_home_crawl(self) -> None:
+        with TemporaryDirectory() as directory:
+            home = Path(directory)
+            projects = home / "Projects"
+            repository = projects / "example"
+            repository.mkdir(parents=True)
+            (repository / ".git").mkdir()
+            unrelated = home / "random" / "nested" / "repo" / ".git"
+            unrelated.mkdir(parents=True)
+
+            self.assertEqual(detected_portfolio_root(home), projects.resolve())
+
+    def test_loads_canonical_deduplicated_explicit_portfolio_roots(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            repositories = root / "repositories"
+            repositories.mkdir()
+            config_path = root / "config.toml"
+            config_path.write_text(
+                '[paths]\nportfolio_roots = ["repositories", "repositories"]\n',
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+            self.assertEqual(config.portfolio_roots, (repositories.resolve(),))
+
+    def test_rejects_missing_or_symlinked_portfolio_roots(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(
+                '[paths]\nportfolio_roots = ["missing"]\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "portfolio_roots"):
+                load_config(config_path)
+
+            target = root / "target"
+            target.mkdir()
+            link = root / "link"
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except OSError:
+                self.skipTest("directory symlinks are unavailable")
+            config_path.write_text(
+                '[paths]\nportfolio_roots = ["link"]\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                load_config(config_path)
+
     def test_default_config_does_not_ask_users_for_a_project_bullet_count(self) -> None:
         self.assertNotIn("project_min_bullets", DEFAULT_CONFIG)
 

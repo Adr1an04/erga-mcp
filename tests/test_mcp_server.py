@@ -1235,6 +1235,7 @@ class McpServerTests(unittest.TestCase):
             payload = cast(dict[str, Any], result.structured_content)
 
         self.assertEqual(payload["repositories_scanned"], 1)
+        self.assertEqual(payload["candidates_created"], 1)
         self.assertEqual(payload["observations_created"], 1)
         self.assertEqual(payload["research_drafts"], 1)
         self.assertFalse(payload["auto_approved"])
@@ -1248,6 +1249,8 @@ class McpServerTests(unittest.TestCase):
         self.assertNotIn("POST /jobs/research", rendered)
         self.assertNotIn("summary", draft)
         self.assertNotIn("bullet_candidates", draft)
+        self.assertEqual(payload["card"]["title"], "Erga Git")
+        self.assertEqual(payload["card"]["actions"][0]["action_id"], "git.scan")
 
     def test_project_metric_tool_returns_review_only_attributed_candidates(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1284,14 +1287,22 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(len(payload["review_facts"]), 3)
         self.assertEqual(payload["resume_metric_candidates"], [])
 
-    def test_git_research_tool_requires_existing_explicit_roots(self) -> None:
+    def test_git_research_tool_guides_missing_setup_and_rejects_invalid_explicit_roots(
+        self,
+    ) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
             config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
             server = build_server(config_path)
 
-            with self.assertRaisesRegex(Exception, "at least one explicit local root"):
-                asyncio.run(server.call_tool("research_git_worktrees", {"roots": []}))
+            setup_result: Any = asyncio.run(
+                server.call_tool("research_git_worktrees", {"roots": []})
+            )
+            setup_payload = cast(dict[str, Any], setup_result.structured_content)
+            self.assertFalse(setup_payload["scan_started"])
+            self.assertTrue(setup_payload["setup_required"])
+            self.assertEqual(setup_payload["repositories_scanned"], 0)
+            self.assertEqual(setup_payload["card"]["title"], "Erga onboarding")
             with self.assertRaisesRegex(Exception, "existing directory"):
                 asyncio.run(
                     server.call_tool(
@@ -1385,6 +1396,12 @@ class McpServerTests(unittest.TestCase):
                     "list_applications",
                     "update_application_status",
                     "application_tracker",
+                    "onboarding_status",
+                    "git_skill_review_card",
+                    "erga_settings_card",
+                    "update_skill_inventory",
+                    "manage_portfolio_roots",
+                    "review_git_skill_group",
                     "list_evidence",
                     "resume_source_context",
                     "list_mail_events",
@@ -1415,6 +1432,9 @@ class McpServerTests(unittest.TestCase):
                 "pipeline_status",
                 "list_applications",
                 "application_tracker",
+                "onboarding_status",
+                "git_skill_review_card",
+                "erga_settings_card",
                 "list_evidence",
                 "resume_source_context",
                 "list_mail_events",

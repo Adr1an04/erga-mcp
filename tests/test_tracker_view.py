@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.tracker_view import (
+    build_tracker_card,
     filter_application_tracker,
     paginate_application_tracker,
     read_application_tracker,
@@ -32,6 +33,7 @@ class TrackerViewTests(unittest.TestCase):
 
             snapshot = read_application_tracker(tracker_dir)
             message = render_tracker_message(snapshot)
+            card = build_tracker_card(snapshot)
 
         self.assertEqual(len(snapshot.entries), 2)
         self.assertEqual(snapshot.summary, {"applied": 1, "researching": 1})
@@ -46,6 +48,9 @@ class TrackerViewTests(unittest.TestCase):
         )
         self.assertIn("Next: Review résumé", message)
         self.assertIn("**[Cloudflare](https://example.test)**", message)
+        self.assertEqual(card.title, "Erga application tracker")
+        self.assertEqual(len(card.fields), 2)
+        self.assertTrue(any("Cloudflare" in field.name for field in card.fields))
 
     def test_uses_distinct_oa_interview_and_offer_icons(self) -> None:
         with TemporaryDirectory() as directory:

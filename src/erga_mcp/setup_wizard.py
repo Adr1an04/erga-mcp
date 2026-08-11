@@ -16,6 +16,7 @@ import questionary
 from questionary import Choice
 
 from .config import DEFAULT_CONFIG, load_config, validate_output_pdf_name
+from .portfolio_roots import canonical_portfolio_roots
 from .private_files import restrict_private_directory, restrict_private_file
 from .project_inventory import load_project_inventory, sync_project_inventory_from_master
 from .resume_settings import update_settings
@@ -26,6 +27,7 @@ from .resume_sources import (
     snapshot_resume_source,
 )
 from .resume_template import generate_latex_template
+from .skill_inventory import parse_skill_seed_csv
 from .store import ErgaStore
 from .toml_edit import update_table
 
@@ -73,6 +75,8 @@ class CoreSetupSelections:
     obsidian_enabled: bool = False
     vault_mode: VaultMode | None = None
     vault_path: Path | None = None
+    skill_seed_csv: str | None = None
+    portfolio_roots: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -89,6 +93,8 @@ class CoreSetupReport:
     welcome_note_created: bool
     completed: list[str]
     next_steps: list[str]
+    skill_seed_count: int = 0
+    portfolio_root_count: int = 0
 
     def as_json(self) -> dict[str, object]:
         return asdict(self)
@@ -505,6 +511,29 @@ def collect_core_setup_selections(
             )
         )
     )
+    skill_seed_csv = str(
+        _required(
+            questionary.text(
+                "Comma-separated skills for discovery and review (optional):",
+                default="",
+            ).ask()
+        )
+    ).strip()
+    roots_csv = str(
+        _required(
+            questionary.text(
+                "Existing Git/project root directories, comma-separated (optional):",
+                default="",
+            ).ask()
+        )
+    ).strip()
+    portfolio_roots = (
+        canonical_portfolio_roots(
+            tuple(normalize_dropped_path(value) for value in roots_csv.split(",") if value.strip())
+        )
+        if roots_csv
+        else ()
+    )
 
     selections = CoreSetupSelections(
         config_path=default_config_path.expanduser().absolute(),
@@ -519,6 +548,8 @@ def collect_core_setup_selections(
         obsidian_enabled=obsidian_enabled,
         vault_mode=vault_mode,
         vault_path=vault_path,
+        skill_seed_csv=skill_seed_csv or None,
+        portfolio_roots=portfolio_roots,
     )
     questionary.print("\nReview", style="bold")
     questionary.print(render_core_setup_review(selections))
@@ -567,6 +598,13 @@ def render_core_setup_review(selections: CoreSetupSelections) -> str:
             f"  Generated PDF filename: {normalize_output_pdf_name(selections.output_pdf_name)}",
             "  Application tracking: a private local database",
             f"  Obsidian: {obsidian}",
+            "  Skill inventory: " + (selections.skill_seed_csv or "not configured"),
+            "  Git roots: "
+            + (
+                ", ".join(str(root) for root in selections.portfolio_roots)
+                if selections.portfolio_roots
+                else "not configured"
+            ),
             "",
             "Not being connected: coding AI, Discord, mail, or any model API key.",
             "You can change these settings later. You can cancel now with no changes.",
@@ -632,6 +670,7 @@ def _configure_core_paths(
     config_path: Path,
     vault_path: Path | None,
     tracker_dir: Path | None,
+    portfolio_roots: tuple[Path, ...],
 ) -> None:
     if config_path.exists():
         existing = load_config(config_path)
@@ -648,6 +687,7 @@ def _configure_core_paths(
         {
             "data_dir": str(data_dir),
             "vault_path": str(vault_path) if vault_path is not None else "",
+            "portfolio_roots": [str(root) for root in portfolio_roots],
         },
     )
     raw = update_table(
@@ -676,6 +716,12 @@ def _write_start_note(path: Path) -> bool:
 
 def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
     """Initialize the complete local core without requiring an external reasoning host."""
+    skill_seeds = (
+        parse_skill_seed_csv(selections.skill_seed_csv)
+        if selections.skill_seed_csv is not None
+        else ()
+    )
+    portfolio_roots = canonical_portfolio_roots(selections.portfolio_roots)
     master = load_resume_source(selections.master_resume)
     style = (
         load_resume_source(selections.style_resume) if selections.style_resume is not None else None
@@ -712,11 +758,14 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         config_path=selections.config_path,
         vault_path=vault_path,
         tracker_dir=tracker_dir,
+        portfolio_roots=portfolio_roots,
     )
 
     config = load_config(selections.config_path)
     store = ErgaStore(config.data_dir / "erga.sqlite3")
     store.initialize()
+    if skill_seeds:
+        store.set_skill_seeds(skill_seeds)
     managed_master = snapshot_resume_source(master, data_dir=config.data_dir, role="master")
     managed_style = (
         snapshot_resume_source(style, data_dir=config.data_dir, role="style")
@@ -823,6 +872,8 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         welcome_note_created=welcome_note_created,
         completed=completed,
         next_steps=next_steps,
+        skill_seed_count=len(skill_seeds),
+        portfolio_root_count=len(portfolio_roots),
     )
 
 

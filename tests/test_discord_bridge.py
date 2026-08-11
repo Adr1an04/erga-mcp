@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from erga_mcp.card_view import CardField, CardView
 from erga_mcp.config import DEFAULT_CONFIG, load_config
 from erga_mcp.discord_backends import DiscordBackendName
 from erga_mcp.discord_bridge import (
@@ -39,10 +40,35 @@ from erga_mcp.discord_bridge import (
     verify_backend_login,
     write_discord_settings,
 )
+from erga_mcp.discord_cards import discord_card_from_view
 from erga_mcp.discord_setup import parse_discord_identities
 
 
 class DiscordBridgeTests(unittest.TestCase):
+    def test_shared_card_renderer_stays_inside_discord_embed_limits(self) -> None:
+        rendered = discord_card_from_view(
+            CardView(
+                title="T" * 400,
+                summary="S" * 5_000,
+                fields=tuple(
+                    CardField(f"Field {index}" + "N" * 300, "V" * 2_000) for index in range(30)
+                ),
+            )
+        )
+
+        self.assertLessEqual(len(rendered.title), 256)
+        self.assertLessEqual(len(rendered.description), 4_096)
+        self.assertLessEqual(len(rendered.fields), 25)
+        self.assertTrue(all(len(field.name) <= 256 for field in rendered.fields))
+        self.assertTrue(all(len(field.value) <= 1_024 for field in rendered.fields))
+        self.assertLessEqual(
+            len(rendered.title)
+            + len(rendered.description)
+            + len(rendered.footer)
+            + sum(len(field.name) + len(field.value) for field in rendered.fields),
+            6_000,
+        )
+
     def test_resume_progress_card_uses_erga_active_color_and_truthful_status(self) -> None:
         card = _progress_card(
             "make a résumé for https://jobs.example.test/role",

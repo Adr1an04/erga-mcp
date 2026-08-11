@@ -53,6 +53,12 @@ from .git_project_enrichment import (
     enrich_ranked_projects_from_git,
     merge_github_project_catalogue,
 )
+from .git_skills import (
+    approve_git_skill_group,
+    build_git_skill_review_card,
+    explicit_skills_in_texts,
+    reconcile_git_skill_groups,
+)
 from .github_projects import discover_github_projects
 from .http_transport import HttpTransportSettings, protect_http_app
 from .integrations.mail_provider import build_mail_provider
@@ -74,6 +80,8 @@ from .job_research import (
 )
 from .job_workspace import create_job_workspace
 from .models import Evidence
+from .onboarding_view import build_onboarding_card
+from .portfolio_roots import detected_portfolio_root, update_portfolio_roots
 from .project_inventory import (
     ProjectCandidate,
     limit_project_candidate_bullets,
@@ -103,8 +111,11 @@ from .resume_tailoring import (
     semantic_resume_structure_issues,
 )
 from .resume_template import ensure_resume_template
+from .settings_view import build_settings_card
+from .skill_inventory import parse_skill_seed_csv
 from .store import ErgaStore, SQLiteStoreFactory, StoreFactory
 from .tracker_view import (
+    build_tracker_card,
     filter_application_tracker,
     paginate_application_tracker,
     read_application_tracker,
@@ -141,6 +152,9 @@ _READ_TOOL_NAMES = frozenset(
         "pipeline_status",
         "list_applications",
         "application_tracker",
+        "onboarding_status",
+        "git_skill_review_card",
+        "erga_settings_card",
         "list_evidence",
         "list_mail_events",
         "token_usage",
@@ -164,9 +178,21 @@ _LOCAL_WRITE_TOOL_NAMES = frozenset(
         "research_git_worktrees",
         "review_git_drafts",
         "review_git_draft_prompt",
+        "update_skill_inventory",
+        "manage_portfolio_roots",
+        "review_git_skill_group",
     }
 )
-_HERMES_TOOL_NAMES = frozenset({"sync_recruiting_mail", "install_mail_monitor_scripts"})
+_HERMES_TOOL_NAMES = frozenset(
+    {
+        "sync_recruiting_mail",
+        "install_mail_monitor_scripts",
+        "research_git_worktrees",
+        "update_skill_inventory",
+        "manage_portfolio_roots",
+        "review_git_skill_group",
+    }
+)
 _LOOPBACK_HOST_HEADERS = [
     "127.0.0.1",
     "127.0.0.1:*",
@@ -181,6 +207,9 @@ _CAREER_TOOL_NAMES = frozenset(
         "pipeline_status",
         "list_applications",
         "application_tracker",
+        "onboarding_status",
+        "git_skill_review_card",
+        "erga_settings_card",
         "list_evidence",
         "update_application_status",
         "scrape_public_page",
@@ -194,6 +223,9 @@ _CAREER_TOOL_NAMES = frozenset(
         "validate_tailored_resume",
         "create_cover_letter",
         "propose_project_metrics",
+        "update_skill_inventory",
+        "manage_portfolio_roots",
+        "review_git_skill_group",
     }
 )
 _CAREER_PRIVATE_TOOL_NAMES = _CAREER_TOOL_NAMES | frozenset(
@@ -1540,21 +1572,34 @@ def _profile_visible_evidence(profile: str, evidence_records: list[Evidence]) ->
 
 
 def _git_research_report(store: ErgaStore, roots: list[str]) -> dict[str, object]:
-    """Run bounded local diff research and redact raw source and diff text from the response."""
+    """Run the shared Git scan/research pipeline and redact raw source and diff text."""
     normalized_roots = [Path(root).expanduser() for root in roots if root.strip()]
     if not normalized_roots:
         raise ValueError("research_git_worktrees requires at least one explicit local root")
     repositories = discover_worktrees(normalized_roots)
+    candidates_created = 0
     observations_created = 0
     drafts: list[dict[str, object]] = []
     for repo in repositories:
         repo_path = str(repo)
         commits, checkpoint = scan_commits(repo, store.git_scan_checkpoint(repo_path))
+        for commit in commits:
+            commit_range = f"{commit.parents[0]}..{commit.sha}" if commit.parents else commit.sha
+            candidate = store.add_git_candidate(
+                repo_path=repo_path,
+                commit_sha=commit.sha,
+                commit_range=commit_range,
+                text=(
+                    f"Git commit: {commit.subject}\nChanged files: {', '.join(commit.files[:10])}"
+                ),
+            )
+            candidates_created += candidate is not None
         candidates = store.list_git_candidates(repo_path=repo_path)
         observations = store.list_git_change_observations(repo_path=repo_path)
         observed_shas = {item.commit_sha for item in observations}
         missing = commits_missing_observations(repo, candidates, observed_shas)
-        for observation in analyze_commits(repo, [*commits, *missing]):
+        commits_to_analyze = {commit.sha: commit for commit in [*commits, *missing]}
+        for observation in analyze_commits(repo, list(commits_to_analyze.values())):
             observations_created += store.save_git_change_observation(observation)
         summary, bullets = synthesize_diff_research(
             repo_path,
@@ -1596,12 +1641,20 @@ def _git_research_report(store: ErgaStore, roots: list[str]) -> dict[str, object
         )
         if checkpoint is not None:
             store.save_git_scan_checkpoint(repo_path=repo_path, commit_sha=checkpoint)
+    card = build_git_skill_review_card(store).as_dict()
+    card["title"] = "Erga Git"
+    card["summary"] = (
+        f"Scan complete: {len(repositories)} repositories, {candidates_created} new candidates, "
+        f"and {observations_created} new diff observations. {card['summary']}"
+    )
     return {
         "repositories_scanned": len(repositories),
+        "candidates_created": candidates_created,
         "observations_created": observations_created,
         "research_drafts": len(drafts),
         "drafts": drafts,
         "auto_approved": False,
+        "card": card,
     }
 
 
@@ -2487,6 +2540,195 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 token_usage_by_source_url=token_usage_by_source_url,
                 local_application_count=len(applications),
             ),
+            "card": build_tracker_card(
+                snapshot,
+                page=pagination.page,
+                page_size=pagination.page_size,
+                query=normalized_query,
+            ).as_dict(),
+        }
+
+    @profile_tool("onboarding_status", annotations=_READ_ONLY)
+    def onboarding_status() -> dict[str, object]:
+        """Return the shared truthful onboarding card without mutating local state."""
+        return build_onboarding_card(load_config(config_path), store).as_dict()
+
+    @profile_tool("erga_settings_card", annotations=_READ_ONLY)
+    def erga_settings_card(host_integration: str = "") -> dict[str, object]:
+        """Return a redacted shared settings card; credentials and secret paths are omitted."""
+        if host_integration not in {"", "hermes"}:
+            raise ValueError("host_integration is not supported")
+        return build_settings_card(
+            load_config(config_path), store, host_integration=host_integration
+        ).as_dict()
+
+    @profile_tool("git_skill_review_card", annotations=_READ_ONLY)
+    def git_skill_review_card(
+        page: Annotated[StrictInt, Field(ge=1)] = 1,
+        page_size: Annotated[StrictInt, Field(ge=1, le=10)] = 5,
+        source_filter: str = "",
+        seed_csv: str = "",
+    ) -> dict[str, object]:
+        """Render paginated Git/seed skill groups; rendering never approves evidence."""
+        seed_override = parse_skill_seed_csv(seed_csv) if seed_csv.strip() else ()
+        current_config = load_config(config_path)
+        if current_config.portfolio_roots:
+            primary_action = (
+                "git.scan",
+                "Scan Git projects",
+                "Scan configured roots and refresh this review.",
+            )
+        elif detected_portfolio_root() is not None:
+            primary_action = (
+                "onboarding.roots.use_detected",
+                "Use detected folder and scan",
+                "One tap: configure the detected projects folder, then continue this scan.",
+            )
+        else:
+            primary_action = (
+                "onboarding.roots.help",
+                "Set up Git projects",
+                "Choose the projects folder on the computer running Erga before scanning.",
+            )
+        return build_git_skill_review_card(
+            store,
+            page=page,
+            page_size=page_size,
+            source_filter=source_filter or None,
+            seed_override=seed_override,
+            primary_action_id=primary_action[0],
+            primary_action_label=primary_action[1],
+            primary_action_instruction=primary_action[2],
+        ).as_dict()
+
+    @profile_tool("update_skill_inventory", annotations=_LOCAL_IDEMPOTENT_WRITE)
+    def update_skill_inventory(
+        operation: str,
+        skill: str = "",
+        skill_csv: str = "",
+    ) -> dict[str, object]:
+        """Explicitly manage self-reported review hints without creating résumé evidence."""
+        if operation == "set":
+            if skill or not skill_csv.strip():
+                raise ValueError("set requires skill_csv and does not accept skill")
+            store.set_skill_seeds(parse_skill_seed_csv(skill_csv))
+        elif operation == "import_approved":
+            if skill or skill_csv:
+                raise ValueError("import_approved does not accept skill or skill_csv")
+            imported = explicit_skills_in_texts(
+                item.text for item in store.list_evidence() if item.approved
+            )
+            if not imported:
+                raise ValueError("approved evidence contains no explicit audited skill names")
+            for imported_skill in imported:
+                store.add_skill_seed(imported_skill, source="approved_evidence")
+        elif operation == "add":
+            if not skill or skill_csv:
+                raise ValueError("add requires skill and does not accept skill_csv")
+            store.add_skill_seed(skill)
+        elif operation in {"check", "uncheck"}:
+            if not skill or skill_csv:
+                raise ValueError(f"{operation} requires skill and does not accept skill_csv")
+            store.set_skill_seed_checked(skill, checked=operation == "check")
+        elif operation == "remove":
+            if not skill or skill_csv:
+                raise ValueError("remove requires skill and does not accept skill_csv")
+            store.remove_skill_seed(skill)
+        elif operation != "list" or skill or skill_csv:
+            raise ValueError(
+                "operation must be set, add, list, check, uncheck, remove, or import_approved"
+            )
+        return {
+            "skills": [asdict(item) for item in store.list_skill_seeds()],
+            "evidence_created": False,
+            "card": build_onboarding_card(load_config(config_path), store).as_dict(),
+        }
+
+    @profile_tool("manage_portfolio_roots", annotations=_LOCAL_IDEMPOTENT_WRITE)
+    def manage_portfolio_roots(
+        operation: str,
+        root: str = "",
+        roots: list[str] | None = None,
+    ) -> dict[str, object]:
+        """Manage only explicit existing local roots; never crawl a home directory by default."""
+        current = list(load_config(config_path).portfolio_roots)
+        if operation == "add":
+            if not root or roots is not None:
+                raise ValueError("add requires root and does not accept roots")
+            current.append(Path(root))
+            current = list(update_portfolio_roots(config_path, current))
+        elif operation == "add_detected":
+            if root or roots is not None:
+                raise ValueError("add_detected does not accept root or roots")
+            detected = detected_portfolio_root()
+            if detected is None:
+                raise ValueError(
+                    "no conventional local projects folder with Git repositories found"
+                )
+            current.append(detected)
+            current = list(update_portfolio_roots(config_path, current))
+        elif operation == "remove":
+            if not root or roots is not None:
+                raise ValueError("remove requires root and does not accept roots")
+            target = Path(root).expanduser().absolute()
+            if target.is_symlink() or not target.is_dir():
+                raise ValueError(f"portfolio root must be an existing directory: {target}")
+            resolved = target.resolve(strict=True)
+            if resolved not in current:
+                raise ValueError("portfolio root is not configured")
+            current.remove(resolved)
+            current = list(update_portfolio_roots(config_path, current))
+        elif operation == "set":
+            if root or roots is None:
+                raise ValueError("set requires roots and does not accept root")
+            current = list(update_portfolio_roots(config_path, [Path(item) for item in roots]))
+        elif operation != "list" or root or roots is not None:
+            raise ValueError("operation must be set, add, add_detected, list, or remove")
+        return {
+            "roots": [str(item) for item in current],
+            "card": build_onboarding_card(load_config(config_path), store).as_dict(),
+        }
+
+    @profile_tool("review_git_skill_group", annotations=_LOCAL_WRITE)
+    def review_git_skill_group(operation: str, skill: str) -> dict[str, object]:
+        """Inspect, skip, restore, or explicitly approve one Git skill group."""
+        matches = [
+            item
+            for item in reconcile_git_skill_groups(store, include_skipped=True)
+            if item.normalized_skill == skill.strip().casefold()
+        ]
+        if operation == "inspect":
+            if not matches:
+                raise ValueError("git skill group does not exist")
+            return {
+                "group": asdict(matches[0]),
+                "approved_evidence_count": 0,
+                "resume_changed": False,
+            }
+        if operation in {"skip", "restore"}:
+            if not matches:
+                raise ValueError("git skill group does not exist")
+            store.set_git_skill_group_skipped(skill, skipped=operation == "skip")
+            return {
+                "group": asdict(matches[0]),
+                "skipped": operation == "skip",
+                "approved_evidence_count": 0,
+                "resume_changed": False,
+            }
+        if operation != "approve":
+            raise ValueError("operation must be inspect, approve, skip, or restore")
+        approved = approve_git_skill_group(store, skill)
+        return {
+            "group": asdict(
+                next(
+                    item
+                    for item in reconcile_git_skill_groups(store)
+                    if item.normalized_skill == skill.strip().casefold()
+                )
+            ),
+            "approved_evidence_count": len(approved),
+            "evidence": [asdict(item) for item in approved],
+            "resume_changed": False,
         }
 
     @profile_tool("list_evidence", annotations=_READ_ONLY)
@@ -2551,15 +2793,29 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         "research_git_worktrees",
         title="Research explicit local Git worktrees from diffs",
         description=(
-            "Run end-to-end local diff-based Git research below explicit existing local roots. "
-            "This tool never defaults to home-directory scanning, uses no network, returns only "
+            "Run the unified candidate scan and diff-research pipeline below explicit existing "
+            "roots, or below roots saved during onboarding when the list is empty. This tool "
+            "never defaults to home-directory scanning, uses no network, returns only "
             "review-required provenance, and never auto-approves evidence or edits a resume."
         ),
         annotations=_LOCAL_WRITE,
     )
     def research_git_worktrees(roots: list[str]) -> dict[str, object]:
-        """Create unapproved local diff research drafts below explicitly supplied roots."""
-        return _git_research_report(store, roots)
+        """Scan Git candidates and create unapproved diff drafts below configured or given roots."""
+        selected_roots = roots or [str(root) for root in load_config(config_path).portfolio_roots]
+        if not selected_roots:
+            return {
+                "repositories_scanned": 0,
+                "candidates_created": 0,
+                "observations_created": 0,
+                "research_drafts": 0,
+                "drafts": [],
+                "auto_approved": False,
+                "scan_started": False,
+                "setup_required": True,
+                "card": build_onboarding_card(load_config(config_path), store).as_dict(),
+            }
+        return _git_research_report(store, selected_roots)
 
     @profile_tool(
         "review_git_drafts",

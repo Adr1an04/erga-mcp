@@ -18,9 +18,11 @@ from .models import (
     GitResearchDraft,
     MailEvent,
     RecruiterContact,
+    SkillSeedRecord,
     TokenUsage,
 )
 from .private_files import restrict_private_directory, restrict_private_file
+from .skill_inventory import clean_skill_name, normalize_skill_name, unique_skill_names
 
 APPLICATION_STATUSES = frozenset(
     {
@@ -42,6 +44,21 @@ CREATE TABLE IF NOT EXISTS evidence (
     text TEXT NOT NULL,
     approved INTEGER NOT NULL,
     created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS skill_seeds (
+    id TEXT PRIMARY KEY,
+    skill TEXT NOT NULL,
+    normalized_skill TEXT NOT NULL UNIQUE,
+    checked INTEGER NOT NULL DEFAULT 1,
+    source TEXT NOT NULL DEFAULT 'self_reported',
+    position INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS git_skill_group_reviews (
+    normalized_skill TEXT PRIMARY KEY,
+    skipped INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS git_evidence_candidates (
     id TEXT PRIMARY KEY,
@@ -237,6 +254,195 @@ class ErgaStore:
             self._record_audit(connection, "evidence.added", evidence.id, {"approved": approved})
             connection.commit()
         return evidence
+
+    def set_skill_seeds(self, skills: list[str] | tuple[str, ...]) -> list[SkillSeedRecord]:
+        """Replace the self-reported seed inventory without touching approved evidence."""
+        cleaned = unique_skill_names(skills)
+        self.initialize()
+        now = _now()
+        normalized = {normalize_skill_name(skill) for skill in cleaned}
+        with closing(self._connection()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing_rows = connection.execute("SELECT * FROM skill_seeds").fetchall()
+            existing = {str(row["normalized_skill"]): row for row in existing_rows}
+            connection.execute(
+                "DELETE FROM skill_seeds WHERE normalized_skill NOT IN "
+                f"({','.join('?' for _ in normalized)})"
+                if normalized
+                else "DELETE FROM skill_seeds",
+                tuple(normalized),
+            )
+            for position, skill in enumerate(cleaned):
+                key = normalize_skill_name(skill)
+                row = existing.get(key)
+                if row is None:
+                    connection.execute(
+                        "INSERT INTO skill_seeds VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            f"skill_{uuid4().hex}",
+                            skill,
+                            key,
+                            True,
+                            "self_reported",
+                            position,
+                            _as_text(now),
+                            _as_text(now),
+                        ),
+                    )
+                else:
+                    connection.execute(
+                        "UPDATE skill_seeds SET skill = ?, position = ?, updated_at = ? "
+                        "WHERE id = ?",
+                        (skill, position, _as_text(now), row["id"]),
+                    )
+            self._record_audit(
+                connection,
+                "skill_seeds.replaced",
+                "skill-seed-inventory",
+                {"count": len(cleaned)},
+            )
+            connection.commit()
+        return self.list_skill_seeds()
+
+    def add_skill_seed(self, skill: str, *, source: str = "self_reported") -> SkillSeedRecord:
+        """Add one review seed idempotently while preserving its truthful provenance."""
+        if source not in {"self_reported", "approved_evidence"}:
+            raise ValueError("skill seed source is not supported")
+        cleaned = clean_skill_name(skill)
+        key = normalize_skill_name(cleaned)
+        self.initialize()
+        now = _now()
+        with closing(self._connection()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT * FROM skill_seeds WHERE normalized_skill = ?", (key,)
+            ).fetchone()
+            if existing is None:
+                position = int(
+                    connection.execute(
+                        "SELECT COALESCE(MAX(position), -1) + 1 AS position FROM skill_seeds"
+                    ).fetchone()["position"]
+                )
+                record_id = f"skill_{uuid4().hex}"
+                connection.execute(
+                    "INSERT INTO skill_seeds VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        record_id,
+                        cleaned,
+                        key,
+                        True,
+                        source,
+                        position,
+                        _as_text(now),
+                        _as_text(now),
+                    ),
+                )
+                self._record_audit(
+                    connection, "skill_seed.added", record_id, {"normalized_skill": key}
+                )
+                connection.commit()
+            else:
+                record_id = str(existing["id"])
+        return self._skill_seed(record_id)
+
+    def list_skill_seeds(self) -> list[SkillSeedRecord]:
+        self.initialize()
+        with closing(self._connection()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM skill_seeds ORDER BY position, created_at, id"
+            ).fetchall()
+        return [self._skill_seed_from_row(row) for row in rows]
+
+    def set_skill_seed_checked(self, identifier: str, *, checked: bool) -> SkillSeedRecord:
+        self.initialize()
+        key = identifier.strip()
+        normalized = key.casefold()
+        with closing(self._connection()) as connection:
+            row = connection.execute(
+                "SELECT * FROM skill_seeds WHERE id = ? OR normalized_skill = ?",
+                (key, normalized),
+            ).fetchone()
+            if row is None:
+                raise ValueError("skill seed does not exist")
+            if bool(row["checked"]) != checked:
+                connection.execute(
+                    "UPDATE skill_seeds SET checked = ?, updated_at = ? WHERE id = ?",
+                    (checked, _as_text(_now()), row["id"]),
+                )
+                self._record_audit(
+                    connection,
+                    "skill_seed.checked" if checked else "skill_seed.unchecked",
+                    row["id"],
+                    {},
+                )
+                connection.commit()
+            record_id = str(row["id"])
+        return self._skill_seed(record_id)
+
+    def remove_skill_seed(self, identifier: str) -> None:
+        self.initialize()
+        key = identifier.strip()
+        with closing(self._connection()) as connection:
+            row = connection.execute(
+                "SELECT id FROM skill_seeds WHERE id = ? OR normalized_skill = ?",
+                (key, key.casefold()),
+            ).fetchone()
+            if row is None:
+                raise ValueError("skill seed does not exist")
+            connection.execute("DELETE FROM skill_seeds WHERE id = ?", (row["id"],))
+            self._record_audit(connection, "skill_seed.removed", row["id"], {})
+            connection.commit()
+
+    def set_git_skill_group_skipped(self, normalized_skill: str, *, skipped: bool) -> None:
+        """Persist an explicit review choice without creating or approving evidence."""
+        key = normalize_skill_name(normalized_skill)
+        self.initialize()
+        with closing(self._connection()) as connection:
+            connection.execute(
+                """
+                INSERT INTO git_skill_group_reviews VALUES (?, ?, ?)
+                ON CONFLICT(normalized_skill) DO UPDATE SET
+                    skipped = excluded.skipped,
+                    updated_at = excluded.updated_at
+                """,
+                (key, skipped, _as_text(_now())),
+            )
+            self._record_audit(
+                connection,
+                "git_skill_group.skipped" if skipped else "git_skill_group.restored",
+                key,
+                {},
+            )
+            connection.commit()
+
+    def skipped_git_skill_groups(self) -> set[str]:
+        self.initialize()
+        with closing(self._connection()) as connection:
+            rows = connection.execute(
+                "SELECT normalized_skill FROM git_skill_group_reviews WHERE skipped = 1"
+            ).fetchall()
+        return {str(row["normalized_skill"]) for row in rows}
+
+    def _skill_seed(self, record_id: str) -> SkillSeedRecord:
+        with closing(self._connection()) as connection:
+            row = connection.execute(
+                "SELECT * FROM skill_seeds WHERE id = ?", (record_id,)
+            ).fetchone()
+        if row is None:
+            raise ValueError("skill seed does not exist")
+        return self._skill_seed_from_row(row)
+
+    @staticmethod
+    def _skill_seed_from_row(row: sqlite3.Row) -> SkillSeedRecord:
+        return SkillSeedRecord(
+            id=str(row["id"]),
+            skill=str(row["skill"]),
+            normalized_skill=str(row["normalized_skill"]),
+            checked=bool(row["checked"]),
+            source=str(row["source"]),
+            created_at=_as_datetime(str(row["created_at"])),
+            updated_at=_as_datetime(str(row["updated_at"])),
+        )
 
     def set_active_master_resume_evidence(self, *, source_ref: str, text: str) -> Evidence:
         """Atomically make one master résumé the only approved master source."""

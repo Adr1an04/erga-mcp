@@ -7,6 +7,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from .card_view import CardAction, CardField, CardView
+
 _TABLE_HEADER = (
     "company",
     "role",
@@ -392,3 +394,56 @@ def render_tracker_message(
             ]
         )
     return "\n".join(lines)
+
+
+def build_tracker_card(
+    snapshot: TrackerSnapshot,
+    *,
+    page: int = 1,
+    page_size: int = 6,
+    query: str = "",
+) -> CardView:
+    """Return the same stable tracker page as a reusable client-neutral card."""
+    pagination = paginate_application_tracker(snapshot, page=page, page_size=page_size)
+    summary = (
+        " · ".join(f"{count} {status}" for status, count in snapshot.summary.items())
+        or "No application rows are available."
+    )
+    fields = tuple(
+        CardField(
+            f"{_status_label(entry.status)} · {entry.company}",
+            "\n".join(
+                value
+                for value in (
+                    f"{entry.role} · {entry.cycle}",
+                    entry.location,
+                    f"Applied {entry.applied}" if entry.applied else "",
+                    f"Next: {entry.next_action}" if entry.next_action else "",
+                    entry.source_url,
+                )
+                if value
+            ),
+        )
+        for entry in pagination.entries
+    )
+    actions: list[CardAction] = []
+    if pagination.page > 1:
+        actions.append(CardAction("tracker.previous", "Previous", "Show the prior page."))
+    if pagination.page < pagination.page_count:
+        actions.append(CardAction("tracker.next", "Next", "Show the next page."))
+    actions.append(
+        CardAction(
+            "tracker.search",
+            "Search",
+            "Provide company, role, status, or recruiting cycle words.",
+        )
+    )
+    search = f" Search: {_short(query, limit=80)}." if query.strip() else ""
+    return CardView(
+        title="Erga application tracker",
+        summary=f"{pagination.total} roles. {summary}.{search}".strip(),
+        fields=fields or (CardField("Results", "No tracked applications match this view."),),
+        actions=tuple(actions),
+        page=pagination.page,
+        page_count=pagination.page_count,
+    )

@@ -19,6 +19,9 @@ _READ_TOOLS = {
     "pipeline_status",
     "list_applications",
     "application_tracker",
+    "onboarding_status",
+    "git_skill_review_card",
+    "erga_settings_card",
     "list_evidence",
     "list_mail_events",
     "token_usage",
@@ -28,6 +31,9 @@ _CAREER_TOOLS = {
     "pipeline_status",
     "list_applications",
     "application_tracker",
+    "onboarding_status",
+    "git_skill_review_card",
+    "erga_settings_card",
     "list_evidence",
     "update_application_status",
     "scrape_public_page",
@@ -41,6 +47,9 @@ _CAREER_TOOLS = {
     "validate_tailored_resume",
     "create_cover_letter",
     "propose_project_metrics",
+    "update_skill_inventory",
+    "manage_portfolio_roots",
+    "review_git_skill_group",
 }
 
 
@@ -157,6 +166,9 @@ class McpToolProfileTests(unittest.TestCase):
                 "research_git_worktrees",
                 "review_git_drafts",
                 "review_git_draft_prompt",
+                "update_skill_inventory",
+                "manage_portfolio_roots",
+                "review_git_skill_group",
             },
         )
 
@@ -164,7 +176,16 @@ class McpToolProfileTests(unittest.TestCase):
         tool_names = self._tool_names(self._config_with_profile("hermes"))
 
         self.assertEqual(
-            tool_names, _READ_TOOLS | {"sync_recruiting_mail", "install_mail_monitor_scripts"}
+            tool_names,
+            _READ_TOOLS
+            | {
+                "sync_recruiting_mail",
+                "install_mail_monitor_scripts",
+                "research_git_worktrees",
+                "update_skill_inventory",
+                "manage_portfolio_roots",
+                "review_git_skill_group",
+            },
         )
 
     def test_environment_profile_overrides_nonsecret_config_selection(self) -> None:

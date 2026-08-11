@@ -14,6 +14,19 @@ class Evidence:
 
 
 @dataclass(frozen=True)
+class SkillSeedRecord:
+    """One self-reported discovery hint; never approved résumé evidence by itself."""
+
+    id: str
+    skill: str
+    normalized_skill: str
+    checked: bool
+    source: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
 class GitEvidenceCandidate:
     id: str
     repo_path: str

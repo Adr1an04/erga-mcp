@@ -40,6 +40,11 @@ from .git_evidence import (
     synthesize_project_research,
     validate_worktree,
 )
+from .git_skills import (
+    approve_git_skill_group,
+    build_git_skill_review_card,
+    reconcile_git_skill_groups,
+)
 from .host_connections import (
     SUPPORTED_HOSTS,
     HostName,
@@ -60,6 +65,8 @@ from .job_discovery import discover_job_research
 from .mail_settings import as_json as mail_settings_as_json
 from .mail_settings import update_settings as update_mail_settings
 from .models import Application
+from .onboarding_view import build_onboarding_card
+from .portfolio_roots import update_portfolio_roots
 from .private_files import restrict_private_file
 from .reporting import render_history_digest
 from .resume import (
@@ -77,6 +84,7 @@ from .resume_sources import (
     snapshot_resume_source,
 )
 from .resume_template import ensure_resume_template, reset_resume_template
+from .settings_view import build_settings_card
 from .setup_wizard import (
     WizardCancelled,
     apply_core_setup,
@@ -84,6 +92,7 @@ from .setup_wizard import (
     render_core_setup_report,
     write_core_setup_plan,
 )
+from .skill_inventory import parse_skill_seed_csv
 from .store import ErgaStore
 from .uninstall import (
     apply_uninstall,
@@ -204,6 +213,44 @@ def _parser() -> argparse.ArgumentParser:
     doctor = subcommands.add_parser("doctor", help="check core and optional local capabilities")
     _config_argument(doctor)
 
+    onboarding = subcommands.add_parser(
+        "onboarding", help="review and update local onboarding inventory"
+    )
+    onboarding_commands = onboarding.add_subparsers(dest="onboarding_command", required=True)
+    onboarding_status = onboarding_commands.add_parser(
+        "status", help="show the shared onboarding completion card"
+    )
+    _config_argument(onboarding_status)
+    onboarding_status.add_argument("--json", action="store_true")
+    onboarding_skills = onboarding_commands.add_parser(
+        "skills", help="manage self-reported review-only skill seeds"
+    )
+    onboarding_skill_commands = onboarding_skills.add_subparsers(
+        dest="onboarding_skill_command", required=True
+    )
+    for action in ("list", "set", "add", "check", "uncheck", "remove"):
+        skill_command = onboarding_skill_commands.add_parser(action)
+        _config_argument(skill_command)
+        if action == "set":
+            skill_command.add_argument("--csv", required=True)
+        elif action != "list":
+            skill_command.add_argument("skill")
+    onboarding_roots = onboarding_commands.add_parser(
+        "roots", help="manage explicit local Git/project roots"
+    )
+    onboarding_root_commands = onboarding_roots.add_subparsers(
+        dest="onboarding_root_command", required=True
+    )
+    for action in ("list", "add", "remove"):
+        root_command = onboarding_root_commands.add_parser(action)
+        _config_argument(root_command)
+        if action != "list":
+            root_command.add_argument("root", type=Path)
+
+    settings = subcommands.add_parser("settings", help="show a redacted local settings card")
+    _config_argument(settings)
+    settings.add_argument("--json", action="store_true")
+
     evidence = subcommands.add_parser("evidence", help="manage local evidence records")
     evidence_commands = evidence.add_subparsers(dest="evidence_command", required=True)
     evidence_add = evidence_commands.add_parser("add", help="add local career evidence")
@@ -220,6 +267,15 @@ def _parser() -> argparse.ArgumentParser:
     _config_argument(git_scan)
     git_scan.add_argument("repo", type=Path, nargs="?")
     git_scan.add_argument("--all", action="store_true", help="scan every worktree below --root")
+    git_scan.add_argument(
+        "--configured-roots",
+        action="store_true",
+        help="also scan worktrees below explicitly saved portfolio roots",
+    )
+    git_scan.add_argument(
+        "--seed-csv",
+        help="one-shot review hints; parsed and returned but never persisted as evidence",
+    )
     git_scan.add_argument(
         "--root",
         type=Path,
@@ -260,6 +316,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     _config_argument(git_approve)
     git_approve.add_argument("candidate_id")
+    git_skills = git_commands.add_parser(
+        "skills", help="review reconciled self-reported and Git-corroborated skill groups"
+    )
+    git_skill_commands = git_skills.add_subparsers(dest="git_skill_command", required=True)
+    git_skills_show = git_skill_commands.add_parser("show")
+    _config_argument(git_skills_show)
+    git_skills_show.add_argument("--page", type=int, default=1)
+    git_skills_show.add_argument("--page-size", type=int, default=5)
+    git_skills_show.add_argument("--filter", dest="source_filter")
+    git_skills_show.add_argument("--seed-csv")
+    git_skills_show.add_argument("--json", action="store_true")
+    for action in ("approve", "skip", "restore"):
+        git_skill_action = git_skill_commands.add_parser(action)
+        _config_argument(git_skill_action)
+        git_skill_action.add_argument("skill")
 
     obsidian = subcommands.add_parser("obsidian", help="import configured Obsidian evidence")
     obsidian_commands = obsidian.add_subparsers(dest="obsidian_command", required=True)
@@ -816,6 +887,57 @@ def main(arguments: Sequence[str] | None = None) -> int:
         return 0
 
     store = _store_for(args.config)
+    if args.command == "onboarding":
+        config = load_config(args.config)
+        if args.onboarding_command == "status":
+            card = build_onboarding_card(config, store)
+            if args.json:
+                _print_json(card.as_dict())
+            else:
+                print(card.as_text())
+            return 0
+        if args.onboarding_command == "skills":
+            action = args.onboarding_skill_command
+            if action == "set":
+                skill_results = store.set_skill_seeds(parse_skill_seed_csv(args.csv))
+            elif action == "add":
+                store.add_skill_seed(args.skill)
+                skill_results = store.list_skill_seeds()
+            elif action == "check":
+                _print_json(asdict(store.set_skill_seed_checked(args.skill, checked=True)))
+                return 0
+            elif action == "uncheck":
+                _print_json(asdict(store.set_skill_seed_checked(args.skill, checked=False)))
+                return 0
+            elif action == "remove":
+                store.remove_skill_seed(args.skill)
+                skill_results = store.list_skill_seeds()
+            else:
+                skill_results = store.list_skill_seeds()
+            _print_json([asdict(item) for item in skill_results])
+            return 0
+        roots = list(config.portfolio_roots)
+        if args.onboarding_root_command == "add":
+            roots.append(args.root)
+            roots = list(update_portfolio_roots(args.config, roots))
+        elif args.onboarding_root_command == "remove":
+            target = args.root.expanduser().absolute()
+            if target.is_symlink() or not target.is_dir():
+                raise ValueError(f"portfolio root must be an existing directory: {target}")
+            resolved = target.resolve(strict=True)
+            if resolved not in roots:
+                raise ValueError("portfolio root is not configured")
+            roots.remove(resolved)
+            roots = list(update_portfolio_roots(args.config, roots))
+        _print_json([str(root) for root in roots])
+        return 0
+    if args.command == "settings":
+        card = build_settings_card(load_config(args.config), store)
+        if args.json:
+            _print_json(card.as_dict())
+        else:
+            print(card.as_text())
+        return 0
     if args.command == "status":
         _print_json(
             {
@@ -852,6 +974,50 @@ def main(arguments: Sequence[str] | None = None) -> int:
         _print_json(store.token_usage_summary(application_id=args.application_id))
         return 0
     if args.command == "git":
+        if args.git_command == "skills":
+            action = args.git_skill_command
+            if action == "show":
+                seed_override = (
+                    parse_skill_seed_csv(args.seed_csv) if args.seed_csv is not None else ()
+                )
+                card = build_git_skill_review_card(
+                    store,
+                    page=args.page,
+                    page_size=args.page_size,
+                    source_filter=args.source_filter,
+                    seed_override=seed_override,
+                )
+                if args.json:
+                    _print_json(card.as_dict())
+                else:
+                    print(card.as_text())
+                return 0
+            if action == "approve":
+                approved = approve_git_skill_group(store, args.skill)
+                _print_json(
+                    {
+                        "approved_evidence_count": len(approved),
+                        "evidence": [asdict(item) for item in approved],
+                        "resume_changed": False,
+                    }
+                )
+                return 0
+            key = args.skill.strip().casefold()
+            if not any(
+                group.normalized_skill == key
+                for group in reconcile_git_skill_groups(store, include_skipped=True)
+            ):
+                raise ValueError("git skill group does not exist")
+            store.set_git_skill_group_skipped(key, skipped=action == "skip")
+            _print_json(
+                {
+                    "skill": key,
+                    "skipped": action == "skip",
+                    "evidence_approved": False,
+                    "resume_changed": False,
+                }
+            )
+            return 0
         if args.git_command == "candidates":
             _print_json([asdict(candidate) for candidate in store.list_git_candidates()])
             return 0
@@ -938,9 +1104,23 @@ def main(arguments: Sequence[str] | None = None) -> int:
         if args.git_command == "approve":
             _print_json(asdict(store.approve_git_candidate(args.candidate_id)))
             return 0
-        if bool(args.all) == (args.repo is not None):
-            raise ValueError("git scan requires exactly one of a repository path or --all")
-        repositories = discover_worktrees(args.root) if args.all else [validate_worktree(args.repo)]
+        if args.root and not args.all:
+            raise ValueError("git scan --root requires --all")
+        config = load_config(args.config)
+        scan_roots = list(args.root) if args.all else []
+        if args.configured_roots:
+            scan_roots.extend(config.portfolio_roots)
+        repositories = [validate_worktree(args.repo)] if args.repo is not None else []
+        if scan_roots:
+            repositories.extend(discover_worktrees(scan_roots))
+        repositories = list(dict.fromkeys(repositories))
+        if not repositories:
+            raise ValueError(
+                "git scan requires a repository path, --all with --root, or --configured-roots"
+            )
+        review_seed_override = (
+            parse_skill_seed_csv(args.seed_csv) if args.seed_csv is not None else ()
+        )
         created = 0
         checkpoints: dict[str, str | None] = {}
         previous_checkpoints: dict[str, str | None] = {}
@@ -980,6 +1160,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "created": created,
             "repositories_scanned": len(repositories),
             "research_drafts": len(research_drafts),
+            "review_seed_override": list(review_seed_override),
         }
         if len(repositories) == 1:
             repo_path = str(repositories[0])
