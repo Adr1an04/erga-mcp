@@ -1,7 +1,7 @@
 # MCP adapter instructions
 
-Keep this package a thin protocol adapter. Domain and application logic belongs one level up in an
-ordinary module that the CLI can also call.
+Keep this package a thin protocol adapter. Reusable logic belongs in the owning sibling package
+(`applications/`, `resumes/`, `portfolio/`, or `tracking/`) so the CLI can call it too.
 
 - `contracts.py`: Pydantic wire contracts only.
 - `profiles.py`: capability annotations, profile membership, and private-data visibility.

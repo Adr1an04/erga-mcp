@@ -13,7 +13,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from erga_mcp.config import DEFAULT_CONFIG
 from erga_mcp.mcp.profiles import profile_visible_evidence
-from erga_mcp.mcp_server import build_server
+from erga_mcp.mcp.server import build_server
 from erga_mcp.models import Evidence
 from erga_mcp.store import ErgaStore
 

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.tracker_view import (
+from erga_mcp.tracking.tracker import (
     build_tracker_card,
     filter_application_tracker,
     paginate_application_tracker,

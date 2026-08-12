@@ -6,8 +6,8 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from erga_mcp.config import DEFAULT_CONFIG
-from erga_mcp.http_transport import HttpTransportSettings
-from erga_mcp.mcp_server import build_server, run_streamable_http
+from erga_mcp.mcp.server import build_server, run_streamable_http
+from erga_mcp.mcp.transport import HttpTransportSettings
 
 _HTTP_TOKEN = "test-token-with-at-least-thirty-two-characters"
 

@@ -5,8 +5,8 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from erga_mcp.integrations.zoho import validate_read_only_scopes
-from erga_mcp.zoho_oauth import read_tokens
+from erga_mcp.integrations.mail.zoho import validate_read_only_scopes
+from erga_mcp.integrations.mail.zoho_oauth import read_tokens
 
 
 class ZohoScopeTests(unittest.TestCase):
@@ -36,9 +36,13 @@ class ZohoScopeTests(unittest.TestCase):
             args=["security"], returncode=0, stdout=token, stderr=""
         )
         with (
-            patch("erga_mcp.zoho_oauth.sys.platform", "darwin"),
-            patch("erga_mcp.zoho_oauth.subprocess.run", return_value=completed) as run,
-            patch("erga_mcp.zoho_oauth.keyring.get_password", return_value=token) as get_password,
+            patch("erga_mcp.integrations.mail.zoho_oauth.sys.platform", "darwin"),
+            patch(
+                "erga_mcp.integrations.mail.zoho_oauth.subprocess.run", return_value=completed
+            ) as run,
+            patch(
+                "erga_mcp.integrations.mail.zoho_oauth.keyring.get_password", return_value=token
+            ) as get_password,
         ):
             self.assertEqual(read_tokens("client-id"), {"refresh_token": "token"})
 

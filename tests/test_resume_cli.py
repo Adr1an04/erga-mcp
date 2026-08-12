@@ -74,7 +74,7 @@ class ResumeCliTests(unittest.TestCase):
                 args=[], returncode=0, stdout="compiled", stderr=""
             )
 
-            with patch("erga_mcp.resume.subprocess.run", return_value=completed):
+            with patch("erga_mcp.resumes.artifacts.subprocess.run", return_value=completed):
                 result = self._json_command(
                     [
                         "resume",

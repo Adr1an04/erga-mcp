@@ -16,7 +16,7 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("mcp>=2,<3", dependencies)
         self.assertIn("uvicorn>=0.30,<1", dependencies)
         self.assertNotIn("mcp", optional)
-        self.assertEqual(project["project"]["scripts"]["erga-mcp"], "erga_mcp.mcp_server:main")
+        self.assertEqual(project["project"]["scripts"]["erga-mcp"], "erga_mcp.mcp.server:main")
 
     def test_mcp_metadata_and_documentation_inventory_stay_aligned(self) -> None:
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")

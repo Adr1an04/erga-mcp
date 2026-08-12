@@ -10,11 +10,8 @@ from threading import Event, Thread
 from typing import Any
 from unittest.mock import MagicMock, call, patch
 
-from erga_mcp.job_intake import (
-    _validate_public_job_url,
-    fetch_job_snapshot,
-    select_relevant_evidence,
-)
+from erga_mcp.applications.intake import fetch_job_snapshot, select_relevant_evidence
+from erga_mcp.integrations.http import _validate_public_job_url
 from erga_mcp.models import Evidence
 
 
@@ -58,7 +55,7 @@ class JobIntakeTests(unittest.TestCase):
         )
         url = "https://www.shopify.com/careers/applied-machine-learning-internships-winter-2027_example"
 
-        with patch("erga_mcp.job_intake.fetch_public_page", return_value=page):
+        with patch("erga_mcp.applications.intake.fetch_public_page", return_value=page):
             snapshot = fetch_job_snapshot(url)
 
         self.assertIn("Applied Machine Learning Interns", snapshot)
@@ -70,7 +67,7 @@ class JobIntakeTests(unittest.TestCase):
         private_resolution = [(2, 1, 6, "", ("127.0.0.1", 443))]
         with (
             patch(
-                "erga_mcp.job_intake.socket.getaddrinfo",
+                "erga_mcp.integrations.http.socket.getaddrinfo",
                 return_value=private_resolution,
             ),
             self.assertRaisesRegex(ValueError, "public network addresses"),
@@ -89,8 +86,8 @@ class JobIntakeTests(unittest.TestCase):
         resolver = MagicMock(return_value=self._public_resolution("93.184.216.34", 80))
 
         with (
-            patch("erga_mcp.job_intake.socket.getaddrinfo", resolver),
-            patch("erga_mcp.job_intake.socket.socket", return_value=network_socket),
+            patch("erga_mcp.integrations.http.socket.getaddrinfo", resolver),
+            patch("erga_mcp.integrations.http.socket.socket", return_value=network_socket),
         ):
             snapshot = fetch_job_snapshot("http://jobs.example.test/role")
 
@@ -118,11 +115,11 @@ class JobIntakeTests(unittest.TestCase):
         )
         with (
             patch(
-                "erga_mcp.job_intake.socket.getaddrinfo",
+                "erga_mcp.integrations.http.socket.getaddrinfo",
                 return_value=self._public_resolution("93.184.216.34", 80),
             ),
             patch(
-                "erga_mcp.job_intake.socket.socket",
+                "erga_mcp.integrations.http.socket.socket",
                 return_value=network_socket,
             ),
         ):
@@ -153,10 +150,10 @@ class JobIntakeTests(unittest.TestCase):
 
         with (
             patch(
-                "erga_mcp.job_intake.socket.getaddrinfo",
+                "erga_mcp.integrations.http.socket.getaddrinfo",
                 return_value=resolution,
             ),
-            patch("erga_mcp.job_intake.socket.socket", socket_constructor),
+            patch("erga_mcp.integrations.http.socket.socket", socket_constructor),
         ):
             snapshot = fetch_job_snapshot("http://jobs.example.test/role")
 
@@ -186,12 +183,12 @@ class JobIntakeTests(unittest.TestCase):
 
         with (
             patch(
-                "erga_mcp.job_intake.socket.getaddrinfo",
+                "erga_mcp.integrations.http.socket.getaddrinfo",
                 return_value=self._public_resolution("93.184.216.34", 443),
             ),
-            patch("erga_mcp.job_intake.socket.socket", return_value=network_socket),
+            patch("erga_mcp.integrations.http.socket.socket", return_value=network_socket),
             patch(
-                "erga_mcp.job_intake.ssl.create_default_context",
+                "erga_mcp.integrations.http.ssl.create_default_context",
                 return_value=tls_context,
             ) as create_default_context,
         ):
@@ -232,11 +229,11 @@ class JobIntakeTests(unittest.TestCase):
 
         with (
             patch(
-                "erga_mcp.job_intake.socket.getaddrinfo",
+                "erga_mcp.integrations.http.socket.getaddrinfo",
                 side_effect=resolve,
             ) as resolver,
             patch(
-                "erga_mcp.job_intake.socket.socket",
+                "erga_mcp.integrations.http.socket.socket",
                 side_effect=[first_socket, second_socket],
             ),
         ):
@@ -288,13 +285,13 @@ class JobIntakeTests(unittest.TestCase):
             return self._public_resolution("93.184.216.34", port)
 
         with (
-            patch("erga_mcp.job_intake.time.monotonic", side_effect=lambda: now[0]),
+            patch("erga_mcp.integrations.http.time.monotonic", side_effect=lambda: now[0]),
             patch(
-                "erga_mcp.job_intake.socket.getaddrinfo",
+                "erga_mcp.integrations.http.socket.getaddrinfo",
                 side_effect=resolve,
             ) as resolver,
             patch(
-                "erga_mcp.job_intake.socket.socket",
+                "erga_mcp.integrations.http.socket.socket",
                 side_effect=[first_socket, second_socket],
             ),
             self.assertRaisesRegex(TimeoutError, "30 second deadline"),
@@ -335,13 +332,13 @@ class JobIntakeTests(unittest.TestCase):
 
         started_at = time.perf_counter()
         with (
-            patch("erga_mcp.job_intake._JOB_FETCH_TIMEOUT_SECONDS", 0.05),
+            patch("erga_mcp.integrations.http._JOB_FETCH_TIMEOUT_SECONDS", 0.05),
             patch(
-                "erga_mcp.job_intake.socket.getaddrinfo",
+                "erga_mcp.integrations.http.socket.getaddrinfo",
                 return_value=self._public_resolution("93.184.216.34", 80),
             ),
-            patch("erga_mcp.job_intake.socket.socket", return_value=network_socket),
-            patch("erga_mcp.job_intake.Thread", side_effect=create_thread),
+            patch("erga_mcp.integrations.http.socket.socket", return_value=network_socket),
+            patch("erga_mcp.integrations.http.Thread", side_effect=create_thread),
             self.assertRaisesRegex(TimeoutError, "30 second deadline"),
         ):
             fetch_job_snapshot("http://jobs.example.test/slow")
@@ -372,8 +369,8 @@ class JobIntakeTests(unittest.TestCase):
 
         socket_constructor = MagicMock(return_value=first_socket)
         with (
-            patch("erga_mcp.job_intake.socket.getaddrinfo", side_effect=resolve),
-            patch("erga_mcp.job_intake.socket.socket", socket_constructor),
+            patch("erga_mcp.integrations.http.socket.getaddrinfo", side_effect=resolve),
+            patch("erga_mcp.integrations.http.socket.socket", socket_constructor),
             self.assertRaisesRegex(ValueError, "public network addresses"),
         ):
             fetch_job_snapshot("http://jobs.example.test/start")
@@ -394,10 +391,10 @@ class JobIntakeTests(unittest.TestCase):
         socket_constructor = MagicMock(side_effect=redirect_sockets)
         with (
             patch(
-                "erga_mcp.job_intake.socket.getaddrinfo",
+                "erga_mcp.integrations.http.socket.getaddrinfo",
                 return_value=self._public_resolution("93.184.216.34", 80),
             ) as resolver,
-            patch("erga_mcp.job_intake.socket.socket", socket_constructor),
+            patch("erga_mcp.integrations.http.socket.socket", socket_constructor),
             self.assertRaisesRegex(ValueError, "5 redirect limit"),
         ):
             fetch_job_snapshot("http://jobs.example.test/start")
@@ -433,11 +430,11 @@ class JobIntakeTests(unittest.TestCase):
                 network_socket = self._socket_with_response(response)
                 with (
                     patch(
-                        "erga_mcp.job_intake.socket.getaddrinfo",
+                        "erga_mcp.integrations.http.socket.getaddrinfo",
                         return_value=self._public_resolution("93.184.216.34", 80),
                     ),
                     patch(
-                        "erga_mcp.job_intake.socket.socket",
+                        "erga_mcp.integrations.http.socket.socket",
                         return_value=network_socket,
                     ),
                     self.assertRaisesRegex(ValueError, error_pattern),

@@ -4,8 +4,8 @@ from collections.abc import Mapping
 
 from mcp.types import ToolAnnotations
 
-from ..config import ErgaConfig
-from ..models import Evidence
+from erga_mcp.config import ErgaConfig
+from erga_mcp.models import Evidence
 
 READ_ONLY = ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False

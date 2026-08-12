@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from erga_mcp.cli import main
-from erga_mcp.integrations.zoho import MailMessageMetadata
+from erga_mcp.integrations.mail.zoho import MailMessageMetadata
 
 
 class MailSyncTests(unittest.TestCase):
@@ -26,7 +26,7 @@ class MailSyncTests(unittest.TestCase):
                 preview="Thanks for applying",
             )
             with patch(
-                "erga_mcp.integrations.mail_provider.fetch_all_inbox_metadata_with_gws",
+                "erga_mcp.integrations.mail.provider.fetch_all_inbox_metadata_with_gws",
                 return_value=[message],
             ):
                 self.assertEqual(main(["mail", "sync", "--config", str(config)]), 0)
@@ -47,7 +47,7 @@ class MailSyncTests(unittest.TestCase):
             first_output = StringIO()
             second_output = StringIO()
             with patch(
-                "erga_mcp.integrations.mail_provider.fetch_all_inbox_metadata_with_gws",
+                "erga_mcp.integrations.mail.provider.fetch_all_inbox_metadata_with_gws",
                 return_value=[message],
             ):
                 with redirect_stdout(first_output):
@@ -69,11 +69,11 @@ class MailSyncTests(unittest.TestCase):
             )
             with (
                 patch(
-                    "erga_mcp.integrations.mail_provider.refresh_access_token",
+                    "erga_mcp.integrations.mail.provider.refresh_access_token",
                     return_value="access-token",
                 ) as refresh,
                 patch(
-                    "erga_mcp.integrations.mail_provider.fetch_all_inbox_metadata", return_value=[]
+                    "erga_mcp.integrations.mail.provider.fetch_all_inbox_metadata", return_value=[]
                 ),
             ):
                 self.assertEqual(main(["mail", "sync", "--config", str(config)]), 0)

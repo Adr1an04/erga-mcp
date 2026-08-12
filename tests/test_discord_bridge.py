@@ -11,10 +11,9 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from erga_mcp.card_view import CardField, CardView
 from erga_mcp.config import DEFAULT_CONFIG, load_config
-from erga_mcp.discord_backends import DiscordBackendName
-from erga_mcp.discord_bridge import (
+from erga_mcp.integrations.discord.backends import DiscordBackendName
+from erga_mcp.integrations.discord.bridge import (
     ERGA_INK,
     ERGA_LEAF,
     ERGA_ORBIT_VIOLET,
@@ -40,8 +39,9 @@ from erga_mcp.discord_bridge import (
     verify_backend_login,
     write_discord_settings,
 )
-from erga_mcp.discord_cards import discord_card_from_view
-from erga_mcp.discord_setup import parse_discord_identities
+from erga_mcp.integrations.discord.cards import discord_card_from_view
+from erga_mcp.integrations.discord.setup import parse_discord_identities
+from erga_mcp.tracking.cards import CardField, CardView
 
 
 class DiscordBridgeTests(unittest.TestCase):
@@ -170,12 +170,18 @@ class DiscordBridgeTests(unittest.TestCase):
             )
 
             with (
-                patch("erga_mcp.discord_bridge._discord_module", return_value=fake_discord),
                 patch(
-                    "erga_mcp.discord_bridge.run_backend",
+                    "erga_mcp.integrations.discord.bridge._discord_module",
+                    return_value=fake_discord,
+                ),
+                patch(
+                    "erga_mcp.integrations.discord.bridge.run_backend",
                     return_value=f"Validated PDF ready at {resume_pdf}",
                 ),
-                patch("erga_mcp.discord_bridge._render_resume_preview", return_value=preview),
+                patch(
+                    "erga_mcp.integrations.discord.bridge._render_resume_preview",
+                    return_value=preview,
+                ),
             ):
                 client = _create_discord_client(
                     DiscordBridgeSettings(
@@ -300,9 +306,9 @@ class DiscordBridgeTests(unittest.TestCase):
             bundled.chmod(0o755)
 
             with (
-                patch("erga_mcp.discord_bridge.shutil.which", return_value=None),
+                patch("erga_mcp.integrations.discord.bridge.shutil.which", return_value=None),
                 patch(
-                    "erga_mcp.discord_bridge._bundled_backend_candidates",
+                    "erga_mcp.integrations.discord.bridge._bundled_backend_candidates",
                     return_value=(bundled,),
                 ),
             ):
@@ -312,9 +318,9 @@ class DiscordBridgeTests(unittest.TestCase):
 
     def test_missing_backend_does_not_claim_core_failed(self) -> None:
         with (
-            patch("erga_mcp.discord_bridge.shutil.which", return_value=None),
+            patch("erga_mcp.integrations.discord.bridge.shutil.which", return_value=None),
             patch(
-                "erga_mcp.discord_bridge._bundled_backend_candidates",
+                "erga_mcp.integrations.discord.bridge._bundled_backend_candidates",
                 return_value=(),
             ),
         ):
@@ -490,7 +496,7 @@ class DiscordBridgeTests(unittest.TestCase):
                 output.write_text("Final answer", encoding="utf-8")
                 return subprocess.CompletedProcess(command, 0, "events", "")
 
-            with patch("erga_mcp.discord_bridge.subprocess.run", side_effect=fake_run):
+            with patch("erga_mcp.integrations.discord.bridge.subprocess.run", side_effect=fake_run):
                 rendered = run_backend(settings, "hello")
 
             self.assertEqual(rendered, "Final answer")
@@ -512,7 +518,7 @@ class DiscordBridgeTests(unittest.TestCase):
                 output.write_text("ERGA_READY", encoding="utf-8")
                 return subprocess.CompletedProcess(invoked, 0, "", "")
 
-            with patch("erga_mcp.discord_bridge.subprocess.run", side_effect=fake_run):
+            with patch("erga_mcp.integrations.discord.bridge.subprocess.run", side_effect=fake_run):
                 ready, detail = verify_backend_login(settings)
 
             self.assertTrue(ready)
@@ -535,7 +541,7 @@ class DiscordBridgeTests(unittest.TestCase):
                 output.write_text("ERGA_READY plus explanation", encoding="utf-8")
                 return subprocess.CompletedProcess(invoked, 0, "", "")
 
-            with patch("erga_mcp.discord_bridge.subprocess.run", side_effect=fake_run):
+            with patch("erga_mcp.integrations.discord.bridge.subprocess.run", side_effect=fake_run):
                 ready, detail = verify_backend_login(settings)
 
             self.assertFalse(ready)
@@ -554,7 +560,16 @@ class DiscordBridgeTests(unittest.TestCase):
         )
 
         with patch(
-            "erga_mcp.discord_bridge._process_command",
+            "erga_mcp.integrations.discord.bridge._process_command",
+            return_value=(
+                "python -m erga_mcp.integrations.discord.bridge --config /private/config.toml "
+                "--runtime-nonce private-nonce"
+            ),
+        ):
+            self.assertTrue(_record_matches_process(record))
+
+        with patch(
+            "erga_mcp.integrations.discord.bridge._process_command",
             return_value=(
                 "python -m erga_mcp.discord_bridge --config /private/config.toml "
                 "--runtime-nonce private-nonce"
@@ -563,13 +578,13 @@ class DiscordBridgeTests(unittest.TestCase):
             self.assertTrue(_record_matches_process(record))
 
         for command in (
-            "python -m erga_mcp.discord_bridge --config /private/config.toml",
-            "python -m erga_mcp.discord_bridge --config /other/config.toml "
+            "python -m erga_mcp.integrations.discord.bridge --config /private/config.toml",
+            "python -m erga_mcp.integrations.discord.bridge --config /other/config.toml "
             "--runtime-nonce private-nonce",
             "python unrelated.py --runtime-nonce private-nonce /private/config.toml",
         ):
             with patch(
-                "erga_mcp.discord_bridge._process_command",
+                "erga_mcp.integrations.discord.bridge._process_command",
                 return_value=command,
             ):
                 self.assertFalse(_record_matches_process(record))
@@ -592,8 +607,11 @@ class DiscordBridgeTests(unittest.TestCase):
             )
 
             with (
-                patch("erga_mcp.discord_bridge.os.kill"),
-                patch("erga_mcp.discord_bridge._record_matches_process", return_value=True),
+                patch("erga_mcp.integrations.discord.bridge.os.kill"),
+                patch(
+                    "erga_mcp.integrations.discord.bridge._record_matches_process",
+                    return_value=True,
+                ),
             ):
                 starting = discord_status(config)
                 (data_dir / "discord-bridge-ready.json").write_text(

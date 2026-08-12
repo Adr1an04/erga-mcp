@@ -5,15 +5,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.project_inventory import ProjectCandidate
-from erga_mcp.store import ErgaStore
-from erga_mcp.tailoring_plan import (
+from erga_mcp.portfolio.inventory import ProjectCandidate
+from erga_mcp.resumes.planning import (
     answer_tailoring_plan,
     approve_tailoring_plan,
     build_tailoring_plan,
     reopen_previous_question,
     tailoring_plan_preferences,
 )
+from erga_mcp.store import ErgaStore
 
 
 def _candidate(

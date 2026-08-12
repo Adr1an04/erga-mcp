@@ -6,8 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.models import MailEvent
-from erga_mcp.reporting import render_history_digest
 from erga_mcp.store import ErgaStore
+from erga_mcp.tracking.reporting import render_history_digest
 
 
 class ReportingTests(unittest.TestCase):

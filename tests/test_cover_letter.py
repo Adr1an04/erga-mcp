@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.cover_letter import create_cover_letter_proposal, load_style_context
 from erga_mcp.models import Evidence
+from erga_mcp.resumes.cover_letter import create_cover_letter_proposal, load_style_context
 
 
 class CoverLetterTests(unittest.TestCase):

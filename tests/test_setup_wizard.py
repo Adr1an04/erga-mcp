@@ -9,9 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from erga_mcp.config import load_config
-from erga_mcp.doctor import check_installation
-from erga_mcp.resume_sources import resume_source_context
-from erga_mcp.setup_wizard import (
+from erga_mcp.operations.doctor import check_installation
+from erga_mcp.operations.setup_wizard import (
     CoreSetupReport,
     CoreSetupSelections,
     apply_core_setup,
@@ -23,6 +22,7 @@ from erga_mcp.setup_wizard import (
     render_core_setup_review,
     write_core_setup_plan,
 )
+from erga_mcp.resumes.sources import resume_source_context
 from erga_mcp.store import ErgaStore
 
 
@@ -492,18 +492,18 @@ folder = "Recruiting"
 
             with (
                 patch(
-                    "erga_mcp.setup_wizard.questionary.text",
+                    "erga_mcp.operations.setup_wizard.questionary.text",
                     side_effect=lambda *_args, **_kwargs: prompt(next(text_answers)),
                 ),
                 patch(
-                    "erga_mcp.setup_wizard.questionary.confirm",
+                    "erga_mcp.operations.setup_wizard.questionary.confirm",
                     side_effect=lambda *_args, **_kwargs: prompt(next(confirm_answers)),
                 ),
                 patch(
-                    "erga_mcp.setup_wizard.questionary.select",
+                    "erga_mcp.operations.setup_wizard.questionary.select",
                     return_value=prompt("examples"),
                 ),
-                patch("erga_mcp.setup_wizard.questionary.print"),
+                patch("erga_mcp.operations.setup_wizard.questionary.print"),
             ):
                 selections = collect_core_setup_selections(
                     default_config_path=root / "private" / "config.toml"

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.project_metrics import propose_git_project_metrics, summarize_git_project_metrics
+from erga_mcp.portfolio.metrics import propose_git_project_metrics, summarize_git_project_metrics
 
 
 class ProjectMetricProposalTests(unittest.TestCase):

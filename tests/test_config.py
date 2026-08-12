@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.config import DEFAULT_CONFIG, load_config
-from erga_mcp.portfolio_roots import detected_portfolio_root
+from erga_mcp.portfolio.roots import detected_portfolio_root
 
 
 class ConfigTests(unittest.TestCase):

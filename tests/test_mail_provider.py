@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from erga_mcp.integrations.mail_provider import build_mail_provider
+from erga_mcp.integrations.mail.provider import build_mail_provider
 
 
 class MailProviderTests(unittest.TestCase):
@@ -12,7 +12,7 @@ class MailProviderTests(unittest.TestCase):
         config = SimpleNamespace(mail_provider="gmail", gws_command="gws")
         expected = [object()]
         with patch(
-            "erga_mcp.integrations.mail_provider.fetch_all_inbox_metadata_with_gws",
+            "erga_mcp.integrations.mail.provider.fetch_all_inbox_metadata_with_gws",
             return_value=expected,
         ) as fetch:
             messages = build_mail_provider(config).fetch_inbox_metadata()

@@ -9,18 +9,18 @@ from unittest.mock import MagicMock, call, patch
 
 from ddgs.exceptions import DDGSException
 
-from erga_mcp.job_discovery import (
+from erga_mcp.applications.discovery import (
     _is_concrete_technical_report,
     _is_relevant_community_result,
     _search,
 )
+from erga_mcp.integrations.web import ScrapedPage
 from erga_mcp.models import Application
-from erga_mcp.web_scraping import ScrapedPage
 
 
 class JobDiscoveryTests(unittest.TestCase):
     def test_reviews_broad_query_plan_but_keeps_only_role_specific_sources(self) -> None:
-        from erga_mcp.job_discovery import discover_job_research
+        from erga_mcp.applications.discovery import discover_job_research
 
         application = Application(
             id="app_github",
@@ -159,7 +159,7 @@ class JobDiscoveryTests(unittest.TestCase):
             )
         )
 
-    @patch("erga_mcp.job_discovery.DDGS")
+    @patch("erga_mcp.integrations.web.DDGS")
     def test_search_combines_backends_and_rejects_relative_redirect_results(
         self, ddgs: object
     ) -> None:
@@ -188,7 +188,7 @@ class JobDiscoveryTests(unittest.TestCase):
             ]
         )
 
-    @patch("erga_mcp.job_discovery.DDGS")
+    @patch("erga_mcp.integrations.web.DDGS")
     def test_search_falls_back_to_bing_when_yahoo_has_no_results(self, ddgs: object) -> None:
         yahoo = MagicMock()
         bing = MagicMock()
@@ -212,7 +212,7 @@ class JobDiscoveryTests(unittest.TestCase):
             "Google software engineering internship", max_results=3, backend="bing"
         )
 
-    @patch("erga_mcp.job_discovery.DDGS")
+    @patch("erga_mcp.integrations.web.DDGS")
     def test_search_returns_an_empty_lane_when_both_backends_have_no_results(
         self, ddgs: object
     ) -> None:
@@ -227,7 +227,7 @@ class JobDiscoveryTests(unittest.TestCase):
         self.assertEqual(results, [])
 
     def test_deduplicates_the_posting_when_search_returns_its_canonical_url(self) -> None:
-        from erga_mcp.job_discovery import discover_job_research
+        from erga_mcp.applications.discovery import discover_job_research
 
         tracked_url = "https://careers.example.test/google-intern?tracking=abc"
         application = Application(
@@ -272,7 +272,7 @@ class JobDiscoveryTests(unittest.TestCase):
         self.assertEqual(result.sources_scraped, 1)
 
     def test_falls_back_to_broader_community_search_when_exact_role_has_no_results(self) -> None:
-        from erga_mcp.job_discovery import discover_job_research
+        from erga_mcp.applications.discovery import discover_job_research
 
         application = Application(
             id="app_google",
@@ -324,7 +324,7 @@ class JobDiscoveryTests(unittest.TestCase):
         self.assertIn("Google intern discussion - Reddit", text)
 
     def test_uses_posting_title_and_filters_irrelevant_results(self) -> None:
-        from erga_mcp.job_discovery import discover_job_research
+        from erga_mcp.applications.discovery import discover_job_research
 
         application = Application(
             id="app_google",
@@ -408,7 +408,7 @@ class JobDiscoveryTests(unittest.TestCase):
         self.assertNotIn("https://www.linkedin.com/in/engineer/", text)
 
     def test_researches_posting_official_and_community_sources_into_cited_note(self) -> None:
-        from erga_mcp.job_discovery import discover_job_research
+        from erga_mcp.applications.discovery import discover_job_research
 
         application = Application(
             id="app_google",

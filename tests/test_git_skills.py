@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.git_skills import (
+from erga_mcp.portfolio.skills import (
     approve_git_skill_group,
     build_git_skill_review_card,
     explicit_skills_in_texts,

@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.models import Evidence
-from erga_mcp.resume import create_resume_proposal
+from erga_mcp.resumes.artifacts import create_resume_proposal
 
 
 class ResumeProposalTests(unittest.TestCase):

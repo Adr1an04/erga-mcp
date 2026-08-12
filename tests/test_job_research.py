@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.job_research import (
+from erga_mcp.applications.research import (
     analyze_job_snapshot,
     official_job_text,
     render_job_research,

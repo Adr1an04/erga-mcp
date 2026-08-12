@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 
 from erga_mcp import __version__
 from erga_mcp.config import DEFAULT_CONFIG
-from erga_mcp.mcp_server import build_server
+from erga_mcp.mcp.server import build_server
 
 
 class McpCapabilitiesTests(unittest.TestCase):

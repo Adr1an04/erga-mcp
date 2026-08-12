@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
-from .models import (
+from erga_mcp.models import (
     Application,
     AuditEvent,
     Evidence,
@@ -21,9 +21,13 @@ from .models import (
     SkillSeedRecord,
     TokenUsage,
 )
-from .private_files import restrict_private_directory, restrict_private_file
-from .skill_inventory import clean_skill_name, normalize_skill_name, unique_skill_names
-from .tailoring_plan import TailoringPlan, tailoring_plan_from_storage
+from erga_mcp.operations.private_files import restrict_private_directory, restrict_private_file
+from erga_mcp.portfolio.skill_inventory import (
+    clean_skill_name,
+    normalize_skill_name,
+    unique_skill_names,
+)
+from erga_mcp.resumes.planning import TailoringPlan, tailoring_plan_from_storage
 
 APPLICATION_STATUSES = frozenset(
     {

@@ -9,7 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.cli import main
-from erga_mcp.git_evidence import GitCommit, analyze_commits, scan_authored_commits
+from erga_mcp.portfolio.git_evidence import GitCommit, analyze_commits, scan_authored_commits
 
 
 class GitEvidenceCliTests(unittest.TestCase):

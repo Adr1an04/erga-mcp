@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 
 from erga_mcp.cli import main
 from erga_mcp.config import load_config
-from erga_mcp.resume_settings import update_settings
+from erga_mcp.resumes.settings import update_settings
 
 
 class ResumeSettingsCliTests(unittest.TestCase):

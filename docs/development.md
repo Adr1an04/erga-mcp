@@ -13,12 +13,14 @@ databases, exports, and vault data never belong in the repository or test logs.
 
 | Change | Start in | Focused tests |
 | --- | --- | --- |
-| MCP contract, profile, or transport | `src/erga_mcp/mcp/`, `mcp_server.py` | `test_mcp_*`, `test_http_transport.py` |
-| Resume extraction/layout/tailoring | `resume_sources.py`, `resume_template.py`, `resume_tailoring.py`, `resume.py` | `test_resume*`, `test_bullet_quality.py` |
-| Project/Git evidence | `project_*.py`, `git_*.py` | `test_project*`, `test_git*` |
-| Application/research workflow | `application_lookup.py`, `job_*.py`, `research_navigator.py` | `test_application_lookup.py`, `test_job*`, `test_research_navigator.py` |
-| CLI behavior | `cli.py` and the owning core module | `test_cli*` plus the owning module test |
-| Hermes/Discord | `integrations/hermes/`, `discord_*.py` | `test_hermes*`, `test_discord*` |
+| MCP contract, profile, or transport | `src/erga_mcp/mcp/` | `test_mcp_*`, `test_http_transport.py` |
+| Resume extraction/layout/tailoring | `src/erga_mcp/resumes/` | `test_resume*`, `test_bullet_quality.py` |
+| Project/Git evidence | `src/erga_mcp/portfolio/` | `test_project*`, `test_git*` |
+| Application/research workflow | `src/erga_mcp/applications/` | `test_application_lookup.py`, `test_job*`, `test_research_navigator.py` |
+| Tracking and contact workflow | `src/erga_mcp/tracking/` | `test_tracker*`, `test_contact*`, `test_mail_status*` |
+| CLI behavior | `src/erga_mcp/cli.py` and the owning package | `test_cli*` plus the owning module test |
+| Hermes/Discord | `src/erga_mcp/integrations/` | `test_hermes*`, `test_discord*` |
+| Setup/diagnostics/export | `src/erga_mcp/operations/` | `test_setup*`, `test_doctor.py`, `test_exporting.py` |
 | Packaging/workflows/docs | `pyproject.toml`, `.github/`, `docs/` | `test_packaging.py`, build and metadata checks |
 
 ## Canonical full gate

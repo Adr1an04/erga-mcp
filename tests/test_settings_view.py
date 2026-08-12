@@ -7,8 +7,8 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from erga_mcp.config import DEFAULT_CONFIG, load_config
-from erga_mcp.settings_view import build_settings_card
 from erga_mcp.store import ErgaStore
+from erga_mcp.tracking.settings import build_settings_card
 
 
 class SettingsViewTests(unittest.TestCase):
@@ -57,7 +57,7 @@ class SettingsViewTests(unittest.TestCase):
             )
 
             with patch(
-                "erga_mcp.settings_view.detected_portfolio_root",
+                "erga_mcp.tracking.settings.detected_portfolio_root",
                 return_value=Path("/private/detected/projects"),
             ):
                 card = build_settings_card(config, store, host_integration="hermes")

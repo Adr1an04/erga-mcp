@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from erga_mcp.resume import create_job_package
+from erga_mcp.resumes.artifacts import create_job_package
 
 
 class ResumePackageTests(unittest.TestCase):

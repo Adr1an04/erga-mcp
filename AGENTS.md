@@ -4,8 +4,8 @@
 
 Read `docs/architecture/README.md`, use `docs/architecture/module-map.md` to find the owner, then
 route tests with `docs/development.md`. Use `docs/README.md` as the documentation index. Inspect the
-owning module and its focused tests before editing; do not begin in `cli.py` or `mcp_server.py` when
-the behavior belongs in the core.
+owning module and its focused tests before editing; do not begin in `cli.py` or `mcp/server.py` when
+the behavior belongs in a domain package.
 
 ## Product boundary
 
@@ -22,12 +22,14 @@ domain; core modules must not import an optional interface.
 | Work | Location |
 | --- | --- |
 | MCP schemas/profile policy/tool families | `src/erga_mcp/mcp/` |
-| MCP compatibility/composition only | `src/erga_mcp/mcp_server.py` |
-| Resume evidence, layout, or generation | `resume_sources.py`, `resume_template.py`, `resume_tailoring.py`, `resume.py` |
-| Projects and Git evidence | `project_*.py`, `git_*.py` |
-| Applications and research | `application_lookup.py`, `job_*.py`, `research_navigator.py` |
-| Persistence | `store.py` |
-| Optional providers | `src/erga_mcp/integrations/`, `discord_*.py`, `integrations/hermes/` |
+| MCP composition and transports | `src/erga_mcp/mcp/server.py`, `src/erga_mcp/mcp/transport.py` |
+| Resume evidence, layout, or generation | `src/erga_mcp/resumes/` |
+| Projects and Git evidence | `src/erga_mcp/portfolio/` |
+| Applications and research | `src/erga_mcp/applications/` |
+| Tracking, contacts, and presentation models | `src/erga_mcp/tracking/` |
+| Setup, diagnostics, export, and uninstall | `src/erga_mcp/operations/` |
+| Shared persistence and records | `src/erga_mcp/store.py`, `src/erga_mcp/models.py` |
+| Optional hosts and providers | `src/erga_mcp/integrations/` |
 
 Nested `AGENTS.md` files refine these rules for MCP, provider adapters, Hermes, and tests. Read the
 nearest applicable guide before changing one of those trees.

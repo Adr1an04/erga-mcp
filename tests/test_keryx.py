@@ -16,7 +16,7 @@ from unittest.mock import Mock, patch
 
 from erga_mcp.cli import main
 from erga_mcp.config import DEFAULT_CONFIG, load_config
-from erga_mcp.keryx import (
+from erga_mcp.integrations.keryx import (
     collect_optional_keryx,
     disable_keryx,
     enable_keryx,
@@ -24,7 +24,7 @@ from erga_mcp.keryx import (
     search_keryx_jobs,
     sync_keryx,
 )
-from erga_mcp.mcp_server import build_server
+from erga_mcp.mcp.server import build_server
 
 
 def _job(
@@ -256,7 +256,9 @@ class KeryxTests(unittest.TestCase):
     def test_onboarding_prompt_is_optional_and_defaults_to_disabled(self) -> None:
         prompt = Mock()
         prompt.ask.return_value = False
-        with patch("erga_mcp.keryx.questionary.confirm", return_value=prompt) as confirm:
+        with patch(
+            "erga_mcp.integrations.keryx.questionary.confirm", return_value=prompt
+        ) as confirm:
             selected = collect_optional_keryx()
 
         self.assertFalse(selected)

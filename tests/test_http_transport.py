@@ -7,7 +7,7 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from erga_mcp.http_transport import HttpTransportSettings, protect_http_app
+from erga_mcp.mcp.transport import HttpTransportSettings, protect_http_app
 
 _HTTP_TOKEN = "test-token-with-at-least-thirty-two-characters"
 

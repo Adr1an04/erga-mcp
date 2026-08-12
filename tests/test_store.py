@@ -6,8 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.models import MailEvent
-from erga_mcp.recruiter_contacts import record_recruiter_contact_from_mail
 from erga_mcp.store import ErgaStore
+from erga_mcp.tracking.contacts import record_recruiter_contact_from_mail
 
 
 class StoreTests(unittest.TestCase):

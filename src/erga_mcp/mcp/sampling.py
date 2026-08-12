@@ -4,7 +4,7 @@ from typing import Any
 
 from mcp.types import SamplingMessage, TextContent, Tool, ToolChoice, ToolUseContent
 
-from ..ai_resume_tailoring import (
+from erga_mcp.resumes.ai_tailoring import (
     TailoringDraftClient,
     TailoringDraftRequest,
     TailoringDraftResponse,

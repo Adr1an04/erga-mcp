@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.integrations.zoho import ingest_fixture
+from erga_mcp.integrations.mail.zoho import ingest_fixture
 from erga_mcp.store import ErgaStore
 
 

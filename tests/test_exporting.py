@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.exporting import export_bundle
+from erga_mcp.operations.exporting import export_bundle
 from erga_mcp.store import ErgaStore
 
 

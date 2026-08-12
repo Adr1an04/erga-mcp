@@ -10,11 +10,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from erga_mcp.config import DEFAULT_CONFIG, load_config
-from erga_mcp.resume import validate_latex_proposal
-from erga_mcp.resume_settings import update_settings
-from erga_mcp.resume_sources import ResumeSource, load_resume_source
-from erga_mcp.resume_tailoring import create_automatic_resume_proposal
-from erga_mcp.resume_template import (
+from erga_mcp.resumes.artifacts import validate_latex_proposal
+from erga_mcp.resumes.settings import update_settings
+from erga_mcp.resumes.sources import ResumeSource, load_resume_source
+from erga_mcp.resumes.tailoring import create_automatic_resume_proposal
+from erga_mcp.resumes.template import (
     ensure_resume_template,
     generate_latex_template,
     infer_resume_layout_profile,
@@ -685,7 +685,7 @@ class ResumeTemplateTests(unittest.TestCase):
                     return ""
 
             reader = SimpleNamespace(pages=[Page()])
-            with patch("erga_mcp.resume_template.PdfReader", return_value=reader):
+            with patch("erga_mcp.resumes.template.PdfReader", return_value=reader):
                 generated = generate_latex_template(master, data_dir=root / "state", style=style)
 
             template = generated.path.read_text(encoding="utf-8")

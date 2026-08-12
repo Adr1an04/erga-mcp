@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import __version__
+from erga_mcp import __version__
 
 MCP_CONTRACT_VERSION = "1.0"
 MINIMUM_CLIENT_CONTRACT_VERSION = "1.0"

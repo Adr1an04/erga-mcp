@@ -8,7 +8,8 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.cron_setup import install_hermes_monitor_scripts
+import erga_mcp.integrations.hermes as hermes
+from erga_mcp.integrations.hermes import install_hermes_monitor_scripts
 
 
 class CronSetupTests(unittest.TestCase):
@@ -27,6 +28,10 @@ class CronSetupTests(unittest.TestCase):
 
             settings = json.loads((scripts / "erga-mcp-monitor.json").read_text())
             self.assertEqual(settings["config_path"], str(config.resolve()))
+            self.assertEqual(
+                settings["module_root"],
+                str(Path(hermes.__file__).resolve().parents[2]),
+            )
             self.assertNotIn("token", json.dumps(settings).casefold())
             self.assertEqual(result["suggested_jobs"][0]["deliver"], "origin")
             self.assertIn(
@@ -77,6 +82,16 @@ class CronSetupTests(unittest.TestCase):
                 scripts_dir=scripts,
                 python_executable=Path(sys.executable),
             )
+            poisoned_packages = root / "poisoned-packages"
+            poisoned_scrapling = poisoned_packages / "scrapling"
+            poisoned_scrapling.mkdir(parents=True)
+            (poisoned_scrapling / "__init__.py").write_text("", encoding="utf-8")
+            (poisoned_scrapling / "parser.py").write_text(
+                'raise ImportError("inherited PYTHONPATH was used")\n',
+                encoding="utf-8",
+            )
+            environment = os.environ.copy()
+            environment["PYTHONPATH"] = str(poisoned_packages)
 
             completed = subprocess.run(
                 [sys.executable, str(scripts / "erga-mcp-mail.py")],
@@ -84,6 +99,7 @@ class CronSetupTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 timeout=10,
+                env=environment,
             )
 
             self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)

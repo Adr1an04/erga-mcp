@@ -10,14 +10,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import cast
 
-from .application_lookup import select_tracked_application
-from .config import DEFAULT_CONFIG, DEFAULT_CONFIG_PATH, load_config
-from .contact_projection import project_recruiter_contacts
-from .cover_letter import create_cover_letter_proposal, load_style_context
-from .cover_letter_settings import as_json as cover_letter_settings_as_json
-from .cover_letter_settings import update_settings as update_cover_letter_settings
-from .cron_setup import install_hermes_monitor_scripts
-from .discord_bridge import (
+from erga_mcp.applications.discovery import discover_job_research
+from erga_mcp.applications.identity import job_identity
+from erga_mcp.applications.lookup import select_tracked_application
+from erga_mcp.config import DEFAULT_CONFIG, DEFAULT_CONFIG_PATH, load_config
+from erga_mcp.integrations.discord.bridge import (
     connect_discord_bridge,
     discord_status,
     run_discord_bridge,
@@ -25,13 +22,62 @@ from .discord_bridge import (
     stop_discord_bridge,
     store_discord_token,
 )
-from .discord_setup import (
+from erga_mcp.integrations.discord.setup import (
     collect_optional_discord,
     configure_discord_interactive,
 )
-from .doctor import check_installation
-from .exporting import export_bundle
-from .git_evidence import (
+from erga_mcp.integrations.hermes import install_hermes_monitor_scripts
+from erga_mcp.integrations.hosts import (
+    SUPPORTED_HOSTS,
+    HostName,
+    collect_connection_workspace,
+    collect_optional_hosts,
+    configure_hosts,
+)
+from erga_mcp.integrations.keryx import (
+    collect_optional_keryx,
+    disable_keryx,
+    enable_keryx,
+    keryx_status,
+    search_keryx_jobs,
+    sync_keryx,
+)
+from erga_mcp.integrations.mail.provider import build_mail_provider
+from erga_mcp.integrations.mail.settings import as_json as mail_settings_as_json
+from erga_mcp.integrations.mail.settings import update_settings as update_mail_settings
+from erga_mcp.integrations.mail.zoho import ingest_fixture
+from erga_mcp.integrations.mail.zoho_live import (
+    fetch_inbox_metadata,
+    format_recruiting_alerts,
+    sync_metadata,
+)
+from erga_mcp.integrations.mail.zoho_oauth import (
+    connect,
+    read_client_secret,
+    refresh_access_token,
+    store_client_secret,
+)
+from erga_mcp.integrations.obsidian.importer import import_markdown_evidence
+from erga_mcp.integrations.obsidian.tracker import reconcile_application_status_tracker_rows
+from erga_mcp.models import Application
+from erga_mcp.operations.doctor import check_installation
+from erga_mcp.operations.exporting import export_bundle
+from erga_mcp.operations.private_files import restrict_private_file
+from erga_mcp.operations.setup_wizard import (
+    WizardCancelled,
+    apply_core_setup,
+    collect_core_setup_selections,
+    render_core_setup_report,
+    write_core_setup_plan,
+)
+from erga_mcp.operations.uninstall import (
+    apply_uninstall,
+    build_uninstall_plan,
+    confirmation_phrase,
+    render_uninstall_plan,
+)
+from erga_mcp.portfolio.catalogue import build_project_catalogue
+from erga_mcp.portfolio.git_evidence import (
     analyze_commits,
     commits_missing_observations,
     discover_worktrees,
@@ -40,83 +86,37 @@ from .git_evidence import (
     synthesize_project_research,
     validate_worktree,
 )
-from .git_skills import (
+from erga_mcp.portfolio.github import discover_github_projects
+from erga_mcp.portfolio.roots import update_portfolio_roots
+from erga_mcp.portfolio.skill_inventory import parse_skill_seed_csv
+from erga_mcp.portfolio.skills import (
     approve_git_skill_group,
     build_git_skill_review_card,
     reconcile_git_skill_groups,
 )
-from .github_projects import discover_github_projects
-from .host_connections import (
-    SUPPORTED_HOSTS,
-    HostName,
-    collect_connection_workspace,
-    collect_optional_hosts,
-    configure_hosts,
-)
-from .integrations.mail_provider import build_mail_provider
-from .integrations.obsidian import import_markdown_evidence
-from .integrations.obsidian_tracker import reconcile_application_status_tracker_rows
-from .integrations.zoho import ingest_fixture
-from .integrations.zoho_live import (
-    fetch_inbox_metadata,
-    format_recruiting_alerts,
-    sync_metadata,
-)
-from .job_discovery import discover_job_research
-from .job_identity import job_identity
-from .keryx import (
-    collect_optional_keryx,
-    disable_keryx,
-    enable_keryx,
-    keryx_status,
-    search_keryx_jobs,
-    sync_keryx,
-)
-from .mail_settings import as_json as mail_settings_as_json
-from .mail_settings import update_settings as update_mail_settings
-from .models import Application
-from .onboarding_view import build_onboarding_card
-from .portfolio_roots import update_portfolio_roots
-from .private_files import restrict_private_file
-from .project_catalogue import build_project_catalogue
-from .reporting import render_history_digest
-from .resume import (
+from erga_mcp.resumes.artifacts import (
     create_job_package,
     create_resume_proposal,
     create_section_resume_proposal,
     validate_latex_proposal,
 )
-from .resume_settings import as_json as resume_settings_as_json
-from .resume_settings import update_settings
-from .resume_sources import (
+from erga_mcp.resumes.cover_letter import create_cover_letter_proposal, load_style_context
+from erga_mcp.resumes.cover_letter_settings import as_json as cover_letter_settings_as_json
+from erga_mcp.resumes.cover_letter_settings import update_settings as update_cover_letter_settings
+from erga_mcp.resumes.settings import as_json as resume_settings_as_json
+from erga_mcp.resumes.settings import update_settings
+from erga_mcp.resumes.sources import (
     import_master_resume,
     load_resume_source,
     resume_source_context,
     snapshot_resume_source,
 )
-from .resume_template import ensure_resume_template, reset_resume_template
-from .settings_view import build_settings_card
-from .setup_wizard import (
-    WizardCancelled,
-    apply_core_setup,
-    collect_core_setup_selections,
-    render_core_setup_report,
-    write_core_setup_plan,
-)
-from .skill_inventory import parse_skill_seed_csv
-from .store import ErgaStore
-from .uninstall import (
-    apply_uninstall,
-    build_uninstall_plan,
-    confirmation_phrase,
-    render_uninstall_plan,
-)
-from .zoho_oauth import (
-    connect,
-    read_client_secret,
-    refresh_access_token,
-    store_client_secret,
-)
+from erga_mcp.resumes.template import ensure_resume_template, reset_resume_template
+from erga_mcp.store import ErgaStore
+from erga_mcp.tracking.contact_projection import project_recruiter_contacts
+from erga_mcp.tracking.onboarding import build_onboarding_card
+from erga_mcp.tracking.reporting import render_history_digest
+from erga_mcp.tracking.settings import build_settings_card
 
 
 def _config_argument(parser: argparse.ArgumentParser) -> None:

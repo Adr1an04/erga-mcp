@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 class WebScrapingTests(unittest.TestCase):
     def test_scrape_page_extracts_bounded_visible_main_text_and_links(self) -> None:
-        from erga_mcp.web_scraping import scrape_page
+        from erga_mcp.integrations.web import scrape_page
 
         html = """
         <html><head><title>Example research</title><script>ignore_me()</script></head>
@@ -15,7 +15,7 @@ class WebScrapingTests(unittest.TestCase):
         <a href="/report">Read the report</a></main>
         <footer>Footer text</footer></body></html>
         """
-        with patch("erga_mcp.web_scraping.fetch_public_page", return_value=html):
+        with patch("erga_mcp.integrations.web.fetch_public_page", return_value=html):
             result = scrape_page("https://example.com/research", max_characters=500, max_links=5)
 
         self.assertEqual(result.url, "https://example.com/research")
@@ -28,13 +28,13 @@ class WebScrapingTests(unittest.TestCase):
         self.assertTrue(result.untrusted)
 
     def test_extract_page_returns_only_selected_text(self) -> None:
-        from erga_mcp.web_scraping import extract_page
+        from erga_mcp.integrations.web import extract_page
 
         html = """
         <html><body><main><section class="fact"><p>Primary fact</p></section>
         <section class="other"><p>Ignore this</p></section></main></body></html>
         """
-        with patch("erga_mcp.web_scraping.fetch_public_page", return_value=html):
+        with patch("erga_mcp.integrations.web.fetch_public_page", return_value=html):
             result = extract_page(
                 "https://example.com/research", css_selector=".fact", max_characters=200
             )

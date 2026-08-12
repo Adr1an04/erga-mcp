@@ -12,9 +12,9 @@ from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from erga_mcp.models import Evidence
-from erga_mcp.project_inventory import ProjectCandidate
-from erga_mcp.resume import validate_single_line_resume_items
-from erga_mcp.resume_tailoring import (
+from erga_mcp.portfolio.inventory import ProjectCandidate
+from erga_mcp.resumes.artifacts import validate_single_line_resume_items
+from erga_mcp.resumes.tailoring import (
     TAILORING_VERSION,
     _adapt_project_heading_structure,
     _compact_generated_entry_section,

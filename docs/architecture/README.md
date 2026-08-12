@@ -33,13 +33,18 @@ For file-by-file ownership and search routing, see the [module ownership map](mo
 
 | Area | Primary modules |
 | --- | --- |
-| Configuration and private state | `config.py`, `private_files.py`, `store.py` |
-| Applications and research | `job_identity.py`, `job_intake.py`, `job_research.py`, `job_discovery.py`, `job_workspace.py` |
-| Resume knowledge and output | `resume_sources.py`, `resume_template.py`, `resume_tailoring.py`, `resume.py` |
-| Project/Git evidence | `project_inventory.py`, `project_metrics.py`, `git_evidence.py`, `git_project_enrichment.py` |
-| Optional adapters | `integrations/`, `discord_*.py`, `keryx.py`, `web_scraping.py` |
+| Shared configuration and state | `config.py`, `models.py`, `store.py`, `versioning.py` |
+| Applications and research | `applications/` |
+| Resume knowledge and output | `resumes/` |
+| Project and Git evidence | `portfolio/` |
+| Tracking and presentation models | `tracking/` |
+| Local lifecycle operations | `operations/` |
+| Optional hosts and providers | `integrations/` |
 | CLI interface | `cli.py` |
-| MCP interface | `mcp/`, with `mcp_server.py` as the compatibility/composition facade |
+| MCP interface | `mcp/`, with `mcp/server.py` as the composition root |
+
+The package root is intentionally limited to six stable foundation modules. New feature modules go
+in the owning package, and `tests/test_architecture.py` enforces that boundary.
 
 ## MCP organization
 
@@ -53,16 +58,17 @@ src/erga_mcp/mcp/
 ├── read_tools.py     local read/dashboard tool family
 ├── sampling.py       MCP sampling translation
 ├── workspace_tools.py project, Git, evidence, mail, and usage tool family
+├── server.py         stdio composition and cross-family intake orchestration
 ├── transport.py      authenticated Streamable HTTP composition
 ├── package_manifest.py persisted-package wire translation
 └── registry.py       profile-aware registration
 ```
 
-`job_identity.py` owns canonical listing/package identity for every interface. `mcp_server.py`
-remains a compatibility facade while the intake orchestration is split gradually.
-New unrelated tools must not be added directly to that facade: add or extend a cohesive tool-family
-module and register it from `build_server`. Tool functions should validate bounded inputs, declare
-accurate annotations, and delegate reusable work to the core.
+`applications/identity.py` owns canonical listing/package identity for every interface.
+`mcp/server.py` is the composition root, not a home for reusable product rules. New unrelated tools
+must go in a cohesive tool-family module and be registered from `build_server`. Tool functions
+should validate bounded inputs, declare accurate annotations, and delegate reusable work to the
+owning domain package.
 
 Stdio is the default transport. Streamable HTTP is loopback-only, rejects browser origins, validates
 Host headers, and requires a per-launch bearer token. It is not a remote or multi-user deployment

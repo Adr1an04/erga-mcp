@@ -5,11 +5,11 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.research_navigator import (
+from erga_mcp.applications.navigator import (
     build_research_navigator,
     research_stage_for_status,
 )
-from erga_mcp.tracker_view import TrackerEntry
+from erga_mcp.tracking.tracker import TrackerEntry
 
 
 class ResearchNavigatorTests(unittest.TestCase):

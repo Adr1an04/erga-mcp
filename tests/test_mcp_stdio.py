@@ -22,7 +22,7 @@ class McpStdioTests(unittest.TestCase):
             }
             parameters = StdioServerParameters(
                 command=sys.executable,
-                args=["-m", "erga_mcp.mcp_server"],
+                args=["-m", "erga_mcp.mcp.server"],
                 env=environment,
             )
             async with stdio_client(parameters) as (read_stream, write_stream):

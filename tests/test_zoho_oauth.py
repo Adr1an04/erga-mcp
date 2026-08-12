@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
-from erga_mcp.zoho_oauth import (
+from erga_mcp.integrations.mail.zoho_oauth import (
     READ_ONLY_SCOPES,
     build_authorization_url,
     exchange_authorization_code,
@@ -58,7 +58,7 @@ class ZohoOAuthTests(unittest.TestCase):
         self.assertEqual(tokens["refresh_token"], "refresh")
 
     def test_connect_stores_token_response_in_credential_store(self) -> None:
-        from erga_mcp.zoho_oauth import connect
+        from erga_mcp.integrations.mail.zoho_oauth import connect
 
         stored: dict[str, object] = {}
 
@@ -100,14 +100,20 @@ class ZohoOAuthTests(unittest.TestCase):
             return stored.get((service, account))
 
         with (
-            patch("erga_mcp.zoho_oauth.sys.platform", "linux"),
-            patch("erga_mcp.zoho_oauth.keyring.set_password", side_effect=set_password),
-            patch("erga_mcp.zoho_oauth.keyring.get_password", side_effect=get_password),
+            patch("erga_mcp.integrations.mail.zoho_oauth.sys.platform", "linux"),
+            patch(
+                "erga_mcp.integrations.mail.zoho_oauth.keyring.set_password",
+                side_effect=set_password,
+            ),
+            patch(
+                "erga_mcp.integrations.mail.zoho_oauth.keyring.get_password",
+                side_effect=get_password,
+            ),
         ):
             store_client_secret("client-id", "client-secret")
             self.assertEqual(read_client_secret("client-id"), "client-secret")
 
-            from erga_mcp.zoho_oauth import _store_tokens
+            from erga_mcp.integrations.mail.zoho_oauth import _store_tokens
 
             _store_tokens(
                 "erga-mcp.zoho.tokens",

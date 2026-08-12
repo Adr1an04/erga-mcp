@@ -5,8 +5,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.integrations.zoho import MailMessageMetadata
-from erga_mcp.integrations.zoho_live import sync_metadata
+from erga_mcp.integrations.mail.zoho import MailMessageMetadata
+from erga_mcp.integrations.mail.zoho_live import sync_metadata
 from erga_mcp.models import MailEvent
 from erga_mcp.store import ErgaStore
 

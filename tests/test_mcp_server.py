@@ -17,18 +17,10 @@ from unittest.mock import AsyncMock, patch
 
 from starlette.testclient import TestClient
 
-from erga_mcp.ai_resume_tailoring import (
-    AIProjectTailoring,
-    TailoringDraftMessage,
-    TailoringDraftRequest,
-    TailoringDraftTool,
-)
+from erga_mcp.applications.identity import metadata_from_url
 from erga_mcp.config import DEFAULT_CONFIG, load_config
-from erga_mcp.git_project_enrichment import GitProjectEnrichment
-from erga_mcp.http_transport import HttpTransportSettings
-from erga_mcp.job_identity import metadata_from_url
 from erga_mcp.mcp.contracts import IntakeValidationResult
-from erga_mcp.mcp_server import (
+from erga_mcp.mcp.server import (
     _ai_research_shortlist_ids,
     _ai_tailored_project_enrichment,
     _compile_intake_proposal,
@@ -47,10 +39,18 @@ from erga_mcp.mcp_server import (
     build_server,
     build_streamable_http_app,
 )
+from erga_mcp.mcp.transport import HttpTransportSettings
 from erga_mcp.models import Evidence
-from erga_mcp.project_inventory import ProjectCandidate
-from erga_mcp.resume import LatexValidation, ResumeItemLayoutValidation
-from erga_mcp.resume_tailoring import create_automatic_resume_proposal
+from erga_mcp.portfolio.enrichment import GitProjectEnrichment
+from erga_mcp.portfolio.inventory import ProjectCandidate
+from erga_mcp.resumes.ai_tailoring import (
+    AIProjectTailoring,
+    TailoringDraftMessage,
+    TailoringDraftRequest,
+    TailoringDraftTool,
+)
+from erga_mcp.resumes.artifacts import LatexValidation, ResumeItemLayoutValidation
+from erga_mcp.resumes.tailoring import create_automatic_resume_proposal
 from erga_mcp.store import ErgaStore
 
 _HTTP_TOKEN = "test-token-with-at-least-thirty-two-characters"
@@ -199,7 +199,7 @@ class McpServerTests(unittest.TestCase):
                 return selected <= 9, selected / 10, ()
 
             with patch(
-                "erga_mcp.mcp_server._generated_density_trial",
+                "erga_mcp.mcp.server._generated_density_trial",
                 side_effect=rendered_trial,
             ):
                 result = _create_render_packed_automatic_resume_proposal(
@@ -268,7 +268,7 @@ class McpServerTests(unittest.TestCase):
             config = load_config(config_path)
 
             with patch(
-                "erga_mcp.mcp_server._generated_density_trial",
+                "erga_mcp.mcp.server._generated_density_trial",
                 return_value=(True, 0.6, ()),
             ):
                 result = _create_render_packed_automatic_resume_proposal(
@@ -329,9 +329,9 @@ Bottom of the approved master template.
             config = load_config(config_path)
 
             with (
-                patch("erga_mcp.mcp_server.pdf_page_count", return_value=1),
+                patch("erga_mcp.mcp.server.pdf_page_count", return_value=1),
                 patch(
-                    "erga_mcp.mcp_server.pdf_page_fill",
+                    "erga_mcp.mcp.server.pdf_page_fill",
                     return_value=SimpleNamespace(fill_ratio=0.9),
                 ),
             ):
@@ -397,7 +397,7 @@ Bottom of the approved master template.
 
             candidates = (candidate("alpha"), candidate("beta"))
             with patch(
-                "erga_mcp.mcp_server._project_density_trial",
+                "erga_mcp.mcp.server._project_density_trial",
                 side_effect=[
                     (True, 0.68),
                     (True, 0.73),
@@ -468,7 +468,7 @@ Bottom of the approved master template.
                 )
 
             with patch(
-                "erga_mcp.mcp_server._project_density_trial",
+                "erga_mcp.mcp.server._project_density_trial",
                 side_effect=[(True, 0.60), (True, 0.65)],
             ) as trial:
                 selected, requires_spacing, fill_ratio = _select_rendered_project_bullet_density(
@@ -736,8 +736,8 @@ Bottom of the approved master template.
 
             candidates = (candidate("alpha"), candidate("beta"), candidate("gamma"))
             with (
-                patch("erga_mcp.mcp_server._inventory_candidates", return_value=candidates),
-                patch("erga_mcp.mcp_server.discover_github_projects", return_value=()),
+                patch("erga_mcp.mcp.server._inventory_candidates", return_value=candidates),
+                patch("erga_mcp.mcp.server.discover_github_projects", return_value=()),
             ):
                 enrichment = _git_enriched_inventory_candidates(
                     config=config,
@@ -797,12 +797,12 @@ Bottom of the approved master template.
 
             with (
                 patch(
-                    "erga_mcp.mcp_server.draft_evidence_backed_projects",
+                    "erga_mcp.mcp.server.draft_evidence_backed_projects",
                     new=AsyncMock(return_value=drafted),
                 ) as draft,
-                patch("erga_mcp.mcp_server.plan_resume_project_selection", return_value=plan),
+                patch("erga_mcp.mcp.server.plan_resume_project_selection", return_value=plan),
                 patch(
-                    "erga_mcp.mcp_server._select_rendered_project_bullet_density",
+                    "erga_mcp.mcp.server._select_rendered_project_bullet_density",
                     side_effect=[
                         ValueError("project bullet density did not fit the one-page layout"),
                         ((candidate,), False, 0.86),
@@ -875,13 +875,13 @@ Bottom of the approved master template.
                 catalogue_candidate_count=1,
             )
             with (
-                patch("erga_mcp.mcp_server._client_supports_ai_tailoring", return_value=True),
+                patch("erga_mcp.mcp.server._client_supports_ai_tailoring", return_value=True),
                 patch(
-                    "erga_mcp.mcp_server._git_enriched_inventory_candidates",
+                    "erga_mcp.mcp.server._git_enriched_inventory_candidates",
                     return_value=enrichment,
                 ),
                 patch(
-                    "erga_mcp.mcp_server._ai_tailored_project_enrichment",
+                    "erga_mcp.mcp.server._ai_tailored_project_enrichment",
                     new=AsyncMock(side_effect=ValueError("bad model copy")),
                 ),
             ):
@@ -930,7 +930,7 @@ Bottom of the approved master template.
                 return heartbeat
 
             with patch(
-                "erga_mcp.mcp_server._git_enriched_inventory_candidates",
+                "erga_mcp.mcp.server._git_enriched_inventory_candidates",
                 side_effect=slow_enrichment,
             ):
                 heartbeat = asyncio.run(exercise())
@@ -996,11 +996,11 @@ Bottom of the approved master template.
 
             with (
                 patch(
-                    "erga_mcp.mcp_server._git_enriched_inventory_candidates",
+                    "erga_mcp.mcp.server._git_enriched_inventory_candidates",
                     return_value=enrichment,
                 ),
                 patch(
-                    "erga_mcp.mcp_server.draft_evidence_backed_projects",
+                    "erga_mcp.mcp.server.draft_evidence_backed_projects",
                     new=AsyncMock(side_effect=request_sampling),
                 ),
                 self.assertRaises(_ModernSamplingRequired) as captured,
@@ -1106,7 +1106,7 @@ Bottom of the approved master template.
                 ResumeItemLayoutValidation(("latexmk",), 0, 1, (), "", ""),
             )
             with patch(
-                "erga_mcp.mcp_server.validate_single_line_resume_items",
+                "erga_mcp.mcp.server.validate_single_line_resume_items",
                 side_effect=layouts,
             ) as validate:
                 selected, rejections = _layout_safe_project_selection(
@@ -1734,7 +1734,7 @@ Bottom of the approved master template.
 
             server = build_server(config_path)
             with patch(
-                "erga_mcp.mcp_server._compile_intake_proposal",
+                "erga_mcp.mcp.server._compile_intake_proposal",
                 return_value=rejected,
             ) as compile_proposal:
                 call: Any = asyncio.run(
@@ -1791,7 +1791,7 @@ Bottom of the approved master template.
             self.assertTrue((package / "artifacts" / "proposal.tex").exists())
 
     def test_scrape_tools_return_bounded_untrusted_content(self) -> None:
-        from erga_mcp.web_scraping import ScrapedPage
+        from erga_mcp.integrations.web import ScrapedPage
 
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
@@ -1804,8 +1804,8 @@ Bottom of the approved master template.
                 links=("https://example.com/more",),
             )
             with (
-                patch("erga_mcp.mcp_server.scrape_page", return_value=scraped),
-                patch("erga_mcp.mcp_server.extract_page", return_value="Selected fact"),
+                patch("erga_mcp.mcp.server.scrape_page", return_value=scraped),
+                patch("erga_mcp.mcp.server.extract_page", return_value="Selected fact"),
             ):
                 page: Any = asyncio.run(
                     server.call_tool("scrape_public_page", {"url": scraped.url})
@@ -1950,8 +1950,8 @@ Bottom of the approved master template.
             )
 
             with (
-                patch("erga_mcp.mcp_server.fetch_job_snapshot", return_value=snapshot),
-                patch("erga_mcp.mcp_server._inventory_candidates", return_value=candidates),
+                patch("erga_mcp.mcp.server.fetch_job_snapshot", return_value=snapshot),
+                patch("erga_mcp.mcp.server._inventory_candidates", return_value=candidates),
             ):
                 created: Any = asyncio.run(
                     server.call_tool(
@@ -2025,9 +2025,9 @@ Bottom of the approved master template.
                 return validation
 
             with (
-                patch("erga_mcp.mcp_server.fetch_job_snapshot", return_value=snapshot) as fetch,
+                patch("erga_mcp.mcp.server.fetch_job_snapshot", return_value=snapshot) as fetch,
                 patch(
-                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    "erga_mcp.mcp.server.validate_latex_proposal",
                     side_effect=compile_success,
                 ),
             ):
@@ -2145,7 +2145,7 @@ Bottom of the approved master template.
 
             with (
                 patch(
-                    "erga_mcp.mcp_server.install_hermes_monitor_scripts",
+                    "erga_mcp.mcp.server.install_hermes_monitor_scripts",
                     return_value=prepared,
                 ) as install,
                 patch.dict("os.environ", {"HERMES_HOME": str(hermes_home)}),
@@ -2188,11 +2188,11 @@ Bottom of the approved master template.
             server = build_server(config_path)
             with (
                 patch(
-                    "erga_mcp.mcp_server.fetch_job_snapshot",
+                    "erga_mcp.mcp.server.fetch_job_snapshot",
                     return_value="GitHub repository and source code for a project.",
                 ),
                 patch(
-                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    "erga_mcp.mcp.server.validate_latex_proposal",
                 ) as validate,
                 self.assertRaisesRegex(Exception, "source_code_repository"),
             ):
@@ -2239,11 +2239,11 @@ Bottom of the approved master template.
 
             with (
                 patch(
-                    "erga_mcp.mcp_server.fetch_job_snapshot",
+                    "erga_mcp.mcp.server.fetch_job_snapshot",
                     return_value="Python software engineering internship",
                 ) as fetch,
                 patch(
-                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    "erga_mcp.mcp.server.validate_latex_proposal",
                     side_effect=compile_success,
                 ) as validate,
             ):
@@ -2308,7 +2308,7 @@ Bottom of the approved master template.
 
             with (
                 patch(
-                    "erga_mcp.mcp_server.fetch_job_snapshot",
+                    "erga_mcp.mcp.server.fetch_job_snapshot",
                     return_value=(
                         "Python FastAPI low-latency software internship. "
                         "Responsibilities include building reliable services. "
@@ -2316,7 +2316,7 @@ Bottom of the approved master template.
                     ),
                 ),
                 patch(
-                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    "erga_mcp.mcp.server.validate_latex_proposal",
                     side_effect=compile_success,
                 ),
             ):
@@ -2378,7 +2378,7 @@ Bottom of the approved master template.
 
             with (
                 patch(
-                    "erga_mcp.mcp_server.fetch_job_snapshot",
+                    "erga_mcp.mcp.server.fetch_job_snapshot",
                     return_value=(
                         "Python software engineering internship. "
                         "Responsibilities include building production services. "
@@ -2386,7 +2386,7 @@ Bottom of the approved master template.
                     ),
                 ),
                 patch(
-                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    "erga_mcp.mcp.server.validate_latex_proposal",
                     side_effect=compile_success,
                 ),
             ):
@@ -2422,7 +2422,7 @@ Bottom of the approved master template.
                 return validation
 
             with patch(
-                "erga_mcp.mcp_server.validate_latex_proposal",
+                "erga_mcp.mcp.server.validate_latex_proposal",
                 side_effect=compile_two_pages,
             ):
                 result = _compile_intake_proposal(
@@ -2452,11 +2452,11 @@ Bottom of the approved master template.
 
             with (
                 patch(
-                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    "erga_mcp.mcp.server.validate_latex_proposal",
                     side_effect=compile_sparse_page,
                 ),
                 patch(
-                    "erga_mcp.mcp_server.pdf_page_fill",
+                    "erga_mcp.mcp.server.pdf_page_fill",
                     return_value=SimpleNamespace(fill_ratio=0.67),
                 ),
             ):
@@ -2491,11 +2491,11 @@ Bottom of the approved master template.
 
             with (
                 patch(
-                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    "erga_mcp.mcp.server.validate_latex_proposal",
                     side_effect=compile_sparse_page,
                 ),
-                patch("erga_mcp.mcp_server.pdf_page_count", return_value=1),
-                patch("erga_mcp.mcp_server.pdf_page_fill") as page_fill,
+                patch("erga_mcp.mcp.server.pdf_page_count", return_value=1),
+                patch("erga_mcp.mcp.server.pdf_page_fill") as page_fill,
             ):
                 result = _compile_intake_proposal(
                     proposal,
@@ -2559,11 +2559,11 @@ Bottom of the approved master template.
 
             with (
                 patch(
-                    "erga_mcp.mcp_server.fetch_job_snapshot",
+                    "erga_mcp.mcp.server.fetch_job_snapshot",
                     return_value=snapshot,
                 ) as fetch,
                 patch(
-                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    "erga_mcp.mcp.server.validate_latex_proposal",
                     side_effect=compile_success,
                 ),
             ):
@@ -2622,11 +2622,11 @@ Bottom of the approved master template.
 
             with (
                 patch(
-                    "erga_mcp.mcp_server.fetch_job_snapshot",
+                    "erga_mcp.mcp.server.fetch_job_snapshot",
                     return_value="Software engineering internship",
                 ) as fetch,
                 patch(
-                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    "erga_mcp.mcp.server.validate_latex_proposal",
                     return_value=validation,
                 ),
             ):
@@ -2663,11 +2663,11 @@ Bottom of the approved master template.
 
             with (
                 patch(
-                    "erga_mcp.mcp_server.fetch_job_snapshot",
+                    "erga_mcp.mcp.server.fetch_job_snapshot",
                     return_value="Software engineering internship",
                 ),
                 patch(
-                    "erga_mcp.mcp_server.create_automatic_resume_proposal",
+                    "erga_mcp.mcp.server.create_automatic_resume_proposal",
                     side_effect=RuntimeError("synthetic proposal failure"),
                 ),
                 self.assertRaisesRegex(Exception, "synthetic proposal failure"),
@@ -2678,11 +2678,11 @@ Bottom of the approved master template.
             validation = LatexValidation(command=("latexmk",), returncode=1, stdout="", stderr="")
             with (
                 patch(
-                    "erga_mcp.mcp_server.fetch_job_snapshot",
+                    "erga_mcp.mcp.server.fetch_job_snapshot",
                     return_value="Software engineering internship",
                 ),
                 patch(
-                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    "erga_mcp.mcp.server.validate_latex_proposal",
                     return_value=validation,
                 ),
             ):
@@ -2726,11 +2726,11 @@ Bottom of the approved master template.
 
             with (
                 patch(
-                    "erga_mcp.mcp_server.fetch_job_snapshot",
+                    "erga_mcp.mcp.server.fetch_job_snapshot",
                     return_value="Software engineering internship",
                 ),
                 patch(
-                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    "erga_mcp.mcp.server.validate_latex_proposal",
                     side_effect=subprocess.TimeoutExpired(("latexmk",), 120),
                 ) as validate,
             ):
@@ -2777,11 +2777,11 @@ Bottom of the approved master template.
 
             with (
                 patch(
-                    "erga_mcp.mcp_server.fetch_job_snapshot",
+                    "erga_mcp.mcp.server.fetch_job_snapshot",
                     return_value="Software engineering internship",
                 ),
                 patch(
-                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    "erga_mcp.mcp.server.validate_latex_proposal",
                     side_effect=validate_together,
                 ),
                 ThreadPoolExecutor(max_workers=2) as pool,

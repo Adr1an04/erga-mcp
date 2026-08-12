@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
-from erga_mcp.resume import (
+from erga_mcp.resumes.artifacts import (
     _pdf_resume_item_lines,
     resolve_latexmk_executable,
     validate_latex_proposal,
@@ -31,7 +31,7 @@ class ResumeValidationTests(unittest.TestCase):
         )
         reader = Mock(pages=[page])
 
-        with patch("erga_mcp.resume.PdfReader", return_value=reader):
+        with patch("erga_mcp.resumes.artifacts.PdfReader", return_value=reader):
             lines = _pdf_resume_item_lines(Path("synthetic.pdf"))
 
         self.assertEqual(
@@ -98,7 +98,7 @@ class ResumeValidationTests(unittest.TestCase):
                 args=[], returncode=0, stdout="validated proposal.tex\n", stderr=""
             )
 
-            with patch("erga_mcp.resume.subprocess.run", return_value=completed) as run:
+            with patch("erga_mcp.resumes.artifacts.subprocess.run", return_value=completed) as run:
                 result = validate_latex_proposal(proposal, latexmk=Path(sys.executable))
 
             self.assertEqual(result.returncode, 0)
@@ -116,10 +116,10 @@ class ResumeValidationTests(unittest.TestCase):
             latexmk.write_text("synthetic compiler", encoding="utf-8")
 
             with (
-                patch("erga_mcp.resume.sys.platform", "darwin"),
-                patch("erga_mcp.resume.shutil.which", return_value=None),
-                patch("erga_mcp.resume._MACOS_TEXBIN", texbin),
-                patch("erga_mcp.resume.os.access", return_value=True),
+                patch("erga_mcp.resumes.artifacts.sys.platform", "darwin"),
+                patch("erga_mcp.resumes.artifacts.shutil.which", return_value=None),
+                patch("erga_mcp.resumes.artifacts._MACOS_TEXBIN", texbin),
+                patch("erga_mcp.resumes.artifacts.os.access", return_value=True),
             ):
                 resolved = resolve_latexmk_executable(Path("latexmk"))
 
@@ -133,8 +133,8 @@ class ResumeValidationTests(unittest.TestCase):
                 return tectonic if command == "tectonic" else None
 
             with (
-                patch("erga_mcp.resume.sys.platform", "linux"),
-                patch("erga_mcp.resume.shutil.which", side_effect=which),
+                patch("erga_mcp.resumes.artifacts.sys.platform", "linux"),
+                patch("erga_mcp.resumes.artifacts.shutil.which", side_effect=which),
             ):
                 resolved = resolve_latexmk_executable(Path("latexmk"))
 
@@ -150,8 +150,8 @@ class ResumeValidationTests(unittest.TestCase):
             completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
 
             with (
-                patch("erga_mcp.resume.shutil.which", return_value=str(tectonic)),
-                patch("erga_mcp.resume.subprocess.run", return_value=completed) as run,
+                patch("erga_mcp.resumes.artifacts.shutil.which", return_value=str(tectonic)),
+                patch("erga_mcp.resumes.artifacts.subprocess.run", return_value=completed) as run,
             ):
                 result = validate_latex_proposal(proposal, latexmk=Path("tectonic"))
 
@@ -176,8 +176,8 @@ class ResumeValidationTests(unittest.TestCase):
 
             with (
                 patch.dict("os.environ", {"PATH": os.pathsep.join(("one", "two"))}, clear=False),
-                patch("erga_mcp.resume.shutil.which", return_value=str(latexmk)),
-                patch("erga_mcp.resume.subprocess.run", return_value=completed) as run,
+                patch("erga_mcp.resumes.artifacts.shutil.which", return_value=str(latexmk)),
+                patch("erga_mcp.resumes.artifacts.subprocess.run", return_value=completed) as run,
             ):
                 result = validate_latex_proposal(proposal, latexmk=latexmk)
 

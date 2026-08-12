@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from erga_mcp.job_identity import job_identity, metadata_from_url
+from erga_mcp.applications.identity import job_identity, metadata_from_url
 
 
 class JobIdentityTests(unittest.TestCase):

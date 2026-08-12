@@ -9,8 +9,8 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from erga_mcp.config import DEFAULT_CONFIG
-from erga_mcp.integrations.zoho import MailMessageMetadata
-from erga_mcp.mcp_server import build_server
+from erga_mcp.integrations.mail.zoho import MailMessageMetadata
+from erga_mcp.mcp.server import build_server
 
 
 class MailSyncMcpTests(unittest.TestCase):
@@ -35,11 +35,11 @@ class MailSyncMcpTests(unittest.TestCase):
             )
             with (
                 patch(
-                    "erga_mcp.integrations.mail_provider.refresh_access_token",
+                    "erga_mcp.integrations.mail.provider.refresh_access_token",
                     return_value="test-token",
                 ),
                 patch(
-                    "erga_mcp.integrations.mail_provider.fetch_all_inbox_metadata",
+                    "erga_mcp.integrations.mail.provider.fetch_all_inbox_metadata",
                     return_value=[message],
                 ) as fetch,
                 patch(
@@ -108,11 +108,11 @@ class MailSyncMcpTests(unittest.TestCase):
 
             with (
                 patch(
-                    "erga_mcp.integrations.mail_provider.refresh_access_token",
+                    "erga_mcp.integrations.mail.provider.refresh_access_token",
                     return_value="test-token",
                 ),
                 patch(
-                    "erga_mcp.integrations.mail_provider.fetch_all_inbox_metadata",
+                    "erga_mcp.integrations.mail.provider.fetch_all_inbox_metadata",
                     side_effect=fetch,
                 ),
             ):

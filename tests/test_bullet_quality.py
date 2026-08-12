@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import unittest
 
-from erga_mcp.bullet_quality import (
+from erga_mcp.portfolio.inventory import ProjectCandidate
+from erga_mcp.resumes.quality import (
     analyze_bullet_quality,
     build_project_identity_profile,
     bullet_semantic_overlap,
     compare_project_profiles,
     portfolio_quality_report,
 )
-from erga_mcp.project_inventory import ProjectCandidate
 
 
 def _candidate(

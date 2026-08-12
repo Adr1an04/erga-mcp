@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from erga_mcp.job_research import analyze_job_snapshot
-from erga_mcp.job_source import assess_job_source
+from erga_mcp.applications.research import analyze_job_snapshot
+from erga_mcp.applications.source import assess_job_source
 
 
 class JobSourceTests(unittest.TestCase):

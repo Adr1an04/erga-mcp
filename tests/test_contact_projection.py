@@ -6,8 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.config import ContactOutputSettings
-from erga_mcp.contact_projection import project_recruiter_contacts
 from erga_mcp.models import RecruiterContact
+from erga_mcp.tracking.contact_projection import project_recruiter_contacts
 
 
 class ContactProjectionTests(unittest.TestCase):

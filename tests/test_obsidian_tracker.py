@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.integrations.obsidian_tracker import (
+from erga_mcp.integrations.obsidian.tracker import (
     import_confirmed_application_tracker_rows,
     reconcile_application_status_tracker_rows,
     reconcile_confirmed_application_tracker_rows,

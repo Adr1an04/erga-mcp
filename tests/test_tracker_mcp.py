@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 from typing import Any, cast
 
 from erga_mcp.config import DEFAULT_CONFIG, load_config
-from erga_mcp.mcp_server import build_server
+from erga_mcp.mcp.server import build_server
 from erga_mcp.store import ErgaStore
 
 

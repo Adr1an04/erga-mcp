@@ -12,9 +12,9 @@ from unittest.mock import patch
 
 from erga_mcp.cli import main
 from erga_mcp.config import DEFAULT_CONFIG, load_config
-from erga_mcp.github_projects import GitHubProject
-from erga_mcp.mcp_server import build_server
-from erga_mcp.project_catalogue import build_project_catalogue
+from erga_mcp.mcp.server import build_server
+from erga_mcp.portfolio.catalogue import build_project_catalogue
+from erga_mcp.portfolio.github import GitHubProject
 from erga_mcp.store import ErgaStore
 
 

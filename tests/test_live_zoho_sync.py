@@ -7,8 +7,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from erga_mcp.integrations.zoho import MailMessageMetadata
-from erga_mcp.integrations.zoho_live import (
+from erga_mcp.integrations.mail.zoho import MailMessageMetadata
+from erga_mcp.integrations.mail.zoho_live import (
     fetch_all_inbox_metadata,
     fetch_inbox_metadata,
     format_recruiting_alerts,
@@ -66,7 +66,7 @@ class LiveZohoSyncTests(unittest.TestCase):
             urls.append(str(getattr(request, "full_url")))
             return Response(next(responses))
 
-        with patch("erga_mcp.integrations.zoho_live.urlopen", fake_urlopen):
+        with patch("erga_mcp.integrations.mail.zoho_live.urlopen", fake_urlopen):
             messages = fetch_inbox_metadata(
                 access_token="access-token", folder="Job Applications", limit=1
             )
@@ -99,7 +99,7 @@ class LiveZohoSyncTests(unittest.TestCase):
                 return json.dumps(self.payload).encode("utf-8")
 
         with patch(
-            "erga_mcp.integrations.zoho_live.urlopen",
+            "erga_mcp.integrations.mail.zoho_live.urlopen",
             lambda *_args, **_kwargs: Response(next(responses)),
         ):
             messages = fetch_inbox_metadata(
@@ -142,7 +142,7 @@ class LiveZohoSyncTests(unittest.TestCase):
             urls.append(str(getattr(request, "full_url")))
             return Response(next(responses))
 
-        with patch("erga_mcp.integrations.zoho_live.urlopen", fake_urlopen):
+        with patch("erga_mcp.integrations.mail.zoho_live.urlopen", fake_urlopen):
             messages = fetch_inbox_metadata(
                 access_token="access-token",
                 folder="Inbox",
@@ -193,7 +193,7 @@ class LiveZohoSyncTests(unittest.TestCase):
             urls.append(str(getattr(request, "full_url")))
             return Response(next(responses))
 
-        with patch("erga_mcp.integrations.zoho_live.urlopen", fake_urlopen):
+        with patch("erga_mcp.integrations.mail.zoho_live.urlopen", fake_urlopen):
             messages = fetch_all_inbox_metadata(
                 access_token="access-token", folder="Inbox", page_size=2
             )

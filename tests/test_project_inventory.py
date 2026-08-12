@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.models import Evidence
-from erga_mcp.project_inventory import (
+from erga_mcp.portfolio.inventory import (
     ProjectCandidate,
     limit_project_candidate_bullets,
     load_project_inventory,

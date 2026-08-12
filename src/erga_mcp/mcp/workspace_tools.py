@@ -9,35 +9,35 @@ from mcp.server.mcpserver import Context
 from mcp.types import ElicitRequest, ElicitRequestFormParams, ElicitResult, InputRequiredResult
 from pydantic import Field, StrictInt
 
-from ..config import ErgaConfig, load_config
-from ..contact_projection import project_recruiter_contacts
-from ..git_skills import (
-    approve_git_skill_group,
-    explicit_skills_in_texts,
-    reconcile_git_skill_groups,
-)
-from ..github_projects import discover_github_projects
-from ..integrations.mail_provider import build_mail_provider
-from ..integrations.obsidian_tracker import (
+from erga_mcp.config import ErgaConfig, load_config
+from erga_mcp.integrations.mail.provider import build_mail_provider
+from erga_mcp.integrations.mail.zoho_live import sync_metadata
+from erga_mcp.integrations.obsidian.tracker import (
     import_confirmed_application_tracker_rows,
     reconcile_confirmed_application_tracker_rows,
 )
-from ..integrations.zoho_live import sync_metadata
-from ..onboarding_view import build_onboarding_card
-from ..portfolio_roots import detected_portfolio_root, update_portfolio_roots
-from ..project_catalogue import build_project_catalogue
-from ..project_metrics import propose_git_project_metrics
-from ..resume_sources import resume_source_context as build_resume_source_context
-from ..skill_inventory import parse_skill_seed_csv
-from ..store import ErgaStore
-from .profiles import (
+from erga_mcp.mcp.profiles import (
     LOCAL_IDEMPOTENT_WRITE,
     LOCAL_WRITE,
     NETWORK_READ_AND_WRITE,
     READ_ONLY,
     profile_visible_evidence,
 )
-from .registry import ToolRegistry
+from erga_mcp.mcp.registry import ToolRegistry
+from erga_mcp.portfolio.catalogue import build_project_catalogue
+from erga_mcp.portfolio.github import discover_github_projects
+from erga_mcp.portfolio.metrics import propose_git_project_metrics
+from erga_mcp.portfolio.roots import detected_portfolio_root, update_portfolio_roots
+from erga_mcp.portfolio.skill_inventory import parse_skill_seed_csv
+from erga_mcp.portfolio.skills import (
+    approve_git_skill_group,
+    explicit_skills_in_texts,
+    reconcile_git_skill_groups,
+)
+from erga_mcp.resumes.sources import resume_source_context as build_resume_source_context
+from erga_mcp.store import ErgaStore
+from erga_mcp.tracking.contact_projection import project_recruiter_contacts
+from erga_mcp.tracking.onboarding import build_onboarding_card
 
 JsonValue = Callable[[object], object]
 GitResearchReport = Callable[[ErgaStore, list[str]], dict[str, object]]

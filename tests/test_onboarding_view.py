@@ -5,9 +5,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.config import DEFAULT_CONFIG, load_config
-from erga_mcp.onboarding_view import build_onboarding_card
-from erga_mcp.skill_inventory import parse_skill_seed_csv
+from erga_mcp.portfolio.skill_inventory import parse_skill_seed_csv
 from erga_mcp.store import ErgaStore
+from erga_mcp.tracking.onboarding import build_onboarding_card
 
 
 class OnboardingViewTests(unittest.TestCase):

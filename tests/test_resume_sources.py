@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from erga_mcp.resume_sources import (
+from erga_mcp.resumes.sources import (
     import_master_resume,
     load_resume_source,
     resume_source_context,
@@ -33,7 +33,7 @@ class ResumeSourceTests(unittest.TestCase):
                 ],
             )
 
-            with patch("erga_mcp.resume_sources.PdfReader", return_value=reader):
+            with patch("erga_mcp.resumes.sources.PdfReader", return_value=reader):
                 source = load_resume_source(master)
 
             self.assertEqual(source.page_count, 3)
@@ -53,7 +53,7 @@ class ResumeSourceTests(unittest.TestCase):
                     return "Experience\n   Built a service\n   across two regions."
 
             reader = SimpleNamespace(is_encrypted=False, pages=[Page()])
-            with patch("erga_mcp.resume_sources.PdfReader", return_value=reader):
+            with patch("erga_mcp.resumes.sources.PdfReader", return_value=reader):
                 source = load_resume_source(master)
 
             self.assertEqual(calls, [{"extraction_mode": "layout"}])
@@ -280,7 +280,7 @@ class ResumeSourceTests(unittest.TestCase):
                 ],
             )
 
-            with patch("erga_mcp.resume_sources.PdfReader", return_value=reader):
+            with patch("erga_mcp.resumes.sources.PdfReader", return_value=reader):
                 context = resume_source_context(master_path=master, reference_path=style)
 
             self.assertEqual(context["preferences"]["max_pages"], 2)  # type: ignore[index]

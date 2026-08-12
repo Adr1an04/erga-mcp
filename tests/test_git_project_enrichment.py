@@ -7,14 +7,14 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from erga_mcp.git_evidence import GitCommit
-from erga_mcp.git_project_enrichment import (
+from erga_mcp.models import Evidence, GitChangeObservation
+from erga_mcp.portfolio.enrichment import (
     enrich_ranked_projects_from_git,
     merge_github_project_catalogue,
 )
-from erga_mcp.github_projects import GitHubProject
-from erga_mcp.models import Evidence, GitChangeObservation
-from erga_mcp.project_inventory import ProjectCandidate
+from erga_mcp.portfolio.git_evidence import GitCommit
+from erga_mcp.portfolio.github import GitHubProject
+from erga_mcp.portfolio.inventory import ProjectCandidate
 from erga_mcp.store import ErgaStore
 
 
@@ -148,27 +148,27 @@ class GitProjectEnrichmentTests(unittest.TestCase):
 
             with (
                 patch(
-                    "erga_mcp.git_project_enrichment.connected_github_login",
+                    "erga_mcp.portfolio.enrichment.connected_github_login",
                     return_value="sample-user",
                 ),
                 patch(
-                    "erga_mcp.git_project_enrichment.ensure_github_worktree",
+                    "erga_mcp.portfolio.enrichment.ensure_github_worktree",
                     return_value=repo,
                 ),
                 patch(
-                    "erga_mcp.git_project_enrichment.github_authored_commit_shas",
+                    "erga_mcp.portfolio.enrichment.github_authored_commit_shas",
                     return_value={"a" * 40},
                 ),
                 patch(
-                    "erga_mcp.git_project_enrichment.scan_authored_commits",
+                    "erga_mcp.portfolio.enrichment.scan_authored_commits",
                     return_value=commits,
                 ),
                 patch(
-                    "erga_mcp.git_project_enrichment.analyze_commits",
+                    "erga_mcp.portfolio.enrichment.analyze_commits",
                     return_value=observations,
                 ),
                 patch(
-                    "erga_mcp.git_project_enrichment.summarize_git_project_metrics",
+                    "erga_mcp.portfolio.enrichment.summarize_git_project_metrics",
                     return_value=SimpleNamespace(
                         attribution="connected_github_user",
                         commit_count=1,

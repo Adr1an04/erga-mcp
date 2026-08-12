@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import UTC, datetime
 
-from erga_mcp.application_lookup import select_tracked_application
+from erga_mcp.applications.lookup import select_tracked_application
 from erga_mcp.models import Application
 
 

@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from erga_mcp.doctor import check_installation
+from erga_mcp.operations.doctor import check_installation
 
 
 class DoctorTests(unittest.TestCase):
@@ -28,7 +28,7 @@ class DoctorTests(unittest.TestCase):
             config_path.write_text('[paths]\ndata_dir = "state"\nvault_path = ""\n')
 
             with patch(
-                "erga_mcp.doctor.resolve_latexmk_executable",
+                "erga_mcp.operations.doctor.resolve_latexmk_executable",
                 return_value=Path("/Library/TeX/texbin/latexmk"),
             ):
                 report = check_installation(config_path)
@@ -42,7 +42,7 @@ class DoctorTests(unittest.TestCase):
             config_path.write_text('[paths]\ndata_dir = "state"\nvault_path = ""\n')
 
             with patch(
-                "erga_mcp.doctor.resolve_latexmk_executable",
+                "erga_mcp.operations.doctor.resolve_latexmk_executable",
                 side_effect=FileNotFoundError,
             ):
                 report = check_installation(config_path)

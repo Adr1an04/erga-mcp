@@ -11,9 +11,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from erga_mcp.applications.discovery import DiscoveryResearchResult
 from erga_mcp.cli import _package_for_application, _run_console, main
 from erga_mcp.config import load_config
-from erga_mcp.job_discovery import DiscoveryResearchResult
 from erga_mcp.models import Application
 from erga_mcp.store import ErgaStore
 

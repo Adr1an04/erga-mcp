@@ -8,33 +8,33 @@ from typing import Annotated, Protocol, cast
 
 from pydantic import Field, StrictInt
 
-from ..config import ErgaConfig, load_config
-from ..git_skills import build_git_skill_review_card
-from ..job_identity import job_identity
-from ..keryx import keryx_status
-from ..keryx import search_keryx_jobs as search_cached_keryx_jobs
-from ..onboarding_view import build_onboarding_card
-from ..portfolio_roots import detected_portfolio_root
-from ..project_catalogue import build_project_catalogue
-from ..research_navigator import build_research_navigator, research_stage_for_status
-from ..settings_view import build_settings_card
-from ..skill_inventory import parse_skill_seed_csv
-from ..store import ErgaStore
-from ..tracker_view import (
+from erga_mcp.applications.identity import job_identity
+from erga_mcp.applications.navigator import build_research_navigator, research_stage_for_status
+from erga_mcp.config import ErgaConfig, load_config
+from erga_mcp.integrations.keryx import keryx_status
+from erga_mcp.integrations.keryx import search_keryx_jobs as search_cached_keryx_jobs
+from erga_mcp.mcp.profiles import (
+    HERMES_TOOL_NAMES,
+    LOCAL_WRITE_TOOL_NAMES,
+    NETWORK_READ_TOOL_NAMES,
+    READ_ONLY,
+)
+from erga_mcp.mcp.registry import ToolRegistry
+from erga_mcp.portfolio.catalogue import build_project_catalogue
+from erga_mcp.portfolio.roots import detected_portfolio_root
+from erga_mcp.portfolio.skill_inventory import parse_skill_seed_csv
+from erga_mcp.portfolio.skills import build_git_skill_review_card
+from erga_mcp.store import ErgaStore
+from erga_mcp.tracking.onboarding import build_onboarding_card
+from erga_mcp.tracking.settings import build_settings_card
+from erga_mcp.tracking.tracker import (
     build_tracker_card,
     filter_application_tracker,
     paginate_application_tracker,
     read_application_tracker,
     render_tracker_message,
 )
-from ..versioning import capabilities
-from .profiles import (
-    HERMES_TOOL_NAMES,
-    LOCAL_WRITE_TOOL_NAMES,
-    NETWORK_READ_TOOL_NAMES,
-    READ_ONLY,
-)
-from .registry import ToolRegistry
+from erga_mcp.versioning import capabilities
 
 
 class ResearchPackageResolver(Protocol):

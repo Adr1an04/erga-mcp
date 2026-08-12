@@ -71,7 +71,7 @@ def _running_http_server(config_path: Path, port: int) -> Iterator[subprocess.Po
         "ERGA_MCP_HTTP_TOKEN": _HTTP_TOKEN,
     }
     process = subprocess.Popen(
-        [sys.executable, "-m", "erga_mcp.mcp_server"],
+        [sys.executable, "-m", "erga_mcp.mcp.server"],
         cwd=PROJECT_ROOT,
         env=environment,
         stdout=subprocess.PIPE,

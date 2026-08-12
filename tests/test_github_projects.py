@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.github_projects import (
+from erga_mcp.portfolio.github import (
     connected_github_login,
     discover_github_projects,
     find_local_github_worktree,

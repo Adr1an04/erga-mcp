@@ -6,12 +6,12 @@ from typing import Any
 
 from mcp.types import CreateMessageResultWithTools, ToolUseContent
 
-from erga_mcp.ai_resume_tailoring import (
+from erga_mcp.mcp.sampling import MCPTailoringDraftClient
+from erga_mcp.resumes.ai_tailoring import (
     TailoringDraftMessage,
     TailoringDraftRequest,
     TailoringDraftTool,
 )
-from erga_mcp.mcp.sampling import MCPTailoringDraftClient
 
 
 class _Session:

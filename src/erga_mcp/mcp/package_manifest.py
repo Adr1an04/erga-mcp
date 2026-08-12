@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .contracts import IntakeValidationResult
+from erga_mcp.mcp.contracts import IntakeValidationResult
 
 
 def validation_from_manifest(

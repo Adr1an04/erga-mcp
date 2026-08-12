@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tomllib
 import unittest
@@ -12,8 +13,12 @@ from unittest.mock import patch
 
 from erga_mcp.cli import main
 from erga_mcp.config import DEFAULT_CONFIG
-from erga_mcp.host_connections import configure_hosts
-from erga_mcp.uninstall import apply_uninstall, build_uninstall_plan
+from erga_mcp.integrations.hosts import configure_hosts
+from erga_mcp.operations.uninstall import (
+    _verified_legacy_bridge_pid,
+    apply_uninstall,
+    build_uninstall_plan,
+)
 
 
 class UninstallTests(unittest.TestCase):
@@ -91,6 +96,30 @@ class UninstallTests(unittest.TestCase):
             self.assertTrue(paths["config"].is_file())
             self.assertTrue(paths["state"].is_dir())
 
+    def test_legacy_bridge_pid_verification_accepts_the_pre_move_module_path(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text("", encoding="utf-8")
+            (root / "discord-bridge.pid").write_text("4321\n", encoding="utf-8")
+            completed = subprocess.CompletedProcess(
+                [],
+                0,
+                (f"python -m erga_mcp.discord_bridge --config {config_path.absolute()}"),
+                "",
+            )
+
+            with (
+                patch("erga_mcp.operations.uninstall.sys.platform", "darwin"),
+                patch(
+                    "erga_mcp.operations.uninstall.subprocess.run",
+                    return_value=completed,
+                ),
+            ):
+                pid = _verified_legacy_bridge_pid(config_path, root)
+
+            self.assertEqual(pid, 4321)
+
     def test_apply_removes_erga_state_and_only_erga_from_shared_integrations(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -136,9 +165,14 @@ class UninstallTests(unittest.TestCase):
                 hermes_home=hermes_home,
             )
             with (
-                patch("erga_mcp.uninstall.delete_discord_token", return_value=True),
-                patch("erga_mcp.uninstall.stop_discord_bridge", return_value={"running": False}),
-                patch("erga_mcp.uninstall._verified_legacy_bridge_pid", return_value=None),
+                patch("erga_mcp.operations.uninstall.delete_discord_token", return_value=True),
+                patch(
+                    "erga_mcp.operations.uninstall.stop_discord_bridge",
+                    return_value={"running": False},
+                ),
+                patch(
+                    "erga_mcp.operations.uninstall._verified_legacy_bridge_pid", return_value=None
+                ),
             ):
                 result = apply_uninstall(plan)
 
@@ -208,9 +242,14 @@ class UninstallTests(unittest.TestCase):
             paths["config"].write_text(raw, encoding="utf-8")
 
             with (
-                patch("erga_mcp.uninstall.delete_discord_token", return_value=False),
-                patch("erga_mcp.uninstall.stop_discord_bridge", return_value={"running": False}),
-                patch("erga_mcp.uninstall._verified_legacy_bridge_pid", return_value=None),
+                patch("erga_mcp.operations.uninstall.delete_discord_token", return_value=False),
+                patch(
+                    "erga_mcp.operations.uninstall.stop_discord_bridge",
+                    return_value={"running": False},
+                ),
+                patch(
+                    "erga_mcp.operations.uninstall._verified_legacy_bridge_pid", return_value=None
+                ),
             ):
                 result = apply_uninstall(plan)
 
@@ -247,9 +286,14 @@ class UninstallTests(unittest.TestCase):
             owned_parent.symlink_to(outside, target_is_directory=True)
 
             with (
-                patch("erga_mcp.uninstall.delete_discord_token", return_value=False),
-                patch("erga_mcp.uninstall.stop_discord_bridge", return_value={"running": False}),
-                patch("erga_mcp.uninstall._verified_legacy_bridge_pid", return_value=None),
+                patch("erga_mcp.operations.uninstall.delete_discord_token", return_value=False),
+                patch(
+                    "erga_mcp.operations.uninstall.stop_discord_bridge",
+                    return_value={"running": False},
+                ),
+                patch(
+                    "erga_mcp.operations.uninstall._verified_legacy_bridge_pid", return_value=None
+                ),
             ):
                 result = apply_uninstall(plan)
 
@@ -293,9 +337,14 @@ class UninstallTests(unittest.TestCase):
             self.assertIn(str(hidden_library_state), planned)
 
             with (
-                patch("erga_mcp.uninstall.delete_discord_token", return_value=False),
-                patch("erga_mcp.uninstall.stop_discord_bridge", return_value={"running": False}),
-                patch("erga_mcp.uninstall._verified_legacy_bridge_pid", return_value=None),
+                patch("erga_mcp.operations.uninstall.delete_discord_token", return_value=False),
+                patch(
+                    "erga_mcp.operations.uninstall.stop_discord_bridge",
+                    return_value={"running": False},
+                ),
+                patch(
+                    "erga_mcp.operations.uninstall._verified_legacy_bridge_pid", return_value=None
+                ),
             ):
                 apply_uninstall(plan)
 

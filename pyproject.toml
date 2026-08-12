@@ -57,7 +57,7 @@ dev = [
 [project.scripts]
 erga = "erga_mcp.cli:console_main"
 erga-tokens = "erga_mcp.cli:tokens_main"
-erga-mcp = "erga_mcp.mcp_server:main"
+erga-mcp = "erga_mcp.mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/erga_mcp"]

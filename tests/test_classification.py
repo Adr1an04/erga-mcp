@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from erga_mcp.classification import classify_application_message
+from erga_mcp.tracking.classification import classify_application_message
 
 
 class ClassificationTests(unittest.TestCase):

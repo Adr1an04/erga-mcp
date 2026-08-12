@@ -8,7 +8,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from erga_mcp.ai_resume_tailoring import (
+from erga_mcp.models import Evidence
+from erga_mcp.portfolio.inventory import ProjectCandidate
+from erga_mcp.resumes.ai_tailoring import (
     _FORBIDDEN_GIT_PROSE,
     TailoringDraftRequest,
     TailoringDraftResponse,
@@ -18,9 +20,7 @@ from erga_mcp.ai_resume_tailoring import (
     _resume_safe_approved_bullet,
     draft_evidence_backed_projects,
 )
-from erga_mcp.models import Evidence
-from erga_mcp.project_inventory import ProjectCandidate
-from erga_mcp.resume import resume_item_texts
+from erga_mcp.resumes.artifacts import resume_item_texts
 
 
 class _SamplingSession:

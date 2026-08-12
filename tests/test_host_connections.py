@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from erga_mcp.host_connections import (
+from erga_mcp.integrations.hosts import (
     SUPPORTED_HOSTS,
     HostConnectionRecord,
     collect_optional_hosts,
@@ -89,7 +89,7 @@ class HostConnectionTests(unittest.TestCase):
             root = Path(directory)
             config, server = self._files(root)
 
-            with patch("erga_mcp.host_connections.shutil.which", return_value=None):
+            with patch("erga_mcp.integrations.hosts.shutil.which", return_value=None):
                 results = configure_hosts(
                     ("codex", "claude-code", "gemini-cli", "cursor"),
                     project_dir=root,
@@ -270,7 +270,7 @@ class HostConnectionTests(unittest.TestCase):
     def test_optional_picker_defaults_to_no_connection(self) -> None:
         prompt = unittest.mock.Mock()
         prompt.ask.return_value = False
-        with patch("erga_mcp.host_connections.questionary.confirm", return_value=prompt):
+        with patch("erga_mcp.integrations.hosts.questionary.confirm", return_value=prompt):
             selected = collect_optional_hosts()
 
         self.assertEqual(selected, ())
@@ -284,7 +284,7 @@ class HostConnectionTests(unittest.TestCase):
             server.write_text("", encoding="utf-8")
 
             with (
-                patch("erga_mcp.host_connections.shutil.which", return_value=None),
+                patch("erga_mcp.integrations.hosts.shutil.which", return_value=None),
                 patch.object(sys, "argv", [str(launcher)]),
             ):
                 resolved = resolve_server_command()
