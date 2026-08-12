@@ -323,6 +323,48 @@ class DiscordBridgeTests(unittest.TestCase):
 
         self.assertFalse(any(command[:2] == ["git", "fetch"] for command in calls))
 
+    def test_discord_update_treats_a_clean_local_main_ahead_of_github_as_current(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".git").mkdir()
+            (root / "pyproject.toml").write_text("[project]\nname = 'erga-mcp'\n")
+            local_revision = "b" * 40
+            upstream_revision = "a" * 40
+            calls: list[list[str]] = []
+            results = iter(
+                (
+                    subprocess.CompletedProcess([], 0, "true\n", ""),
+                    subprocess.CompletedProcess([], 0, "main\n", ""),
+                    subprocess.CompletedProcess([], 0, "", ""),
+                    subprocess.CompletedProcess(
+                        [], 0, "https://github.com/Adr1an04/erga-mcp.git\n", ""
+                    ),
+                    subprocess.CompletedProcess([], 0, f"{local_revision}\n", ""),
+                    subprocess.CompletedProcess([], 0, "", ""),
+                    subprocess.CompletedProcess([], 0, f"{upstream_revision}\n", ""),
+                    subprocess.CompletedProcess([], 1, "", ""),
+                    subprocess.CompletedProcess([], 0, "", ""),
+                )
+            )
+
+            def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                calls.append(command)
+                return next(results)
+
+            result = update_erga_checkout(
+                checkout_root=root,
+                runner=fake_run,
+                uv_command="/safe/uv",
+            )
+
+        self.assertFalse(result.updated)
+        self.assertEqual(result.current_revision, local_revision)
+        self.assertIn(
+            ["git", "merge-base", "--is-ancestor", "refs/remotes/origin/main", "HEAD"],
+            calls,
+        )
+        self.assertFalse(any(command[:2] == ["git", "merge"] for command in calls))
+
     def test_discord_update_command_restarts_only_after_a_successful_update(self) -> None:
         class FakeIntents:
             message_content = False

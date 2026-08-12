@@ -94,6 +94,8 @@ match the official repository. A safe update uses a Git fast-forward, runs
 `uv sync --extra discord --frozen`, and restarts the bridge into the updated code. Discord keeps
 the interaction compact: it changes a temporary check-in into either “Erga updated successfully,”
 “Erga is up to date,” or a short retry message. Technical details remain in the private bridge log.
+A clean local `main` checkout that is already ahead of GitHub is also treated as current rather than
+being overwritten.
 
 Git-installed package copies do not expose a working checkout to the bridge, so they are reported
 as unsupported rather than being modified. Reinstall those copies from the official repository.

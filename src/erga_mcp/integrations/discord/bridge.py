@@ -709,6 +709,32 @@ def update_erga_checkout(
     if ancestry.returncode not in (0, 1):
         raise ErgaUpdateError("Erga could not verify update history, so no update was applied.")
     if ancestry.returncode != 0:
+        try:
+            local_ahead = runner(
+                [
+                    "git",
+                    "merge-base",
+                    "--is-ancestor",
+                    f"refs/remotes/origin/{_UPDATE_BRANCH}",
+                    "HEAD",
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise ErgaUpdateError(
+                "Erga could not verify update history, so no update was applied."
+            ) from error
+        if local_ahead.returncode not in (0, 1):
+            raise ErgaUpdateError("Erga could not verify update history, so no update was applied.")
+        if local_ahead.returncode == 0:
+            return ErgaUpdateResult(
+                updated=False,
+                previous_revision=previous_revision,
+                current_revision=previous_revision,
+            )
         raise ErgaUpdateError(
             "This Erga checkout has local commits or divergent history, so Discord will not "
             "overwrite it. Update it manually before retrying."
