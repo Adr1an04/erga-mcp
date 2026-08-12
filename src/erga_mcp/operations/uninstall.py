@@ -18,7 +18,7 @@ from erga_mcp.integrations.discord.bridge import (
     stop_discord_bridge,
 )
 from erga_mcp.integrations.discord.settings import settings_path as discord_settings_path
-from erga_mcp.integrations.hermes import monitor_paths
+from erga_mcp.integrations.hermes import monitor_paths, update_monitor_paths
 from erga_mcp.integrations.hosts import (
     HOST_ADAPTERS,
     HostConnectionRecord,
@@ -300,7 +300,7 @@ def build_uninstall_plan(
         add_target(path, "legacy Erga artifact")
 
     hermes_scripts = selected_hermes_home / "scripts"
-    for path in monitor_paths(hermes_scripts):
+    for path in (*monitor_paths(hermes_scripts), *update_monitor_paths(hermes_scripts)):
         add_target(path, "optional Hermes monitor file")
 
     host_records, host_warnings = _candidate_host_records(

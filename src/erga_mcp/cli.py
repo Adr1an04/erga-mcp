@@ -15,18 +15,26 @@ from erga_mcp.applications.identity import job_identity
 from erga_mcp.applications.lookup import select_tracked_application
 from erga_mcp.config import DEFAULT_CONFIG, DEFAULT_CONFIG_PATH, load_config
 from erga_mcp.integrations.discord.bridge import (
+    ErgaUpdateError,
     connect_discord_bridge,
     discord_status,
+    erga_checkout_root,
     run_discord_bridge,
     start_discord_bridge,
     stop_discord_bridge,
     store_discord_token,
+    update_erga_checkout,
 )
 from erga_mcp.integrations.discord.setup import (
     collect_optional_discord,
     configure_discord_interactive,
 )
-from erga_mcp.integrations.hermes import install_hermes_monitor_scripts
+from erga_mcp.integrations.hermes import (
+    install_hermes_monitor_scripts,
+    install_hermes_update_script,
+    request_hermes_gateway_restart,
+    synchronize_router_plugin,
+)
 from erga_mcp.integrations.hosts import (
     SUPPORTED_HOSTS,
     HostName,
@@ -628,6 +636,18 @@ def _parser() -> argparse.ArgumentParser:
     _config_argument(export)
     export.add_argument("--output", type=Path, required=True)
 
+    update = subcommands.add_parser(
+        "update", help="safely update an official clean Erga main checkout"
+    )
+    _config_argument(update)
+    update.add_argument("--scheduled", action="store_true", help=argparse.SUPPRESS)
+    update.add_argument(
+        "--hermes-home",
+        type=Path,
+        default=Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")),
+        help=argparse.SUPPRESS,
+    )
+
     monitor = subcommands.add_parser(
         "monitor", help="prepare deterministic Hermes scheduled-monitor runners"
     )
@@ -641,6 +661,13 @@ def _parser() -> argparse.ArgumentParser:
     monitor_install.add_argument("--scripts-dir", type=Path, default=hermes_home / "scripts")
     monitor_install.add_argument("--history-days", type=int, default=7)
     monitor_install.add_argument("--replace", action="store_true")
+    update_install = monitor_commands.add_parser(
+        "install-hermes-update",
+        help="install the opt-in no-agent Erga update runner under Hermes",
+    )
+    _config_argument(update_install)
+    update_install.add_argument("--scripts-dir", type=Path, default=hermes_home / "scripts")
+    update_install.add_argument("--replace", action="store_true")
     return parser
 
 
@@ -687,6 +714,44 @@ def _print_json(value: object) -> None:
     print(json.dumps(value, default=str, sort_keys=True))
 
 
+def _update_runtime(*, config_path: Path, scheduled: bool, hermes_home: Path) -> dict[str, object]:
+    bridge_was_running = False
+    if config_path.expanduser().is_file():
+        try:
+            bridge_was_running = bool(discord_status(config_path).get("running"))
+        except (OSError, RuntimeError, ValueError):
+            bridge_was_running = False
+
+    result = update_erga_checkout()
+    checkout_root = erga_checkout_root()
+    plugin_updated = False
+    gateway_restart_requested = False
+    upstream_revision = getattr(result, "upstream_revision", result.current_revision)
+    if scheduled and upstream_revision == result.current_revision:
+        plugin_updated = synchronize_router_plugin(
+            checkout_root=checkout_root,
+            hermes_home=hermes_home,
+        )
+        if plugin_updated:
+            gateway_restart_requested = request_hermes_gateway_restart(hermes_home=hermes_home)
+
+    bridge_restarted = False
+    if result.updated and bridge_was_running:
+        stopped = stop_discord_bridge(config_path)
+        if not stopped.get("running"):
+            started = start_discord_bridge(config_path)
+            bridge_restarted = bool(started.get("running"))
+
+    return {
+        "updated": result.updated,
+        "previous_revision": result.previous_revision,
+        "current_revision": result.current_revision,
+        "discord_bridge_restarted": bridge_restarted,
+        "hermes_plugin_updated": plugin_updated,
+        "hermes_gateway_restart_requested": gateway_restart_requested,
+    }
+
+
 def _notes_application(query: str, applications: list[Application]) -> Application:
     """Compatibility wrapper for the application-layer selector."""
     return select_tracked_application(query, applications)
@@ -729,6 +794,19 @@ def _render_application_notes(application: Application, package_dir: Path | None
 
 def main(arguments: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(arguments)
+    if args.command == "update":
+        try:
+            update_report = _update_runtime(
+                config_path=args.config,
+                scheduled=args.scheduled,
+                hermes_home=args.hermes_home,
+            )
+        except (ErgaUpdateError, OSError, RuntimeError, ValueError) as error:
+            print(f"Erga update failed: {error}", file=sys.stderr)
+            return 1
+        if not args.scheduled or update_report["updated"] or update_report["hermes_plugin_updated"]:
+            _print_json(update_report)
+        return 0
     if args.command == "uninstall":
         plan = build_uninstall_plan(
             args.config,
@@ -950,6 +1028,15 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 config_path=args.config,
                 scripts_dir=args.scripts_dir,
                 history_days=args.history_days,
+                replace=args.replace,
+            )
+        )
+        return 0
+    if args.command == "monitor" and args.monitor_command == "install-hermes-update":
+        _print_json(
+            install_hermes_update_script(
+                config_path=args.config,
+                scripts_dir=args.scripts_dir,
                 replace=args.replace,
             )
         )

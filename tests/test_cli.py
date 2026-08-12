@@ -19,6 +19,69 @@ from erga_mcp.store import ErgaStore
 
 
 class CliTests(unittest.TestCase):
+    def test_manual_update_reports_safe_checkout_result(self) -> None:
+        output = StringIO()
+        result = type(
+            "Result",
+            (),
+            {
+                "updated": False,
+                "previous_revision": "a" * 40,
+                "current_revision": "a" * 40,
+            },
+        )()
+        with (
+            patch("erga_mcp.cli.update_erga_checkout", return_value=result),
+            patch("erga_mcp.cli.erga_checkout_root", return_value=Path("/safe/erga")),
+            redirect_stdout(output),
+        ):
+            exit_code = main(["update"])
+
+        self.assertEqual(exit_code, 0)
+        report = json.loads(output.getvalue())
+        self.assertFalse(report["updated"])
+        self.assertFalse(report["hermes_plugin_updated"])
+
+    def test_scheduled_update_refreshes_router_and_requests_gateway_restart(self) -> None:
+        output = StringIO()
+        result = type(
+            "Result",
+            (),
+            {
+                "updated": True,
+                "previous_revision": "a" * 40,
+                "current_revision": "b" * 40,
+            },
+        )()
+        with (
+            TemporaryDirectory() as directory,
+            patch("erga_mcp.cli.update_erga_checkout", return_value=result),
+            patch("erga_mcp.cli.erga_checkout_root", return_value=Path("/safe/erga")),
+            patch("erga_mcp.cli.synchronize_router_plugin", return_value=True) as sync,
+            patch("erga_mcp.cli.request_hermes_gateway_restart", return_value=True) as restart,
+            redirect_stdout(output),
+        ):
+            hermes_home = Path(directory) / "hermes"
+            exit_code = main(
+                [
+                    "update",
+                    "--scheduled",
+                    "--hermes-home",
+                    str(hermes_home),
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        report = json.loads(output.getvalue())
+        self.assertTrue(report["updated"])
+        self.assertTrue(report["hermes_plugin_updated"])
+        self.assertTrue(report["hermes_gateway_restart_requested"])
+        sync.assert_called_once_with(
+            checkout_root=Path("/safe/erga"),
+            hermes_home=hermes_home,
+        )
+        restart.assert_called_once_with(hermes_home=hermes_home)
+
     def test_package_lookup_preserves_query_posting_ids_but_ignores_tracking(self) -> None:
         with TemporaryDirectory() as directory:
             output_root = Path(directory)

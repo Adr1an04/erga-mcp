@@ -345,6 +345,42 @@ class DiscordBridgeTests(unittest.TestCase):
 
         self.assertFalse(any(command[:2] == ["git", "fetch"] for command in calls))
 
+    def test_current_checkout_still_revalidates_frozen_runtime(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".git").mkdir()
+            (root / "pyproject.toml").write_text("[project]\nname = 'erga-mcp'\n")
+            revision = "a" * 40
+            calls: list[list[str]] = []
+            results = iter(
+                (
+                    subprocess.CompletedProcess([], 0, "true\n", ""),
+                    subprocess.CompletedProcess([], 0, "main\n", ""),
+                    subprocess.CompletedProcess([], 0, "", ""),
+                    subprocess.CompletedProcess(
+                        [], 0, "https://github.com/Adr1an04/erga-mcp.git\n", ""
+                    ),
+                    subprocess.CompletedProcess([], 0, f"{revision}\n", ""),
+                    subprocess.CompletedProcess([], 0, "", ""),
+                    subprocess.CompletedProcess([], 0, f"{revision}\n", ""),
+                    subprocess.CompletedProcess([], 0, "Synced\n", ""),
+                )
+            )
+
+            def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                calls.append(command)
+                return next(results)
+
+            result = update_erga_checkout(
+                checkout_root=root,
+                runner=fake_run,
+                uv_command="/safe/uv",
+            )
+
+        self.assertFalse(result.updated)
+        self.assertEqual(result.upstream_revision, revision)
+        self.assertIn(["/safe/uv", "sync", "--extra", "discord", "--frozen"], calls)
+
     def test_discord_update_treats_a_clean_local_main_ahead_of_github_as_current(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

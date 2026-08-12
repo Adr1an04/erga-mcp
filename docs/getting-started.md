@@ -462,6 +462,13 @@ sender, subject, classification, confidence, and review flag are retained. Messa
 not persisted or delivered. Use `/setup-erga-monitor 14` to make the daily digest cover 14
 days. The equivalent explicit CLI setup is documented in `cron/README.md`.
 
+Automatic code updates are separate and opt-in. Run `/erga-updates on` to create a no-agent job
+that checks the official clean `main` checkout every 15 minutes, fast-forwards when possible,
+synchronizes frozen dependencies, refreshes the installed Hermes router, and restarts that Hermes
+profile. Use `/erga-updates status` or `/erga-updates off` at any time. Dirty worktrees, feature
+branches, divergent histories, unofficial remotes, and non-Git package installations are never
+overwritten.
+
 After reviewing an event, record the local status deliberately:
 
 ```bash

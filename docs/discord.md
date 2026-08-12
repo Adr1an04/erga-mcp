@@ -101,6 +101,13 @@ being overwritten.
 Git-installed package copies do not expose a working checkout to the bridge, so they are reported
 as unsupported rather than being modified. Reinstall those copies from the official repository.
 
+Hermes users can explicitly opt into the same guarded update path with `/erga-updates on`. Erga
+installs a zero-model-token runner and asks Hermes to poll `origin/main` every 15 minutes. The job
+stays silent when the checkout is current, refuses dirty/non-main/divergent/unofficial checkouts,
+updates frozen dependencies after a fast-forward, refreshes the installed Erga router files, and
+requests a profile-scoped gateway restart. `/erga-updates status` shows whether the job exists;
+`/erga-updates off` removes it. Ordinary installation creates no automatic-update job.
+
 ## Erga Orbit
 
 Send `orbit` (or `erga orbit`) to create the live aggregate application-flow dashboard in the

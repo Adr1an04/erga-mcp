@@ -85,6 +85,14 @@ stays silent when no new relevant messages are found. The command works even whe
 platform does not expose the general `cronjob` toolset, and installs runners in the active Hermes
 profile. `/setup-erga-monitor 14` uses a 14-day window for the daily digest.
 
+Automatic Erga updates are a separate opt-in. `/erga-updates on` creates a no-agent job that checks
+the official clean `main` checkout every 15 minutes. A successful fast-forward also synchronizes
+the frozen Discord runtime, refreshes this installed router from the verified checkout, and
+requests a restart of only the active Hermes profile. Current checkouts stay silent; dirty,
+non-main, divergent, detached, and unofficial checkouts are refused. Use `/erga-updates status` to
+inspect the job and `/erga-updates off` to remove it. Ordinary plugin installation never enables
+the schedule.
+
 Run `/export-erga` to create a private ZIP containing application records, recruiting-event
 and audit history, evidence, and generated job packages. The plugin validates that the ZIP is
 inside the configured export directory and sends it as a native document attachment rather than a

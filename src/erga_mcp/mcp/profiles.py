@@ -83,6 +83,7 @@ HERMES_TOOL_NAMES = frozenset(
         "update_orbit_preferences",
         "sync_recruiting_mail",
         "install_mail_monitor_scripts",
+        "install_update_monitor_script",
         "discover_job_research",
         "create_research_brief",
         "research_git_worktrees",
@@ -130,6 +131,7 @@ CAREER_TOOL_NAMES = frozenset(
         "update_tailoring_plan",
         "execute_tailoring_plan",
         "search_keryx_jobs",
+        "install_update_monitor_script",
     }
 )
 CAREER_PRIVATE_TOOL_NAMES = CAREER_TOOL_NAMES | frozenset(

@@ -66,6 +66,7 @@ _CAREER_TOOLS = {
     "update_tailoring_plan",
     "execute_tailoring_plan",
     "search_keryx_jobs",
+    "install_update_monitor_script",
 }
 
 
@@ -218,6 +219,7 @@ class McpToolProfileTests(unittest.TestCase):
                 "update_orbit_preferences",
                 "sync_recruiting_mail",
                 "install_mail_monitor_scripts",
+                "install_update_monitor_script",
                 "discover_job_research",
                 "create_research_brief",
                 "research_git_worktrees",
@@ -246,6 +248,7 @@ class McpToolProfileTests(unittest.TestCase):
         self.assertIn("prepare_job_workspace", tool_names)
         self.assertIn("sync_recruiting_mail", tool_names)
         self.assertIn("install_mail_monitor_scripts", tool_names)
+        self.assertIn("install_update_monitor_script", tool_names)
 
     def test_all_tool_schemas_reject_unknown_arguments(self) -> None:
         with TemporaryDirectory() as directory:

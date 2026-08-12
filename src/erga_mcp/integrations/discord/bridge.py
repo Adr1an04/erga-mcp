@@ -150,6 +150,7 @@ class ErgaUpdateResult:
     updated: bool
     previous_revision: str
     current_revision: str
+    upstream_revision: str | None = None
 
 
 class ErgaUpdateError(RuntimeError):
@@ -546,7 +547,7 @@ def _is_update_command(content: str) -> bool:
     }
 
 
-def _erga_checkout_root(module_path: Path | None = None) -> Path:
+def erga_checkout_root(module_path: Path | None = None) -> Path:
     """Locate the source checkout that owns the running bridge, if there is one."""
     source_path = (module_path or Path(__file__)).resolve()
     for candidate in source_path.parents:
@@ -590,6 +591,30 @@ def _is_official_repository(remote_url: str) -> bool:
     return normalized == _OFFICIAL_REPOSITORY.casefold()
 
 
+def _synchronize_update_runtime(
+    *,
+    checkout_root: Path,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+    uv_command: str | None,
+) -> None:
+    resolved_uv_command = uv_command or shutil.which("uv")
+    if resolved_uv_command is None:
+        raise ErgaUpdateError(
+            "Erga could not find uv to synchronize the Discord runtime. Run "
+            "`uv sync --extra discord --frozen` in the Erga checkout, then restart Erga."
+        )
+    _checked_update_command(
+        [resolved_uv_command, "sync", "--extra", "discord", "--frozen"],
+        checkout_root=checkout_root,
+        runner=runner,
+        timeout=300,
+        failure_message=(
+            "Erga could not synchronize the Discord runtime. Run "
+            "`uv sync --extra discord --frozen` in the Erga checkout, then restart Erga."
+        ),
+    )
+
+
 def update_erga_checkout(
     *,
     checkout_root: Path | None = None,
@@ -601,7 +626,7 @@ def update_erga_checkout(
     This intentionally avoids ``git pull``: tracked local edits, feature branches, divergent
     history, and non-official remotes are all refused before the checkout can change.
     """
-    root = (checkout_root or _erga_checkout_root()).expanduser().resolve()
+    root = (checkout_root or erga_checkout_root()).expanduser().resolve()
     if not (root / "pyproject.toml").is_file() or not (root / ".git").exists():
         raise ErgaUpdateError("Erga's source checkout is incomplete, so no update was applied.")
 
@@ -682,10 +707,16 @@ def update_erga_checkout(
         failure_message="GitHub did not provide Erga's main revision, so no update was applied.",
     )
     if upstream_revision == previous_revision:
+        _synchronize_update_runtime(
+            checkout_root=root,
+            runner=runner,
+            uv_command=uv_command,
+        )
         return ErgaUpdateResult(
             updated=False,
             previous_revision=previous_revision,
             current_revision=previous_revision,
+            upstream_revision=upstream_revision,
         )
 
     try:
@@ -734,6 +765,7 @@ def update_erga_checkout(
                 updated=False,
                 previous_revision=previous_revision,
                 current_revision=previous_revision,
+                upstream_revision=upstream_revision,
             )
         raise ErgaUpdateError(
             "This Erga checkout has local commits or divergent history, so Discord will not "
@@ -758,27 +790,16 @@ def update_erga_checkout(
             "Erga updated its files but could not verify the new revision. Restart it manually."
         ),
     )
-    resolved_uv_command = uv_command or shutil.which("uv")
-    if resolved_uv_command is None:
-        raise ErgaUpdateError(
-            "Erga updated its files but could not find uv to synchronize the Discord runtime. "
-            "Run `uv sync --extra discord --frozen` in the Erga checkout, then reconnect "
-            "the bridge."
-        )
-    _checked_update_command(
-        [resolved_uv_command, "sync", "--extra", "discord", "--frozen"],
+    _synchronize_update_runtime(
         checkout_root=root,
         runner=runner,
-        timeout=300,
-        failure_message=(
-            "Erga updated its files but could not synchronize the Discord runtime. Run "
-            "`uv sync --extra discord --frozen` in the Erga checkout, then reconnect the bridge."
-        ),
+        uv_command=uv_command,
     )
     return ErgaUpdateResult(
         updated=True,
         previous_revision=previous_revision,
         current_revision=current_revision,
+        upstream_revision=upstream_revision,
     )
 
 

@@ -31,6 +31,7 @@ mcp_servers:
         - list_applications
         - list_evidence
         - intake_job_url
+        - install_update_monitor_script
         - create_tailored_resume
         - validate_tailored_resume
       prompts: false

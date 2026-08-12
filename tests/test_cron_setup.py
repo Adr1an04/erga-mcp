@@ -7,12 +7,103 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import erga_mcp.integrations.hermes as hermes
-from erga_mcp.integrations.hermes import install_hermes_monitor_scripts
+from erga_mcp.integrations.hermes import (
+    install_hermes_monitor_scripts,
+    install_hermes_update_script,
+    request_hermes_gateway_restart,
+    synchronize_router_plugin,
+)
 
 
 class CronSetupTests(unittest.TestCase):
+    def test_installs_opt_in_no_agent_update_runner_without_scheduling_it(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.toml"
+            config.write_text("[paths]\n")
+            scripts = root / "hermes" / "scripts"
+
+            result = install_hermes_update_script(
+                config_path=config,
+                scripts_dir=scripts,
+                python_executable=Path("/synthetic/python"),
+            )
+
+            settings = json.loads((scripts / "erga-mcp-update.json").read_text())
+            runner = (scripts / "erga-mcp-update.py").read_text()
+            self.assertEqual(settings["config_path"], str(config.resolve()))
+            self.assertEqual(settings["hermes_home"], str((root / "hermes").resolve()))
+            self.assertEqual(result["update_script"], "erga-mcp-update.py")
+            self.assertEqual(result["suggested_job"]["schedule"], "*/15 * * * *")
+            self.assertTrue(result["suggested_job"]["no_agent"])
+            self.assertNotIn("deliver", result["suggested_job"])
+            self.assertIn('"update"', runner)
+            self.assertIn('"--scheduled"', runner)
+            self.assertNotIn("cron", runner.casefold())
+
+    def test_synchronizes_only_the_known_router_plugin_files(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "checkout" / "integrations/hermes/plugins/erga-mcp-router"
+            target = root / "hermes" / "plugins" / "erga-mcp-router"
+            source.mkdir(parents=True)
+            target.mkdir(parents=True)
+            for name, content in {
+                "plugin.yaml": 'name: erga-mcp-router\nversion: "2"\n',
+                "__init__.py": "NEW = True\n",
+                "after-install.md": "new docs\n",
+            }.items():
+                (source / name).write_text(content)
+            (target / "plugin.yaml").write_text('name: erga-mcp-router\nversion: "1"\n')
+            (target / "__init__.py").write_text("NEW = False\n")
+            (target / "after-install.md").write_text("old docs\n")
+            (target / "local-note.txt").write_text("preserve me\n")
+
+            changed = synchronize_router_plugin(
+                checkout_root=root / "checkout",
+                hermes_home=root / "hermes",
+            )
+
+            self.assertTrue(changed)
+            self.assertEqual((target / "__init__.py").read_text(), "NEW = True\n")
+            self.assertEqual((target / "local-note.txt").read_text(), "preserve me\n")
+            self.assertFalse(
+                synchronize_router_plugin(
+                    checkout_root=root / "checkout",
+                    hermes_home=root / "hermes",
+                )
+            )
+
+    def test_gateway_restart_is_profile_scoped_and_detached(self) -> None:
+        calls: list[tuple[list[str], dict[str, object]]] = []
+
+        def launch(command: list[str], **kwargs: object) -> object:
+            calls.append((command, kwargs))
+            return object()
+
+        with (
+            TemporaryDirectory() as directory,
+            patch("erga_mcp.integrations.hermes.shutil.which", return_value="/bin/hermes"),
+            patch.dict(
+                os.environ,
+                {"PYTHONHOME": "/poison", "PYTHONPATH": "/poison", "VIRTUAL_ENV": "/poison"},
+            ),
+        ):
+            requested = request_hermes_gateway_restart(
+                hermes_home=Path(directory),
+                launcher=launch,  # type: ignore[arg-type]
+            )
+
+        self.assertTrue(requested)
+        self.assertEqual(calls[0][0], ["/bin/hermes", "gateway", "restart"])
+        self.assertEqual(calls[0][1]["env"]["HERMES_HOME"], str(Path(directory).resolve()))
+        self.assertNotIn("PYTHONHOME", calls[0][1]["env"])
+        self.assertNotIn("PYTHONPATH", calls[0][1]["env"])
+        self.assertNotIn("VIRTUAL_ENV", calls[0][1]["env"])
+
     def test_installs_portable_no_agent_scripts_without_credentials(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

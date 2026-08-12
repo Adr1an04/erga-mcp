@@ -2009,6 +2009,64 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertEqual(direct.call_args_list[0].args[0], {"action": "list"})
         self.assertNotIn("deliver", direct.call_args_list[1].args[0])
 
+    def test_auto_update_command_installs_an_opt_in_no_agent_cron(self) -> None:
+        with TemporaryDirectory() as directory:
+            hermes_home = Path(directory) / "hermes"
+            scripts = hermes_home / "scripts"
+            scripts.mkdir(parents=True)
+            settings = scripts / "erga-mcp-update.json"
+            settings.write_text("{}\n")
+            (scripts / "erga-mcp-update.py").write_text("print('update')\n")
+            context = _FakePluginContext(
+                results=[
+                    json.dumps({"jobs": []}),
+                    json.dumps(
+                        {
+                            "settings": str(settings),
+                            "update_script": "erga-mcp-update.py",
+                        }
+                    ),
+                    json.dumps({"success": True, "name": "erga-auto-update"}),
+                ]
+            )
+            self.router.register(context)
+
+            with patch.object(self.router, "_active_hermes_home", return_value=hermes_home):
+                result = json.loads(context.commands["erga-updates"]("on"))
+
+        self.assertEqual(result["automatic_updates"], "enabled")
+        self.assertEqual(result["created"], 1)
+        self.assertEqual(context.calls[0], ("cronjob", {"action": "list"}))
+        self.assertEqual(
+            context.calls[1],
+            ("mcp__erga_mcp__install_update_monitor_script", {"replace": True}),
+        )
+        self.assertEqual(context.calls[2][0], "cronjob")
+        self.assertEqual(context.calls[2][1]["name"], "erga-auto-update")
+        self.assertEqual(context.calls[2][1]["schedule"], "*/15 * * * *")
+        self.assertTrue(context.calls[2][1]["no_agent"])
+        self.assertNotIn("deliver", context.calls[2][1])
+
+    def test_auto_update_command_can_report_and_disable_the_job(self) -> None:
+        context = _FakePluginContext(
+            results=[
+                json.dumps({"jobs": [{"id": "cron_1", "name": "erga-auto-update"}]}),
+                json.dumps({"success": True}),
+            ]
+        )
+        self.router.register(context)
+
+        disabled = json.loads(context.commands["erga-updates"]("off"))
+
+        self.assertEqual(disabled, {"automatic_updates": "disabled", "removed": 1})
+        self.assertEqual(
+            context.calls,
+            [
+                ("cronjob", {"action": "list"}),
+                ("cronjob", {"action": "remove", "job_id": "cron_1"}),
+            ],
+        )
+
     def test_monitor_files_are_mirrored_into_the_active_hermes_profile(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

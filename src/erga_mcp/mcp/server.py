@@ -60,7 +60,10 @@ from erga_mcp.applications.research import (
 from erga_mcp.applications.source import require_job_source
 from erga_mcp.applications.workspace import create_job_workspace
 from erga_mcp.config import DEFAULT_CONFIG_PATH, ErgaConfig, load_config
-from erga_mcp.integrations.hermes import install_hermes_monitor_scripts
+from erga_mcp.integrations.hermes import (
+    install_hermes_monitor_scripts,
+    install_hermes_update_script,
+)
 from erga_mcp.integrations.obsidian.tracker import (
     write_job_tracker_note,
 )
@@ -2980,6 +2983,21 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             config_path=config.config_path,
             scripts_dir=Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "scripts",
             history_days=history_days,
+            replace=replace,
+        )
+
+    @registry.tool("install_update_monitor_script", annotations=_DESTRUCTIVE_LOCAL_WRITE)
+    def install_update_monitor_script(replace: bool = True) -> dict[str, object]:
+        """Prepare an opt-in no-agent Erga updater for the Hermes router.
+
+        This writes the deterministic runner only. The router creates a recurring job solely
+        after the user explicitly enables automatic updates from Discord.
+        """
+        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+        return install_hermes_update_script(
+            config_path=config.config_path,
+            scripts_dir=hermes_home / "scripts",
+            hermes_home=hermes_home,
             replace=replace,
         )
 

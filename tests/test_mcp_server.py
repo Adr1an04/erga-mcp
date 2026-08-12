@@ -1642,6 +1642,7 @@ Bottom of the approved master template.
                     "sync_recruiting_mail",
                     "intake_job_url",
                     "install_mail_monitor_scripts",
+                    "install_update_monitor_script",
                     "export_data",
                     "record_secondary_research",
                     "discover_job_research",
@@ -2167,6 +2168,36 @@ Bottom of the approved master template.
                 config_path=config_path,
                 scripts_dir=hermes_home / "scripts",
                 history_days=14,
+                replace=True,
+            )
+
+    def test_hermes_update_tool_prepares_only_the_opt_in_runner(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
+            hermes_home = Path(directory) / "hermes-profile"
+            server = build_server(config_path)
+            prepared = {
+                "update_script": "erga-mcp-update.py",
+                "suggested_job": {"name": "erga-auto-update"},
+            }
+
+            with (
+                patch(
+                    "erga_mcp.mcp.server.install_hermes_update_script",
+                    return_value=prepared,
+                ) as install,
+                patch.dict("os.environ", {"HERMES_HOME": str(hermes_home)}),
+            ):
+                result: Any = asyncio.run(
+                    server.call_tool("install_update_monitor_script", {"replace": True})
+                )
+
+            self.assertEqual(result.structured_content, prepared)
+            install.assert_called_once_with(
+                config_path=config_path,
+                scripts_dir=hermes_home / "scripts",
+                hermes_home=hermes_home,
                 replace=True,
             )
 

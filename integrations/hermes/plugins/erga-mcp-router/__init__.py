@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 _DEFAULT_TOOL_NAME = "mcp__erga_mcp__intake_job_url"
 _DEFAULT_MONITOR_TOOL_NAME = "mcp__erga_mcp__install_mail_monitor_scripts"
+_DEFAULT_UPDATE_MONITOR_TOOL_NAME = "mcp__erga_mcp__install_update_monitor_script"
 _DEFAULT_EXPORT_TOOL_NAME = "mcp__erga_mcp__export_data"
 _DEFAULT_TRACKER_TOOL_NAME = "mcp__erga_mcp__application_tracker"
 _DEFAULT_ORBIT_TOOL_NAME = "mcp__erga_mcp__application_orbit"
@@ -53,6 +54,8 @@ _TRACKER_PAGE_SIZE = 6
 _MONITOR_SETTINGS_NAME = "erga-mcp-monitor.json"
 _MONITOR_MAIL_SCRIPT_NAME = "erga-mcp-mail.py"
 _MONITOR_HISTORY_SCRIPT_NAME = "erga-mcp-history.py"
+_UPDATE_SETTINGS_NAME = "erga-mcp-update.json"
+_UPDATE_SCRIPT_NAME = "erga-mcp-update.py"
 _MIN_HERMES_VERSION = (0, 18, 2)
 _DEFAULT_READY_TIMEOUT_SECONDS = 30.0
 _MAX_READY_TIMEOUT_SECONDS = 30.0
@@ -467,6 +470,38 @@ def _copy_monitor_files_to_active_profile(payload: dict[str, Any]) -> None:
     ]
     if any(path.is_symlink() or not path.is_file() for path in sources):
         raise ValueError("monitor installer did not return regular runner files")
+
+    target_dir = (_active_hermes_home() / "scripts").resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    if source_dir.resolve() == target_dir:
+        return
+    for source in sources:
+        target = target_dir / source.name
+        with tempfile.NamedTemporaryFile(dir=target_dir, delete=False) as temporary:
+            temporary_path = Path(temporary.name)
+        try:
+            shutil.copyfile(source, temporary_path)
+            temporary_path.chmod(0o600)
+            temporary_path.replace(target)
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
+
+
+def _copy_update_files_to_active_profile(payload: dict[str, Any]) -> None:
+    """Mirror the validated updater runner into the current Hermes profile."""
+    settings_value = payload.get("settings")
+    if not isinstance(settings_value, str):
+        raise ValueError("update installer returned no settings path")
+    if payload.get("update_script") != _UPDATE_SCRIPT_NAME:
+        raise ValueError("update installer returned an unexpected script name")
+    settings = Path(settings_value).expanduser().resolve(strict=True)
+    if settings.name != _UPDATE_SETTINGS_NAME or settings.is_symlink():
+        raise ValueError("update installer returned an invalid settings path")
+    source_dir = settings.parent
+    sources = [settings, source_dir / _UPDATE_SCRIPT_NAME]
+    if any(path.is_symlink() or not path.is_file() for path in sources):
+        raise ValueError("update installer did not return regular runner files")
 
     target_dir = (_active_hermes_home() / "scripts").resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -922,6 +957,9 @@ def register(
     deliver_plan = plan_delivery or _deliver_discord_plan_result
     tool_name = os.getenv("ERGA_MCP_TOOL", _DEFAULT_TOOL_NAME).strip()
     monitor_tool = os.getenv("ERGA_MCP_MONITOR_TOOL", _DEFAULT_MONITOR_TOOL_NAME).strip()
+    update_monitor_tool = os.getenv(
+        "ERGA_MCP_UPDATE_MONITOR_TOOL", _DEFAULT_UPDATE_MONITOR_TOOL_NAME
+    ).strip()
     export_tool = os.getenv("ERGA_MCP_EXPORT_TOOL", _DEFAULT_EXPORT_TOOL_NAME).strip()
     tracker_tool = os.getenv("ERGA_MCP_TRACKER_TOOL", _DEFAULT_TRACKER_TOOL_NAME).strip()
     orbit_tool = os.getenv("ERGA_MCP_ORBIT_TOOL", _DEFAULT_ORBIT_TOOL_NAME).strip()
@@ -1491,6 +1529,123 @@ def register(
                     "Mail alerts run every 15 minutes and stay silent when nothing new is found. "
                     "The history digest runs daily at 9:00 and both deliver to this conversation."
                 ),
+            }
+        )
+
+    def setup_updates_command(raw_args: str) -> str:
+        action = raw_args.strip().casefold() or "status"
+        if action not in {"on", "off", "status"}:
+            return "Usage: /erga-updates [on|off|status]"
+        try:
+            listed = _dispatch_cron(ctx, cron_tool, {"action": "list"})
+        except Exception as exc:
+            return f"Erga automatic-update setup failed: {exc}"
+        listed_error = _dispatch_error_text(listed)
+        if listed_error:
+            return f"Erga automatic-update setup failed: {listed_error}"
+        jobs = [item for item in _nested_objects(listed) if item.get("name") == "erga-auto-update"]
+        active_jobs = [
+            job
+            for job in jobs
+            if job.get("enabled") is not False
+            and str(job.get("status", "active")).casefold() not in {"disabled", "paused"}
+        ]
+        if action == "status":
+            return json.dumps(
+                {
+                    "automatic_updates": "enabled" if active_jobs else "disabled",
+                    "schedule": "every 15 minutes" if active_jobs else None,
+                }
+            )
+        if action == "off":
+            removed = 0
+            for job in jobs:
+                job_id = job.get("job_id", job.get("id"))
+                if not isinstance(job_id, str) or not job_id:
+                    return "Erga automatic-update setup failed: scheduled job has no ID."
+                result = _dispatch_cron(
+                    ctx,
+                    cron_tool,
+                    {"action": "remove", "job_id": job_id},
+                )
+                error_text = _dispatch_error_text(result)
+                if error_text:
+                    return f"Erga automatic-update setup failed: {error_text}"
+                removed += 1
+            return json.dumps(
+                {
+                    "automatic_updates": "disabled",
+                    "removed": removed,
+                }
+            )
+        try:
+            prepared = ctx.dispatch_tool(update_monitor_tool, {"replace": True})
+        except Exception as exc:
+            return f"Erga automatic-update setup failed: {exc}"
+        prepared_error = _dispatch_error_text(prepared)
+        if prepared_error:
+            return f"Erga automatic-update setup failed: {prepared_error}"
+        prepared_payload = next(
+            (
+                item
+                for item in _nested_objects(prepared)
+                if isinstance(item.get("update_script"), str)
+                and isinstance(item.get("settings"), str)
+            ),
+            None,
+        )
+        if prepared_payload is None:
+            return "Erga automatic-update setup failed: installer returned no update runner."
+        try:
+            _copy_update_files_to_active_profile(prepared_payload)
+            resumed = 0
+            for job in jobs:
+                if job in active_jobs:
+                    continue
+                job_id = job.get("job_id", job.get("id"))
+                if not isinstance(job_id, str) or not job_id:
+                    return "Erga automatic-update setup failed: scheduled job has no ID."
+                resume_result = _dispatch_cron(
+                    ctx,
+                    cron_tool,
+                    {"action": "resume", "job_id": job_id},
+                )
+                resume_error = _dispatch_error_text(resume_result)
+                if resume_error:
+                    return f"Erga automatic-update setup failed: {resume_error}"
+                resumed += 1
+            if jobs:
+                return json.dumps(
+                    {
+                        "automatic_updates": "enabled",
+                        "created": 0,
+                        "resumed": resumed,
+                        "schedule": "every 15 minutes",
+                    }
+                )
+            created = _dispatch_cron(
+                ctx,
+                cron_tool,
+                {
+                    "action": "create",
+                    "name": "erga-auto-update",
+                    "schedule": "*/15 * * * *",
+                    "script": prepared_payload["update_script"],
+                    "no_agent": True,
+                },
+            )
+        except Exception as exc:
+            return f"Erga automatic-update setup failed: {exc}"
+        created_error = _dispatch_error_text(created)
+        if created_error:
+            return f"Erga automatic-update setup failed: {created_error}"
+        return json.dumps(
+            {
+                "automatic_updates": "enabled",
+                "created": 1,
+                "resumed": 0,
+                "schedule": "every 15 minutes",
+                "safety": "official clean main checkout only",
             }
         )
 
@@ -2714,6 +2869,12 @@ def register(
         handler=setup_monitor_command,
         description="Install mail monitoring and daily recruiting-history delivery in this chat.",
         args_hint="[history-days]",
+    )
+    ctx.register_command(
+        "erga-updates",
+        handler=setup_updates_command,
+        description="Enable, disable, or inspect guarded automatic Erga updates.",
+        args_hint="[on|off|status]",
     )
     ctx.register_command(
         "erga-tracker",
