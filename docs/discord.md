@@ -91,8 +91,9 @@ server or `update` in a direct message. The command bypasses the reasoning backe
 `origin/main` for the official `Adr1an04/erga-mcp` GitHub repository. It refuses non-`main`
 branches, tracked local changes, divergent history, detached checkouts, and remotes that do not
 match the official repository. A safe update uses a Git fast-forward, runs
-`uv sync --extra discord --frozen`, posts the old and new revisions, and restarts the bridge into
-the updated code. An already-current checkout stays online without restarting.
+`uv sync --extra discord --frozen`, and restarts the bridge into the updated code. Discord keeps
+the interaction compact: it changes a temporary check-in into either “Erga updated successfully,”
+“Erga is up to date,” or a short retry message. Technical details remain in the private bridge log.
 
 Git-installed package copies do not expose a working checkout to the bridge, so they are reported
 as unsupported rather than being modified. Reinstall those copies from the official repository.

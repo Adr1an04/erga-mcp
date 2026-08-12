@@ -390,8 +390,12 @@ class DiscordBridgeTests(unittest.TestCase):
                 asyncio.run(client.on_message(message))
 
         self.assertEqual(message.reply.await_count, 1)
+        self.assertEqual(message.reply.await_args.args[0], "Checking for updates…")
         self.assertEqual(status_message.edit.await_count, 1)
-        self.assertEqual(status_message.edit.await_args.kwargs["embed"].title, "✓ Erga updated")
+        self.assertEqual(
+            status_message.edit.await_args.kwargs["content"],
+            "Erga updated successfully. Restarting…",
+        )
         self.assertTrue(client.closed)
         restart.assert_called_once_with(root / "config.toml", "private-nonce")
 

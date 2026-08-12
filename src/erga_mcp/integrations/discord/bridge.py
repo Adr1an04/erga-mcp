@@ -804,56 +804,8 @@ def _progress_card(content: str, *, elapsed_seconds: float = 0) -> DiscordCard:
     )
 
 
-def _update_progress_card() -> DiscordCard:
-    return DiscordCard(
-        title="↻ Checking Erga for updates",
-        description=(
-            "Erga is comparing this clean local checkout with the official GitHub main branch. "
-            "It will only fast-forward a verified checkout and will restart only after its "
-            "Discord runtime is synchronized."
-        ),
-        color=ERGA_ORBIT_VIOLET,
-        fields=(
-            DiscordCardField("Status", "Checking GitHub", inline=False),
-            DiscordCardField("Boundary", "No local changes overwritten", inline=False),
-        ),
-        footer="Erga Orbit • Private, verified, recoverable",
-    )
-
-
-def _update_result_card(result: ErgaUpdateResult) -> DiscordCard:
-    revision = result.current_revision[:12]
-    if not result.updated:
-        return DiscordCard(
-            title="✓ Erga is current",
-            description="This clean checkout already matches the official GitHub main branch.",
-            color=ERGA_LEAF,
-            fields=(DiscordCardField("Revision", revision, inline=False),),
-            footer="Erga Orbit • No restart needed",
-        )
-    return DiscordCard(
-        title="✓ Erga updated",
-        description=(
-            "The official fast-forward update and Discord runtime sync succeeded. Restarting now."
-        ),
-        color=ERGA_LEAF,
-        fields=(
-            DiscordCardField("From", result.previous_revision[:12]),
-            DiscordCardField("To", revision),
-            DiscordCardField("Next", "Bridge reconnecting", inline=False),
-        ),
-        footer="Erga Orbit • Updated safely",
-    )
-
-
-def _update_failure_card(error: ErgaUpdateError) -> DiscordCard:
-    return DiscordCard(
-        title="! Erga was not updated",
-        description=str(error),
-        color=ERGA_SUN,
-        fields=(DiscordCardField("Safety", "Existing bridge remains in place", inline=False),),
-        footer="Erga Orbit • No local changes overwritten",
-    )
+def _update_result_message(result: ErgaUpdateResult) -> str:
+    return "Erga updated successfully. Restarting…" if result.updated else "Erga is up to date."
 
 
 def _response_state(response: str) -> Literal["success", "warning", "neutral"]:
@@ -1119,33 +1071,19 @@ def _create_discord_client(
             self._orbit_refresh_task: asyncio.Task[None] | None = None
 
         async def _handle_update_command(self, message: Any) -> None:
-            status_message = await message.reply(
-                embed=_discord_embed(discord, _update_progress_card()),
-                mention_author=False,
-            )
+            status_message = await message.reply("Checking for updates…", mention_author=False)
             try:
                 async with self._backend_lock:
                     result = await asyncio.to_thread(update_erga_checkout)
             except ErgaUpdateError as error:
-                await status_message.edit(
-                    embed=_discord_embed(discord, _update_failure_card(error))
-                )
+                print(f"Discord bridge update refused: {error}", file=sys.stderr, flush=True)
+                await status_message.edit(content="Couldn’t check for an update. Please try again.")
                 return
             except Exception as error:
                 print(f"Discord bridge update failed: {error}", file=sys.stderr, flush=True)
-                await status_message.edit(
-                    embed=_discord_embed(
-                        discord,
-                        _update_failure_card(
-                            ErgaUpdateError(
-                                "Erga could not complete its update check. Your existing bridge "
-                                "is still running; retry shortly or inspect the private bridge log."
-                            )
-                        ),
-                    )
-                )
+                await status_message.edit(content="Couldn’t check for an update. Please try again.")
                 return
-            await status_message.edit(embed=_discord_embed(discord, _update_result_card(result)))
+            await status_message.edit(content=_update_result_message(result))
             if not result.updated:
                 return
             if config_path is None or runtime_nonce is None:
