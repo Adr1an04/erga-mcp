@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -110,6 +111,99 @@ class TrackerMcpTests(unittest.TestCase):
 
         self.assertFalse(payload["enabled"])
         self.assertIn("not configured", payload["message"])
+
+    def test_marks_only_oa_and_later_active_tracker_rows_for_research(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            tracker = root / "tracker"
+            tracker.mkdir()
+            (tracker / "Fall 2026 Application Tracker.md").write_text(
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| Alpha | Engineer | Remote | [Posting](https://jobs.test/a) | Applied | "
+                "| Wait | Note |\n"
+                "| Beta | Engineer | Remote | [Posting](https://jobs.test/b) | OA | "
+                "| Complete OA | Note |\n"
+                "| Gamma | Engineer | Remote | [Posting](https://jobs.test/c) | Interview | "
+                "| Prepare | Note |\n"
+                "| Delta | Engineer | Remote | [Posting](https://jobs.test/d) | Rejected | "
+                "| Archive | Note |\n",
+                encoding="utf-8",
+            )
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace(
+                    'enabled = false\ntracker_dir = ""',
+                    'enabled = true\ntracker_dir = "tracker"',
+                ),
+                encoding="utf-8",
+            )
+
+            result: Any = asyncio.run(
+                build_server(config_path).call_tool("application_tracker", {})
+            )
+            payload = cast(dict[str, Any], result.structured_content)
+
+        by_company = {entry["company"]: entry for entry in payload["entries"]}
+        self.assertEqual(by_company["Alpha"]["research"], {"eligible": False, "stage": None})
+        self.assertEqual(by_company["Beta"]["research"], {"eligible": True, "stage": "oa"})
+        self.assertEqual(by_company["Gamma"]["research"], {"eligible": True, "stage": "interview"})
+        self.assertEqual(by_company["Delta"]["research"], {"eligible": False, "stage": None})
+
+    def test_opens_saved_research_for_one_exact_oa_tracker_row(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            tracker = root / "tracker"
+            tracker.mkdir()
+            job_url = "https://jobs.example.test/role"
+            (tracker / "Summer 2027 Application Tracker.md").write_text(
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                f"| Example | Engineer Intern | Remote | [Posting]({job_url}) | OA | "
+                "2026-08-01 | Complete OA | Note |\n",
+                encoding="utf-8",
+            )
+            package = root / "output" / "summer-2027" / "example-engineer"
+            (package / "research").mkdir(parents=True)
+            (package / "package.json").write_text(
+                json.dumps({"job_url": job_url}),
+                encoding="utf-8",
+            )
+            (package / "research" / "discovery-research.md").write_text(
+                "[Community report](https://reddit.com/r/example)",
+                encoding="utf-8",
+            )
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace(
+                    'enabled = false\ntracker_dir = ""',
+                    'enabled = true\ntracker_dir = "tracker"',
+                ),
+                encoding="utf-8",
+            )
+            store = ErgaStore(load_config(config_path).data_dir / "erga.sqlite3")
+            store.create_application(
+                company="Example",
+                role="Engineer Intern",
+                source_url=job_url,
+                evidence_ids=[],
+            )
+
+            result: Any = asyncio.run(
+                build_server(config_path).call_tool(
+                    "research_navigator", {"job_url": f"{job_url}?utm_source=test"}
+                )
+            )
+            payload = cast(dict[str, Any], result.structured_content)
+
+        self.assertEqual(payload["stage"], "oa")
+        self.assertTrue(payload["package_available"])
+        self.assertEqual(payload["saved_artifact_count"], 1)
+        self.assertEqual(payload["links"][0]["label"], "Official posting")
+        self.assertTrue(payload["links"][1]["unverified"])
+        self.assertIn("OA research · Example", payload["card"]["title"])
 
 
 if __name__ == "__main__":

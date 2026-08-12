@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from ddgs.exceptions import DDGSException
 
@@ -18,6 +19,99 @@ from erga_mcp.web_scraping import ScrapedPage
 
 
 class JobDiscoveryTests(unittest.TestCase):
+    def test_reviews_broad_query_plan_but_keeps_only_role_specific_sources(self) -> None:
+        from erga_mcp.job_discovery import discover_job_research
+
+        application = Application(
+            id="app_github",
+            company="GitHub",
+            role="Software Engineer Intern",
+            source_url="https://www.github.careers/jobs/123-software-engineer-intern",
+            status="oa",
+            evidence_ids=[],
+            created_at=datetime(2026, 8, 1, tzinfo=UTC),
+        )
+        searched: list[tuple[str, int]] = []
+        results = [
+            {
+                "title": "GitHub Early in Profession",
+                "href": "https://www.github.careers/early-in-profession",
+                "body": "Student and internship programs for early-career candidates.",
+            },
+            {
+                "title": "How GitHub does take-home technical interviews",
+                "href": "https://github.blog/developer-skills/career-growth/take-home-interviews/",
+                "body": "GitHub software engineering interview process and coding exercise.",
+            },
+            {
+                "title": "GitHub SWE internship OA experience - Reddit",
+                "href": "https://www.reddit.com/r/csMajors/comments/github_swe/",
+                "body": "Unverified 2026 candidate report about an online assessment.",
+            },
+            {
+                "title": "Google SWE intern interview",
+                "href": "https://example.test/google-interview",
+                "body": "The candidate stored sample code on GitHub.",
+            },
+            {
+                "title": "GitHub - example/tech-interview-handbook",
+                "href": "https://github.com/example/tech-interview-handbook",
+                "body": "Coding interview and online assessment study material for interns.",
+            },
+            {
+                "title": "GitHub Mechanical Engineering Internship Interview Guide",
+                "href": "https://example.test/github-mechanical-interview",
+                "body": "Aptitude assessment and mechanical design questions for interns.",
+            },
+            {
+                "title": "GitHub Software Engineer Intern Interview Guide 2026",
+                "href": "https://www.finalroundai.com/blog/github-interview-process",
+                "body": "Complete coding interview timeline and mock interview preparation.",
+            },
+        ]
+
+        def search(query: str, *, max_results: int) -> list[dict[str, str]]:
+            searched.append((query, max_results))
+            if "recruiter" in query:
+                return []
+            return results
+
+        def scrape(url: str, *, max_characters: int, max_links: int) -> ScrapedPage:
+            return ScrapedPage(
+                url=url,
+                title="GitHub Software Engineer Intern",
+                text=f"Bounded source text for {url}",
+                links=(),
+                untrusted=True,
+            )
+
+        with TemporaryDirectory() as directory:
+            result = discover_job_research(
+                application=application,
+                package_dir=Path(directory),
+                search=search,
+                scrape=scrape,
+                captured_at=datetime(2026, 8, 11, tzinfo=UTC),
+            )
+            note = result.path.read_text(encoding="utf-8")
+            index = json.loads(result.index_path.read_text(encoding="utf-8"))
+
+        self.assertGreaterEqual(len(searched), 7)
+        self.assertTrue(all(limit == 5 for _query, limit in searched))
+        self.assertGreaterEqual(result.candidates_reviewed, 20)
+        self.assertGreater(result.sources_rejected, 0)
+        self.assertIn("https://www.github.careers/early-in-profession", note)
+        self.assertIn("https://github.blog/developer-skills", note)
+        self.assertIn("https://www.reddit.com/r/csMajors", note)
+        self.assertNotIn("https://example.test/google-interview", note)
+        self.assertNotIn("https://github.com/example/tech-interview-handbook", note)
+        self.assertNotIn("https://example.test/github-mechanical-interview", note)
+        self.assertNotIn("https://www.finalroundai.com/blog/github-interview-process", note)
+        self.assertNotIn("Trees, graphs, and hashing", note)
+        self.assertIn("## Research coverage", note)
+        self.assertEqual(index["statistics"]["candidates_reviewed"], result.candidates_reviewed)
+        self.assertTrue(index["sources"])
+
     def test_technical_research_rejects_generic_advice_without_reported_details(self) -> None:
         self.assertFalse(
             _is_concrete_technical_report(
@@ -66,7 +160,7 @@ class JobDiscoveryTests(unittest.TestCase):
         )
 
     @patch("erga_mcp.job_discovery.DDGS")
-    def test_search_uses_yahoo_backend_to_avoid_relative_redirect_results(
+    def test_search_combines_backends_and_rejects_relative_redirect_results(
         self, ddgs: object
     ) -> None:
         client = ddgs.return_value  # type: ignore[attr-defined]
@@ -87,8 +181,11 @@ class JobDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["href"], "https://www.reddit.com/r/csMajors/comments/example/")
-        client.text.assert_called_once_with(  # type: ignore[attr-defined]
-            "Google software engineering internship", max_results=3, backend="yahoo"
+        client.text.assert_has_calls(  # type: ignore[attr-defined]
+            [
+                call("Google software engineering internship", max_results=3, backend="yahoo"),
+                call("Google software engineering internship", max_results=3, backend="bing"),
+            ]
         )
 
     @patch("erga_mcp.job_discovery.DDGS")
@@ -114,6 +211,20 @@ class JobDiscoveryTests(unittest.TestCase):
         bing.text.assert_called_once_with(  # type: ignore[attr-defined]
             "Google software engineering internship", max_results=3, backend="bing"
         )
+
+    @patch("erga_mcp.job_discovery.DDGS")
+    def test_search_returns_an_empty_lane_when_both_backends_have_no_results(
+        self, ddgs: object
+    ) -> None:
+        yahoo = MagicMock()
+        bing = MagicMock()
+        yahoo.text.side_effect = DDGSException("No results found.")
+        bing.text.side_effect = DDGSException("No results found.")
+        ddgs.side_effect = [yahoo, bing]  # type: ignore[attr-defined]
+
+        results = _search("Example sparse lane", max_results=5)
+
+        self.assertEqual(results, [])
 
     def test_deduplicates_the_posting_when_search_returns_its_canonical_url(self) -> None:
         from erga_mcp.job_discovery import discover_job_research
@@ -178,12 +289,14 @@ class JobDiscoveryTests(unittest.TestCase):
             searched.append(query)
             if "site:reddit.com" in query and "Summer 2027" in query:
                 return []
+            if "site:reddit.com/r/" in query:
+                return []
             if "site:reddit.com" in query:
                 return [
                     {
                         "title": "Google intern discussion - Reddit",
                         "href": "https://www.reddit.com/r/csMajors/comments/example/google/",
-                        "body": "Relevant candidate discussion.",
+                        "body": "Relevant software engineering internship candidate discussion.",
                     }
                 ]
             return []
@@ -316,7 +429,10 @@ class JobDiscoveryTests(unittest.TestCase):
                     {
                         "title": "Google internship interview discussion - Reddit",
                         "href": "https://www.reddit.com/r/csMajors/comments/example/google-intern/",
-                        "body": "Candidate discussion about explaining technical decisions.",
+                        "body": (
+                            "Software engineering candidate discussion about explaining "
+                            "technical decisions."
+                        ),
                     }
                 ]
             if "technical interview study" in query:
@@ -374,7 +490,9 @@ class JobDiscoveryTests(unittest.TestCase):
         self.assertIn("## Official sources", text)
         self.assertIn("## Community sources (unverified)", text)
         self.assertIn("## Technical interview study (unverified)", text)
-        self.assertIn("Trees, graphs, and hashing", text)
+        self.assertIn("Evidence-grounded preparation signals", text)
+        self.assertIn("Graphs — supported by", text)
+        self.assertNotIn("hashing", text)
         self.assertIn("https://example.test/google-swe-technical-study", text)
         self.assertIn("One medium graph question followed by two follow-ups", text)
         self.assertIn("## Public outreach leads (review before contact)", text)

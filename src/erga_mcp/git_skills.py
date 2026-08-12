@@ -235,6 +235,13 @@ def build_git_skill_review_card(
             style="primary",
         )
     ]
+    actions.append(
+        CardAction(
+            "project.catalogue.open",
+            "Project catalogue",
+            "Browse every approved-inventory and GitHub-discovered project.",
+        )
+    )
     for group in visible:
         actions.append(
             CardAction(

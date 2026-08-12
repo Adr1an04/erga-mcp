@@ -16,6 +16,31 @@ _MAIL_STATUS = {
 _TERMINAL_STATUSES = frozenset({"offer", "rejected", "withdrawn"})
 
 
+def _mail_event_is_stale(store: ErgaStore, application: Application, event: MailEvent) -> bool:
+    audits = store.audit_events()
+    if any(
+        audit.action == "application.status_updated_from_mail"
+        and audit.subject_id == application.id
+        and audit.payload.get("mail_event_id") == event.message_id
+        for audit in audits
+    ):
+        return True
+    manual_updates = [
+        audit.created_at
+        for audit in audits
+        if audit.action == "application.status_updated" and audit.subject_id == application.id
+    ]
+    recorded_at = next(
+        (
+            audit.created_at
+            for audit in audits
+            if audit.action == "mail_event.recorded" and audit.subject_id == event.message_id
+        ),
+        None,
+    )
+    return bool(manual_updates and recorded_at is not None and max(manual_updates) > recorded_at)
+
+
 def _company_matches(application: Application, event: MailEvent) -> bool:
     tokens = re.findall(r"[a-z0-9]+", application.company.casefold())
     if not tokens:
@@ -39,6 +64,8 @@ def apply_mail_status_transition(store: ErgaStore, event: MailEvent) -> Applicat
     if len(matches) != 1:
         return None
     application = matches[0]
+    if _mail_event_is_stale(store, application, event):
+        return None
     if application.status == target:
         return None
     if event.kind == "application.acknowledgement" and application.status != "draft":

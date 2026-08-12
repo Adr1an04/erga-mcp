@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import ModuleType
@@ -93,6 +94,223 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         clock.sleep(11)
         with self.assertRaisesRegex(ValueError, "expired"):
             tokens.consume(expired, user_id="42")
+
+    def test_discord_intake_plan_uses_emoji_questions_review_and_background_generation(
+        self,
+    ) -> None:
+        class Button:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        class Response:
+            def __init__(self, *, text: str, buttons: tuple[Any, ...]) -> None:
+                self.text = text
+                self.buttons = buttons
+
+        def plan_payload(
+            *,
+            current_question: dict[str, Any] | None,
+            answers: list[dict[str, str]],
+            status: str,
+        ) -> str:
+            questions = [
+                {
+                    "id": "portfolio",
+                    "prompt": "Which project story should this résumé tell?",
+                    "options": [
+                        {
+                            "id": "balanced",
+                            "label": "⚖️ Balanced",
+                            "description": "Mix relevance and differentiation.",
+                            "project_ids": ["robotics", "platform", "tooling"],
+                            "project_titles": ["Robotics", "Platform", "Tooling"],
+                            "recommended": True,
+                        },
+                        {
+                            "id": "role_fit",
+                            "label": "🎯 Closest match",
+                            "description": "Prioritize direct posting overlap.",
+                            "project_ids": ["robotics", "ml", "platform"],
+                            "project_titles": ["Robotics", "ML", "Platform"],
+                            "recommended": False,
+                        },
+                    ],
+                },
+                {
+                    "id": "copy_strategy",
+                    "prompt": "How aggressively should Erga tailor the bullets?",
+                    "options": [
+                        {
+                            "id": "synthesize",
+                            "label": "✨ Evidence-backed tailoring",
+                            "description": "Draft only from approved evidence.",
+                            "recommended": True,
+                        },
+                        {
+                            "id": "preserve",
+                            "label": "🛡️ Preserve master copy",
+                            "description": "Keep established wording.",
+                            "recommended": False,
+                        },
+                    ],
+                },
+            ]
+            return json.dumps(
+                {
+                    "id": "plan_example",
+                    "job_url": "https://jobs.example.test/engineer",
+                    "company": "Example",
+                    "role": "Software Engineer",
+                    "questions": questions,
+                    "answers": answers,
+                    "current_question": current_question,
+                    "status": status,
+                    "catalogue_candidate_count": 8,
+                }
+            )
+
+        portfolio = {
+            "id": "portfolio",
+            "prompt": "Which project story should this résumé tell?",
+            "options": [
+                {
+                    "id": "balanced",
+                    "label": "⚖️ Balanced",
+                    "description": "Mix relevance and differentiation.",
+                    "project_ids": ["robotics", "platform", "tooling"],
+                    "project_titles": ["Robotics", "Platform", "Tooling"],
+                    "recommended": True,
+                },
+                {
+                    "id": "role_fit",
+                    "label": "🎯 Closest match",
+                    "description": "Prioritize direct posting overlap.",
+                    "project_ids": ["robotics", "ml", "platform"],
+                    "project_titles": ["Robotics", "ML", "Platform"],
+                    "recommended": False,
+                },
+            ],
+        }
+        copy_question = {
+            "id": "copy_strategy",
+            "prompt": "How aggressively should Erga tailor the bullets?",
+            "options": [
+                {
+                    "id": "synthesize",
+                    "label": "✨ Evidence-backed tailoring",
+                    "description": "Draft only from approved evidence.",
+                    "recommended": True,
+                },
+                {
+                    "id": "preserve",
+                    "label": "🛡️ Preserve master copy",
+                    "description": "Keep established wording.",
+                    "recommended": False,
+                },
+            ],
+        }
+        delivery_directory = TemporaryDirectory()
+        self.addCleanup(delivery_directory.cleanup)
+        package_dir = Path(delivery_directory.name) / "synthetic-package"
+        artifacts_dir = package_dir / "artifacts"
+        artifacts_dir.mkdir(parents=True)
+        pdf_path = artifacts_dir / "Candidate_Resume.pdf"
+        pdf_path.write_bytes(b"%PDF-1.7\nsynthetic\n")
+        context = _FakePluginContext(
+            results=[
+                plan_payload(current_question=portfolio, answers=[], status="planning"),
+                plan_payload(
+                    current_question=copy_question,
+                    answers=[{"question_id": "portfolio", "option_id": "balanced"}],
+                    status="planning",
+                ),
+                plan_payload(
+                    current_question=None,
+                    answers=[
+                        {"question_id": "portfolio", "option_id": "balanced"},
+                        {"question_id": "copy_strategy", "option_id": "synthesize"},
+                    ],
+                    status="review",
+                ),
+                json.dumps(
+                    {
+                        "plan": {"id": "plan_example", "status": "completed"},
+                        "intake": {
+                            "package_dir": str(package_dir),
+                            "application_id": "app_synthetic",
+                            "validation": {
+                                "pdf": "artifacts/Candidate_Resume.pdf",
+                                "returncode": 0,
+                            },
+                        },
+                    }
+                ),
+            ]
+        )
+        delivered: list[tuple[str, str, str | None]] = []
+        plugins = ModuleType("hermes_cli.plugins")
+        plugins.DiscordButton = Button
+        plugins.DiscordCommandResponse = Response
+        hermes_cli = ModuleType("hermes_cli")
+        hermes_cli.__version__ = "0.18.2"
+        hermes_cli.plugins = plugins
+
+        with patch.dict(sys.modules, {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins}):
+            self.router.register(
+                context,
+                background_runner=lambda callback: callback(),
+                plan_delivery=lambda channel_id, message, pdf: delivered.append(
+                    (channel_id, message, pdf)
+                ),
+            )
+            first = context.commands["intake-job"]("https://jobs.example.test/engineer")
+            first_click = type(
+                "Interaction",
+                (),
+                {
+                    "payload": first.buttons[0].payload,
+                    "user_id": "42",
+                    "channel_id": "123",
+                },
+            )()
+            second = context.discord_button_handlers["erga.plan.action"](first_click)
+            synthesize = next(button for button in second.buttons if button.label.startswith("✨"))
+            second_click = type(
+                "Interaction",
+                (),
+                {"payload": synthesize.payload, "user_id": "42", "channel_id": "123"},
+            )()
+            review = context.discord_button_handlers["erga.plan.action"](second_click)
+            generate = next(button for button in review.buttons if "Generate" in button.label)
+            generate_click = type(
+                "Interaction",
+                (),
+                {"payload": generate.payload, "user_id": "42", "channel_id": "123"},
+            )()
+            generating = context.discord_button_handlers["erga.plan.action"](generate_click)
+
+        self.assertEqual(
+            [button.label for button in first.buttons[:2]], ["⚖️ Balanced", "🎯 Closest match"]
+        )
+        self.assertIn("Question 1 of 2", first.text)
+        self.assertIn("Question 2 of 2", second.text)
+        self.assertIn("Review before generation", review.text)
+        self.assertIn("Robotics, Platform, Tooling", review.text)
+        self.assertIn("Generation started", generating.text)
+        self.assertEqual(delivered[0][0], "123")
+        self.assertIn("app_synthetic", delivered[0][1])
+        self.assertEqual(delivered[0][2], str(pdf_path.resolve()))
+        self.assertEqual(
+            context.calls[0],
+            (
+                "mcp__erga_mcp__create_tailoring_plan",
+                {"job_url": "https://jobs.example.test/engineer"},
+            ),
+        )
+        self.assertEqual(
+            context.calls[-1],
+            ("mcp__erga_mcp__execute_tailoring_plan", {"plan_id": "plan_example"}),
+        )
 
     def test_onboarding_and_settings_commands_render_shared_cards_without_components(self) -> None:
         onboarding = {
@@ -375,6 +593,205 @@ class HermesJobUrlRouterTests(unittest.TestCase):
             ],
         )
 
+    def test_git_projects_command_searches_and_paginates_the_shared_catalogue(self) -> None:
+        card = {
+            "title": "Project catalogue",
+            "summary": "1 matching: 0 résumé-eligible and 1 awaiting approved evidence.",
+            "fields": [
+                {
+                    "name": "Python Service",
+                    "value": (
+                        "Repository: [example/python-service]"
+                        "(https://github.com/example/python-service)\n"
+                        "Technologies/tags: Python, FastAPI\n"
+                        "Git activity: 2026-08-10\n"
+                        "Evidence: 0 approved records · 0 supported bullets\n"
+                        "Résumé: Needs approved evidence · Source: GitHub discovery"
+                    ),
+                    "inline": False,
+                }
+            ],
+            "actions": [],
+            "page": 2,
+            "page_count": 3,
+        }
+        context = _FakePluginContext(result=json.dumps(card))
+        self.router.register(context)
+
+        rendered = context.commands["erga-git"]("projects python page 2")
+
+        self.assertIn("Project catalogue", rendered)
+        self.assertIn("example/python-service", rendered)
+        self.assertIn("Needs approved evidence", rendered)
+        self.assertEqual(
+            context.calls,
+            [
+                (
+                    "mcp__erga_mcp__project_catalogue",
+                    {"page": 2, "page_size": 4, "query": "python"},
+                )
+            ],
+        )
+
+    def test_project_catalogue_refresh_button_updates_cache_without_approving_evidence(
+        self,
+    ) -> None:
+        class Button:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        class Response:
+            def __init__(self, *, text: str, buttons: tuple[Any, ...]) -> None:
+                self.text = text
+                self.buttons = buttons
+
+        card = {
+            "title": "Project catalogue",
+            "summary": "2 total: 1 résumé-eligible and 1 awaiting approved evidence.",
+            "fields": [
+                {
+                    "name": "Approved Project",
+                    "value": "Résumé: Eligible · Source: Approved inventory",
+                    "inline": False,
+                }
+            ],
+            "actions": [
+                {
+                    "action_id": "project.catalogue.refresh",
+                    "label": "Refresh GitHub projects",
+                    "instruction": "Refresh private metadata.",
+                    "style": "secondary",
+                }
+            ],
+            "page": 1,
+            "page_count": 1,
+        }
+        refreshed = {
+            **card,
+            "summary": "3 total: 1 résumé-eligible and 2 awaiting approved evidence.",
+            "github_projects_refreshed": 3,
+            "evidence_created": False,
+            "resume_changed": False,
+        }
+        context = _FakePluginContext(results=[json.dumps(card), json.dumps(refreshed)])
+        plugins = ModuleType("hermes_cli.plugins")
+        plugins.DiscordButton = Button
+        plugins.DiscordCommandResponse = Response
+        hermes_cli = ModuleType("hermes_cli")
+        hermes_cli.__version__ = "0.18.2"
+        hermes_cli.plugins = plugins
+
+        with patch.dict(
+            sys.modules,
+            {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins},
+        ):
+            self.router.register(context)
+            rendered = context.commands["erga-git"]("projects")
+            interaction = type(
+                "Interaction",
+                (),
+                {"payload": rendered.buttons[0].payload, "user_id": "42"},
+            )()
+            updated = context.discord_button_handlers["erga.card.action"](interaction)
+
+        self.assertIsInstance(updated, Response)
+        self.assertIn("3 total", updated.text)
+        self.assertEqual(
+            context.calls,
+            [
+                (
+                    "mcp__erga_mcp__project_catalogue",
+                    {"page": 1, "page_size": 4, "query": ""},
+                ),
+                (
+                    "mcp__erga_mcp__refresh_project_catalogue",
+                    {"page": 1, "page_size": 4, "query": ""},
+                ),
+            ],
+        )
+
+    def test_project_catalogue_button_replies_always_fit_discord_content_limit(self) -> None:
+        class Button:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        class Response:
+            def __init__(self, *, text: str, buttons: tuple[Any, ...]) -> None:
+                self.text = text
+                self.buttons = buttons
+
+        def catalogue_card(page: int, action: str, label: str) -> dict[str, Any]:
+            return {
+                "title": "Project catalogue",
+                "summary": "12 total: 6 résumé-eligible, 6 awaiting approved evidence.",
+                "fields": [
+                    {
+                        "name": f"Project {index}",
+                        "value": (
+                            f"Repository: [example/project-{index}]"
+                            f"(https://github.com/example/project-{index})\n"
+                            f"Technologies/tags: {'python, fastapi, testing, ' * 12}\n"
+                            "Evidence: 2 approved records · 2 supported bullets\n"
+                            "Résumé: Eligible · Source: Approved inventory"
+                        ),
+                        "inline": False,
+                    }
+                    for index in range(6)
+                ],
+                "actions": [
+                    {
+                        "action_id": action,
+                        "label": label,
+                        "instruction": "Navigate without losing the current catalogue state.",
+                        "style": "secondary",
+                    }
+                ],
+                "page": page,
+                "page_count": 2,
+            }
+
+        first = catalogue_card(1, "project.catalogue.next", "Next")
+        second = catalogue_card(2, "project.catalogue.previous", "Previous")
+        context = _FakePluginContext(results=[json.dumps(first), json.dumps(second)])
+        plugins = ModuleType("hermes_cli.plugins")
+        plugins.DiscordButton = Button
+        plugins.DiscordCommandResponse = Response
+        hermes_cli = ModuleType("hermes_cli")
+        hermes_cli.__version__ = "0.18.2"
+        hermes_cli.plugins = plugins
+
+        with patch.dict(
+            sys.modules,
+            {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins},
+        ):
+            self.router.register(context)
+            rendered = context.commands["erga-git"]("projects")
+            interaction = type(
+                "Interaction",
+                (),
+                {"payload": rendered.buttons[0].payload, "user_id": "42"},
+            )()
+            next_page = context.discord_button_handlers["erga.card.action"](interaction)
+
+        self.assertLessEqual(len(rendered.text), 2_000)
+        self.assertLessEqual(len(next_page.text), 2_000)
+        self.assertIn("Shortened to fit Discord", rendered.text)
+        self.assertIn("Shortened to fit Discord", next_page.text)
+        self.assertNotIn("Available actions", rendered.text)
+        self.assertEqual(
+            context.calls,
+            [
+                (
+                    "mcp__erga_mcp__project_catalogue",
+                    {"page": 1, "page_size": 4, "query": ""},
+                ),
+                (
+                    "mcp__erga_mcp__project_catalogue",
+                    {"page": 2, "page_size": 4, "query": ""},
+                ),
+            ],
+        )
+
     def test_git_setup_button_adds_detected_root_and_continues_scan(self) -> None:
         class Button:
             def __init__(self, **kwargs: Any) -> None:
@@ -498,6 +915,18 @@ class HermesJobUrlRouterTests(unittest.TestCase):
     def test_does_not_route_non_job_links_or_linkedin_profiles(self) -> None:
         self.assertIsNone(self.router.extract_job_url("https://github.com/example/project"))
         self.assertIsNone(self.router.extract_job_url("https://linkedin.com/in/example-person"))
+
+    def test_job_words_do_not_turn_repository_or_research_links_into_postings(self) -> None:
+        messages = (
+            "Review this software engineer project https://github.com/example/project.git",
+            "Research this internship thread https://reddit.com/r/csMajors/comments/example/",
+            "Job prep docs https://modelcontextprotocol.io/docs/learn/server-concepts",
+            "Schedule the interview https://calendly.com/example/recruiter-screen",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                self.assertIsNone(self.router.extract_job_url(message))
 
     def test_respects_explicit_summary_only_opt_out(self) -> None:
         message = (
@@ -744,7 +1173,7 @@ class HermesJobUrlRouterTests(unittest.TestCase):
             self.assertIn("[[as_document]]", transformed)
             self.assertIn(f'MEDIA:"{pdf_path.resolve()}"', transformed)
 
-    def test_router_runs_and_records_bounded_host_web_research(self) -> None:
+    def test_router_runs_the_unified_role_aware_research_pipeline(self) -> None:
         with TemporaryDirectory() as directory:
             package_dir = Path(directory) / "application"
             research_dir = package_dir / "research"
@@ -761,9 +1190,13 @@ class HermesJobUrlRouterTests(unittest.TestCase):
             context = _FakePluginContext(
                 results=[
                     intake_result,
-                    '{"results":[{"title":"Community thread","url":"https://reddit.com/r/example"}]}',
-                    '{"results":[{"title":"Company engineering","url":"https://example.test/engineering"}]}',
-                    '{"secondary_research_note":"/tmp/secondary-research.md","searches_recorded":2}',
+                    json.dumps(
+                        {
+                            "research_note": "/tmp/discovery-research.md",
+                            "candidates_reviewed": 35,
+                            "sources_retained": 9,
+                        }
+                    ),
                 ]
             )
             self.router.register(context)
@@ -778,13 +1211,11 @@ class HermesJobUrlRouterTests(unittest.TestCase):
 
             assert injected is not None
             self.assertEqual(context.calls[0][0], "mcp__erga_mcp__intake_job_url")
-            self.assertEqual([name for name, _ in context.calls[1:3]], ["web_search", "web_search"])
-            self.assertIn("site:reddit.com", context.calls[1][1]["query"])
             self.assertEqual(
-                context.calls[3][0],
-                "mcp__erga_mcp__record_secondary_research",
+                context.calls[1],
+                ("mcp__erga_mcp__discover_job_research", {"job_url": url}),
             )
-            self.assertIn("secondary_research_note", injected["context"])
+            self.assertIn("candidates_reviewed", injected["context"])
 
     def test_attachment_requires_successful_in_package_pdf_validation(self) -> None:
         with TemporaryDirectory() as directory:
@@ -823,6 +1254,87 @@ class HermesJobUrlRouterTests(unittest.TestCase):
                     )
 
                     self.assertIsNone(transformed)
+
+    def test_planned_intake_finds_and_requires_its_validated_pdf(self) -> None:
+        with TemporaryDirectory() as directory:
+            package_dir = Path(directory) / "package"
+            artifacts_dir = package_dir / "artifacts"
+            artifacts_dir.mkdir(parents=True)
+            pdf_path = artifacts_dir / "Candidate_Resume.pdf"
+            pdf_path.write_bytes(b"%PDF-1.7\nsynthetic\n")
+            result = json.dumps(
+                {
+                    "structuredContent": {
+                        "plan": {"id": "plan_example", "status": "completed"},
+                        "intake": {
+                            "package_dir": str(package_dir),
+                            "application_id": "app_synthetic",
+                            "validation": {
+                                "returncode": 0,
+                                "pdf": "artifacts/Candidate_Resume.pdf",
+                            },
+                        },
+                    }
+                }
+            )
+
+            message, delivered_pdf = self.router._planned_resume_delivery(result)
+
+            self.assertIn("generated, validated, and attached", message)
+            self.assertIn("app_synthetic", message)
+            self.assertEqual(delivered_pdf, str(pdf_path.resolve()))
+
+            missing_pdf_result = json.dumps(
+                {
+                    "plan": {"id": "plan_example", "status": "completed"},
+                    "intake": {
+                        "package_dir": str(package_dir),
+                        "application_id": "app_synthetic",
+                        "validation": {"returncode": 0, "pdf": None},
+                    },
+                }
+            )
+            missing_message, missing_pdf = self.router._planned_resume_delivery(missing_pdf_result)
+
+            self.assertIn("no validated PDF attachment", missing_message)
+            self.assertNotIn("✅", missing_message)
+            self.assertIsNone(missing_pdf)
+
+    def test_plan_pdf_delivery_forces_a_document_attachment(self) -> None:
+        completed = type("Completed", (), {"returncode": 0})()
+
+        with (
+            patch.object(self.router.shutil, "which", return_value="/usr/local/bin/hermes"),
+            patch.object(self.router.subprocess, "run", return_value=completed) as run,
+        ):
+            self.router._deliver_discord_plan_result(
+                "123456",
+                "Résumé ready",
+                "/tmp/Candidate Resume.pdf",
+            )
+
+        body = run.call_args.kwargs["input"]
+        self.assertIn("[[as_document]]", body)
+        self.assertIn('MEDIA:"/tmp/Candidate Resume.pdf"', body)
+
+    def test_plan_delivery_retries_transient_attachment_failures(self) -> None:
+        attempts: list[tuple[str, str, str | None]] = []
+
+        def flaky_delivery(channel_id: str, message: str, pdf: str | None) -> None:
+            attempts.append((channel_id, message, pdf))
+            if len(attempts) < 3:
+                raise RuntimeError("temporary Discord failure")
+
+        self.router._deliver_plan_with_retries(
+            flaky_delivery,
+            channel_id="123456",
+            message="Résumé ready",
+            pdf="/tmp/Candidate Resume.pdf",
+            sleep=lambda _: None,
+        )
+
+        self.assertEqual(len(attempts), 3)
+        self.assertTrue(all(item[2] == "/tmp/Candidate Resume.pdf" for item in attempts))
 
     def test_local_cli_does_not_emit_a_media_directive(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1006,6 +1518,7 @@ class HermesJobUrlRouterTests(unittest.TestCase):
             {
                 "erga.card.action",
                 "erga.tracker.page",
+                "erga.plan.action",
                 "erga.review.back",
                 "erga.review.skip",
                 "erga.review.save",
@@ -1182,15 +1695,53 @@ class HermesJobUrlRouterTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, r"requires Hermes >= 0\.18\.2"):
                 self.router.register(_FakePluginContext())
 
-    def test_explicit_slash_command_dispatches_the_same_tool(self) -> None:
-        context = _FakePluginContext(result="done")
+    def test_explicit_slash_command_starts_the_review_only_plan(self) -> None:
+        context = _FakePluginContext(
+            result=json.dumps(
+                {
+                    "id": "plan_explicit",
+                    "job_url": "https://jobs.lever.co/example/00000000",
+                    "company": "Example",
+                    "role": "Engineer",
+                    "questions": [
+                        {
+                            "id": "copy_strategy",
+                            "prompt": "How should Erga tailor?",
+                            "options": [
+                                {
+                                    "id": "preserve",
+                                    "label": "🛡️ Preserve master copy",
+                                    "description": "Keep approved copy.",
+                                }
+                            ],
+                        }
+                    ],
+                    "answers": [],
+                    "current_question": {
+                        "id": "copy_strategy",
+                        "prompt": "How should Erga tailor?",
+                        "options": [
+                            {
+                                "id": "preserve",
+                                "label": "🛡️ Preserve master copy",
+                                "description": "Keep approved copy.",
+                            }
+                        ],
+                    },
+                    "status": "planning",
+                    "catalogue_candidate_count": 0,
+                }
+            )
+        )
         self.router.register(context)
         url = "https://jobs.lever.co/example/00000000-0000-0000-0000-000000000000"
 
         result = context.commands["intake-job"](url)
 
-        self.assertEqual(result, "done")
+        self.assertIn("Question 1 of 1", result)
+        self.assertIn("no application, résumé, or tracker entry", result)
         self.assertEqual(len(context.calls), 1)
+        self.assertEqual(context.calls[0][0], "mcp__erga_mcp__create_tailoring_plan")
         self.assertEqual(context.calls[0][1], {"job_url": url})
 
     def test_monitor_command_installs_scripts_and_delivers_cron_to_origin(self) -> None:
@@ -1472,6 +2023,219 @@ class HermesJobUrlRouterTests(unittest.TestCase):
                 (
                     "mcp__erga_mcp__application_tracker",
                     {"query": "", "page": 2, "page_size": 6},
+                ),
+            ],
+        )
+
+    def test_tracker_oa_row_opens_a_research_navigator_with_links_and_actions(self) -> None:
+        class Button:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        class Response:
+            def __init__(self, *, text: str, buttons: tuple[Any, ...]) -> None:
+                self.text = text
+                self.buttons = buttons
+
+        tracker_result = json.dumps(
+            {
+                "structuredContent": {
+                    "enabled": True,
+                    "summary": {"assessment": 1},
+                    "page": 1,
+                    "page_count": 1,
+                    "entries": [
+                        {
+                            "company": "Example",
+                            "role": "Software Engineer Intern",
+                            "source_url": "https://jobs.example.test/role",
+                            "research": {"eligible": True, "stage": "oa"},
+                        }
+                    ],
+                    "message": "Example — Software Engineer Intern · OA",
+                }
+            }
+        )
+        navigator_result = json.dumps(
+            {
+                "structuredContent": {
+                    "company": "Example",
+                    "role": "Software Engineer Intern",
+                    "job_url": "https://jobs.example.test/role",
+                    "stage": "oa",
+                    "research_query": "Example Software Engineer Intern",
+                    "card": {
+                        "title": "OA research · Example",
+                        "summary": "2 saved notes · 2 useful links.",
+                        "fields": [
+                            {
+                                "name": "Open on mobile",
+                                "value": (
+                                    "[Official posting](https://jobs.example.test/role)\n"
+                                    "[Community report (unverified)](https://reddit.com/r/test)"
+                                ),
+                                "inline": False,
+                            }
+                        ],
+                        "actions": [
+                            {
+                                "action_id": "research.refresh",
+                                "label": "Refresh sources",
+                                "instruction": "Run bounded public research.",
+                                "style": "primary",
+                            },
+                            {
+                                "action_id": "research.brief",
+                                "label": "Create OA brief",
+                                "instruction": "Create the local OA checklist.",
+                                "style": "secondary",
+                            },
+                            {
+                                "action_id": "research.back",
+                                "label": "Back to tracker",
+                                "instruction": "Return to the tracker.",
+                                "style": "secondary",
+                            },
+                        ],
+                        "page": 1,
+                        "page_count": 1,
+                        "footer": "Community sources are unverified.",
+                    },
+                }
+            }
+        )
+        context = _FakePluginContext(
+            results=[
+                tracker_result,
+                navigator_result,
+                json.dumps({"structuredContent": {"sources_scraped": 2}}),
+                navigator_result,
+                json.dumps({"structuredContent": {"research_brief": "oa-brief.md"}}),
+                navigator_result,
+                tracker_result,
+            ]
+        )
+        background_callbacks: list[Callable[[], None]] = []
+        delivered: list[tuple[str, str, str | None]] = []
+        plugins = ModuleType("hermes_cli.plugins")
+        plugins.DiscordButton = Button
+        plugins.DiscordCommandResponse = Response
+        hermes_cli = ModuleType("hermes_cli")
+        hermes_cli.__version__ = "0.18.2"
+        hermes_cli.plugins = plugins
+
+        with patch.dict(
+            sys.modules,
+            {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins},
+        ):
+            self.router.register(
+                context,
+                background_runner=background_callbacks.append,
+                plan_delivery=lambda channel_id, message, pdf: delivered.append(
+                    (channel_id, message, pdf)
+                ),
+            )
+            tracker = context.commands["erga-tracker"]("")
+            opened = context.discord_button_handlers["erga.card.action"](
+                type(
+                    "Interaction",
+                    (),
+                    {"payload": tracker.buttons[0].payload, "user_id": "42"},
+                )()
+            )
+            refreshed = context.discord_button_handlers["erga.card.action"](
+                type(
+                    "Interaction",
+                    (),
+                    {
+                        "payload": opened.buttons[0].payload,
+                        "user_id": "42",
+                        "channel_id": "123",
+                    },
+                )()
+            )
+            briefed = context.discord_button_handlers["erga.card.action"](
+                type(
+                    "Interaction",
+                    (),
+                    {
+                        "payload": opened.buttons[1].payload,
+                        "user_id": "42",
+                        "channel_id": "123",
+                    },
+                )()
+            )
+            self.assertEqual(len(background_callbacks), 2)
+            self.assertEqual(len(context.calls), 2)
+            for callback in background_callbacks:
+                callback()
+            returned = context.discord_button_handlers["erga.card.action"](
+                type(
+                    "Interaction",
+                    (),
+                    {"payload": opened.buttons[2].payload, "user_id": "42"},
+                )()
+            )
+
+        self.assertIsInstance(tracker, Response)
+        self.assertEqual([button.label for button in tracker.buttons], ["Research · Example"])
+        self.assertEqual(tracker.buttons[0].action_id, "erga.card.action")
+        self.assertIsInstance(opened, Response)
+        self.assertIn("[Official posting](https://jobs.example.test/role)", opened.text)
+        self.assertEqual(
+            [button.label for button in opened.buttons],
+            ["Refresh sources", "Create OA brief", "Back to tracker"],
+        )
+        self.assertIsInstance(refreshed, Response)
+        self.assertIn("Research refresh started", refreshed.text)
+        self.assertEqual(refreshed.buttons, ())
+        self.assertIsInstance(briefed, Response)
+        self.assertIn("OA brief started", briefed.text)
+        self.assertEqual(briefed.buttons, ())
+        self.assertIsInstance(returned, Response)
+        self.assertEqual(returned.text, "Example — Software Engineer Intern · OA")
+        self.assertEqual(len(delivered), 2)
+        self.assertEqual(delivered[0][0], "123")
+        self.assertIn("Sources refreshed", delivered[0][1])
+        self.assertIn("2 saved notes · 2 useful links", delivered[0][1])
+        self.assertEqual(delivered[0][2], None)
+        self.assertEqual(delivered[1][0], "123")
+        self.assertIn("OA brief created", delivered[1][1])
+        self.assertIn("OA research · Example", delivered[1][1])
+        self.assertEqual(delivered[1][2], None)
+        self.assertEqual(
+            context.calls,
+            [
+                (
+                    "mcp__erga_mcp__application_tracker",
+                    {"query": "", "page": 1, "page_size": 6},
+                ),
+                (
+                    "mcp__erga_mcp__research_navigator",
+                    {"job_url": "https://jobs.example.test/role"},
+                ),
+                (
+                    "mcp__erga_mcp__discover_job_research",
+                    {
+                        "query": "Example Software Engineer Intern",
+                        "job_url": "https://jobs.example.test/role",
+                    },
+                ),
+                (
+                    "mcp__erga_mcp__research_navigator",
+                    {"job_url": "https://jobs.example.test/role"},
+                ),
+                (
+                    "mcp__erga_mcp__create_research_brief",
+                    {"job_url": "https://jobs.example.test/role", "stage": "oa"},
+                ),
+                (
+                    "mcp__erga_mcp__research_navigator",
+                    {"job_url": "https://jobs.example.test/role"},
+                ),
+                (
+                    "mcp__erga_mcp__application_tracker",
+                    {"query": "", "page": 1, "page_size": 6},
                 ),
             ],
         )

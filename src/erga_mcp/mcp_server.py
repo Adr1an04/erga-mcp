@@ -35,7 +35,8 @@ from .ai_resume_tailoring import (
     draft_evidence_backed_projects,
     project_quantitative_bullet_count,
 )
-from .cli import DEFAULT_CONFIG_PATH, _notes_application, _package_for_application
+from .bullet_quality import portfolio_quality_report
+from .cli import DEFAULT_CONFIG_PATH, _notes_application
 from .config import ErgaConfig, load_config
 from .contact_projection import project_recruiter_contacts
 from .cover_letter import create_cover_letter_proposal, load_style_context
@@ -78,10 +79,12 @@ from .job_research import (
     write_secondary_research,
     write_stage_research,
 )
+from .job_source import require_job_source
 from .job_workspace import create_job_workspace
 from .models import Evidence
 from .onboarding_view import build_onboarding_card
 from .portfolio_roots import detected_portfolio_root, update_portfolio_roots
+from .project_catalogue import build_project_catalogue
 from .project_inventory import (
     ProjectCandidate,
     limit_project_candidate_bullets,
@@ -90,6 +93,7 @@ from .project_inventory import (
     sync_project_inventory_from_master,
 )
 from .project_metrics import propose_git_project_metrics
+from .research_navigator import build_research_navigator, research_stage_for_status
 from .resume import (
     ResumeItemLayoutValidation,
     create_section_resume_proposal,
@@ -114,6 +118,14 @@ from .resume_template import ensure_resume_template
 from .settings_view import build_settings_card
 from .skill_inventory import parse_skill_seed_csv
 from .store import ErgaStore, SQLiteStoreFactory, StoreFactory
+from .tailoring_plan import (
+    answer_tailoring_plan,
+    approve_tailoring_plan,
+    build_tailoring_plan,
+    reopen_previous_question,
+    set_tailoring_plan_status,
+    tailoring_plan_preferences,
+)
 from .tracker_view import (
     build_tracker_card,
     filter_application_tracker,
@@ -152,8 +164,10 @@ _READ_TOOL_NAMES = frozenset(
         "pipeline_status",
         "list_applications",
         "application_tracker",
+        "research_navigator",
         "onboarding_status",
         "git_skill_review_card",
+        "project_catalogue",
         "erga_settings_card",
         "list_evidence",
         "list_mail_events",
@@ -162,7 +176,9 @@ _READ_TOOL_NAMES = frozenset(
 )
 _LOCAL_ANALYSIS_TOOL_NAMES = frozenset({"propose_project_metrics"})
 _NETWORK_READ_TOOL_NAMES = frozenset({"scrape_public_page", "extract_public_page"})
-_NETWORK_WRITE_TOOL_NAMES = frozenset({"discover_job_research"})
+_NETWORK_WRITE_TOOL_NAMES = frozenset(
+    {"discover_job_research", "refresh_project_catalogue", "create_tailoring_plan"}
+)
 _LOCAL_WRITE_TOOL_NAMES = frozenset(
     {
         "record_token_usage",
@@ -181,16 +197,23 @@ _LOCAL_WRITE_TOOL_NAMES = frozenset(
         "update_skill_inventory",
         "manage_portfolio_roots",
         "review_git_skill_group",
+        "update_tailoring_plan",
     }
 )
 _HERMES_TOOL_NAMES = frozenset(
     {
         "sync_recruiting_mail",
         "install_mail_monitor_scripts",
+        "discover_job_research",
+        "create_research_brief",
         "research_git_worktrees",
         "update_skill_inventory",
         "manage_portfolio_roots",
         "review_git_skill_group",
+        "refresh_project_catalogue",
+        "create_tailoring_plan",
+        "update_tailoring_plan",
+        "execute_tailoring_plan",
     }
 )
 _LOOPBACK_HOST_HEADERS = [
@@ -207,8 +230,10 @@ _CAREER_TOOL_NAMES = frozenset(
         "pipeline_status",
         "list_applications",
         "application_tracker",
+        "research_navigator",
         "onboarding_status",
         "git_skill_review_card",
+        "project_catalogue",
         "erga_settings_card",
         "list_evidence",
         "update_application_status",
@@ -217,6 +242,7 @@ _CAREER_TOOL_NAMES = frozenset(
         "intake_job_url",
         "prepare_job_workspace",
         "record_secondary_research",
+        "discover_job_research",
         "create_research_brief",
         "record_deep_research",
         "create_tailored_resume",
@@ -226,6 +252,10 @@ _CAREER_TOOL_NAMES = frozenset(
         "update_skill_inventory",
         "manage_portfolio_roots",
         "review_git_skill_group",
+        "refresh_project_catalogue",
+        "create_tailoring_plan",
+        "update_tailoring_plan",
+        "execute_tailoring_plan",
     }
 )
 _CAREER_PRIVATE_TOOL_NAMES = _CAREER_TOOL_NAMES | frozenset(
@@ -241,6 +271,7 @@ _ALL_TOOL_NAMES = frozenset(
         *_HERMES_TOOL_NAMES,
         "resume_source_context",
         "intake_job_url",
+        "execute_tailoring_plan",
         "prepare_job_workspace",
     }
 )
@@ -756,6 +787,25 @@ def _style_project_bullet_limits(
     return tuple(average + (1 if index < remainder else 0) for index in range(project_count))
 
 
+def _rendered_single_page_fill_ratio(
+    automatic: AutomaticResumeProposal, *, latexmk: str
+) -> float | None:
+    """Measure natural one-page density before any template spacing is introduced."""
+    checked = validate_latex_proposal(
+        automatic.proposal.proposed_tex_path,
+        latexmk=Path(latexmk),
+    )
+    proposal_pdf = automatic.proposal.proposed_tex_path.with_suffix(".pdf")
+    if checked.returncode != 0 or not proposal_pdf.is_file():
+        return None
+    try:
+        if pdf_page_count(proposal_pdf) != 1:
+            return None
+        return pdf_page_fill(proposal_pdf).fill_ratio
+    except ValueError:
+        return None
+
+
 def _create_render_packed_automatic_resume_proposal(
     *,
     resume_path: Path,
@@ -801,12 +851,28 @@ def _create_render_packed_automatic_resume_proposal(
     )
     if not should_pack:
         if not item_counts:
+            natural = create_automatic_resume_proposal(
+                output_dir=output_dir,
+                generated_section_entry_item_limits=style_entry_caps,
+                minimum_page_fill_ratio=0,
+                **common,
+            )
+            if (
+                not spacing_fallback_requested
+                or config.resume.max_pages != 1
+                or not config.resume.minimum_page_fill_ratio
+            ):
+                return natural
+            natural_fill = _rendered_single_page_fill_ratio(
+                natural,
+                latexmk=config.resume.latexmk,
+            )
+            if natural_fill is None or natural_fill >= config.resume.minimum_page_fill_ratio:
+                return natural
             return create_automatic_resume_proposal(
                 output_dir=output_dir,
                 generated_section_entry_item_limits=style_entry_caps,
-                minimum_page_fill_ratio=(
-                    config.resume.minimum_page_fill_ratio if spacing_fallback_requested else 0
-                ),
+                minimum_page_fill_ratio=config.resume.minimum_page_fill_ratio,
                 **common,
             )
         automatic, _, _ = _layout_balanced_generated_proposal(
@@ -1040,6 +1106,7 @@ def _git_enriched_inventory_candidates(
     job_description: str,
     resume_path: Path,
     ai_tailoring: bool = False,
+    preferred_project_ids: tuple[str, ...] = (),
 ) -> GitProjectEnrichment:
     """Plan once, then Git-research the exact projects eligible for the final résumé."""
     curated = _inventory_candidates(config, evidence)
@@ -1070,7 +1137,21 @@ def _git_enriched_inventory_candidates(
     selected_project_ids: tuple[str, ...] = ()
     layout_rejections: tuple[dict[str, object], ...] = ()
     if projects_editable:
-        if ai_tailoring:
+        if preferred_project_ids:
+            if len(preferred_project_ids) != config.resume.project_count:
+                raise ValueError(
+                    "a tailoring plan must select exactly the configured project count"
+                )
+            eligible_ids = {candidate.id for candidate in eligible_candidates}
+            missing = [
+                project_id for project_id in preferred_project_ids if project_id not in eligible_ids
+            ]
+            if missing:
+                raise ValueError(
+                    "tailoring-plan projects are no longer eligible: " + ", ".join(missing)
+                )
+            selected_project_ids = preferred_project_ids
+        elif ai_tailoring:
             selected_project_ids = _ai_research_shortlist_ids(
                 eligible_candidates,
                 job_description=job_description,
@@ -1113,8 +1194,16 @@ def _git_enriched_inventory_candidates(
     warnings = enrichment.warnings
     if discovery_warning is not None:
         warnings = (discovery_warning, *warnings)
+    selected_candidates = (
+        tuple(
+            {candidate.id: candidate for candidate in enrichment.candidates}[project_id]
+            for project_id in preferred_project_ids
+        )
+        if preferred_project_ids
+        else enrichment.candidates
+    )
     return GitProjectEnrichment(
-        candidates=enrichment.candidates,
+        candidates=selected_candidates,
         evidence=enrichment.evidence,
         reports=enrichment.reports,
         warnings=warnings,
@@ -1141,6 +1230,7 @@ async def _ai_tailored_project_enrichment(
     job_description: str,
     evidence: list[Evidence],
     enrichment: GitProjectEnrichment,
+    tailoring_emphasis: str = "balanced",
 ) -> GitProjectEnrichment:
     """Use host-model sampling to draft evidence-cited bullets, then enforce exact layout."""
     researched_ids = _git_researched_project_ids(enrichment)
@@ -1177,6 +1267,7 @@ async def _ai_tailored_project_enrichment(
                 require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
                 retry_feedback=feedback,
                 required_project_ids=locked_project_ids,
+                tailoring_emphasis=tailoring_emphasis,
             )
             if not locked_project_ids:
                 locked_project_ids = tuple(candidate.id for candidate in drafted.candidates)
@@ -1227,6 +1318,18 @@ async def _ai_tailored_project_enrichment(
                 if isinstance((project_id := report.get("project_id")), str)
             }
             final_candidates = tuple(candidate_by_id[project_id] for project_id in selected_ids)
+            final_quality = portfolio_quality_report(final_candidates).as_dict()
+            raw_quality_profiles = final_quality.get("project_profiles")
+            quality_profiles = (
+                {
+                    project_id: profile
+                    for profile in raw_quality_profiles
+                    if isinstance(profile, dict)
+                    and isinstance((project_id := profile.get("project_id")), str)
+                }
+                if isinstance(raw_quality_profiles, (list, tuple))
+                else {}
+            )
             final_reports = tuple(
                 {
                     **report_by_id[project_id],
@@ -1243,6 +1346,12 @@ async def _ai_tailored_project_enrichment(
                     "tailoring_model": drafted.model,
                     "bullet_count_source": "automatic_rendered_page_density",
                     "natural_page_fill_ratio": natural_fill_ratio,
+                    "bullet_quality": quality_profiles.get(project_id, {}),
+                    "portfolio_quality": {
+                        key: value
+                        for key, value in final_quality.items()
+                        if key != "project_profiles" and key != "pairwise_comparisons"
+                    },
                 }
                 for project_id in selected_ids
             )
@@ -1278,11 +1387,14 @@ async def _project_enrichment_for_tailoring(
     resume_path: Path,
     job_description: str,
     evidence: list[Evidence],
+    preferred_project_ids: tuple[str, ...] = (),
+    allow_ai_synthesis: bool = True,
+    tailoring_emphasis: str = "balanced",
 ) -> GitProjectEnrichment:
     """Build model-authored project copy, preserving the master when sampling cannot do so."""
     if config.resume.project_selection_mode == "template_only":
         return GitProjectEnrichment((), (), (), (), 0)
-    ai_tailoring = _client_supports_ai_tailoring(ctx)
+    ai_tailoring = allow_ai_synthesis and _client_supports_ai_tailoring(ctx)
     enrichment = _git_enriched_inventory_candidates(
         config=config,
         store=store,
@@ -1290,6 +1402,7 @@ async def _project_enrichment_for_tailoring(
         job_description=job_description,
         resume_path=resume_path,
         ai_tailoring=ai_tailoring,
+        preferred_project_ids=preferred_project_ids,
     )
     if not ai_tailoring or not enrichment.candidates:
         return enrichment
@@ -1302,6 +1415,7 @@ async def _project_enrichment_for_tailoring(
             job_description=job_description,
             evidence=evidence,
             enrichment=enrichment,
+            tailoring_emphasis=tailoring_emphasis,
         )
     except Exception as error:  # Sampling/provider failures must never lower résumé quality.
         return GitProjectEnrichment(
@@ -2346,6 +2460,45 @@ def _existing_intake_result_by_identity(
     return _result_from_manifest(package_dir=package_dir, manifest=manifest, reused=True)
 
 
+def _research_package_by_identity(*, output_root: Path, job_url: str) -> Path | None:
+    """Find a completed package that is safe for local research writes.
+
+    Imported and manually assembled packages may not contain the deterministic résumé artifacts
+    required to reconstruct an ``IntakeJobResult``. Research only needs a completed manifest and
+    a package rooted inside the configured output directory.
+    """
+    if not output_root.is_dir():
+        return None
+    identity = _job_identity(job_url)
+    resolved_root = output_root.resolve()
+    matches: list[Path] = []
+    for manifest_path in output_root.glob("*/*/package.json"):
+        package_dir = manifest_path.parent
+        if package_dir.is_symlink() or manifest_path.is_symlink():
+            continue
+        try:
+            resolved_package = package_dir.resolve(strict=True)
+            value = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not resolved_package.is_relative_to(resolved_root) or not isinstance(value, dict):
+            continue
+        manifest_url = value.get("job_url")
+        manifest_identity = value.get("job_identity")
+        if not isinstance(manifest_identity, str) and isinstance(manifest_url, str):
+            manifest_identity = _job_identity(manifest_url)
+        if manifest_identity != identity or value.get("status") not in {None, "complete"}:
+            continue
+        research_dir = package_dir / "research"
+        if research_dir.is_symlink():
+            continue
+        matches.append(package_dir)
+    if len(matches) > 1:
+        paths = ", ".join(str(path) for path in matches)
+        raise FileExistsError(f"multiple packages represent the same job listing: {paths}")
+    return matches[0] if matches else None
+
+
 def _incomplete_package_by_identity(*, output_root: Path, job_url: str) -> Path | None:
     """Find one legacy package that has identity metadata but lacks current artifacts."""
     if not output_root.is_dir():
@@ -2519,9 +2672,18 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             for entry in pagination.entries
             if entry.source_url
         }
+        entries = []
+        for entry in pagination.entries:
+            serialized = asdict(entry)
+            research_stage = research_stage_for_status(entry.status)
+            serialized["research"] = {
+                "eligible": research_stage is not None and bool(entry.source_url),
+                "stage": research_stage,
+            }
+            entries.append(serialized)
         return {
             "enabled": True,
-            "entries": [asdict(entry) for entry in pagination.entries],
+            "entries": entries,
             "summary": snapshot.summary,
             "total_entries": pagination.total,
             "page": pagination.page,
@@ -2546,6 +2708,75 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 page_size=pagination.page_size,
                 query=normalized_query,
             ).as_dict(),
+        }
+
+    @profile_tool(
+        "research_navigator",
+        title="Open stage-aware role research",
+        description=(
+            "Open a read-only navigator for a tracked role once it reaches an OA, interview, or "
+            "offer. It lists the official posting, saved local research artifacts, bounded public "
+            "links, résumé availability, and stage-specific preparation guidance. Community and "
+            "secondary sources remain explicitly unverified."
+        ),
+        annotations=_READ_ONLY,
+    )
+    def research_navigator(job_url: str) -> dict[str, object]:
+        """Return a mobile-safe research card for one exact eligible tracker row."""
+        if not config.tracker.enabled or config.tracker.tracker_dir is None:
+            raise ValueError("application tracking must be configured to open role research")
+        identity = _job_identity(job_url)
+        matches = [
+            entry
+            for entry in read_application_tracker(config.tracker.tracker_dir).entries
+            if entry.source_url and _job_identity(entry.source_url) == identity
+        ]
+        if not matches:
+            raise ValueError("no tracker row matches this job URL")
+        eligible = [entry for entry in matches if research_stage_for_status(entry.status)]
+        if not eligible:
+            raise ValueError("research navigation becomes available when the role reaches OA")
+        entry = eligible[0]
+        application_matches = [
+            application
+            for application in store.list_applications()
+            if _job_identity(application.source_url) == identity
+        ]
+        package_dir = _research_package_by_identity(
+            output_root=config.resume.output_root,
+            job_url=entry.source_url,
+        )
+        navigator = build_research_navigator(entry=entry, package_dir=package_dir)
+        available_actions = tuple(
+            action
+            for action in navigator.card.actions
+            if action.action_id == "research.back"
+            or (
+                action.action_id == "research.refresh"
+                and "discover_job_research" in enabled_tool_names
+                and package_dir is not None
+                and bool(application_matches)
+            )
+            or (
+                action.action_id == "research.brief"
+                and "create_research_brief" in enabled_tool_names
+                and package_dir is not None
+            )
+        )
+        card = replace(navigator.card, actions=available_actions)
+        return {
+            "company": entry.company,
+            "role": entry.role,
+            "job_url": entry.source_url,
+            "stage": navigator.stage,
+            "research_query": f"{entry.company} {entry.role}",
+            "package_available": navigator.package_available,
+            "resume_available": navigator.resume_available,
+            "source_warning": navigator.source_warning,
+            "saved_artifact_count": navigator.saved_artifact_count,
+            "artifacts": [artifact.as_dict() for artifact in navigator.artifacts],
+            "links": [link.as_dict() for link in navigator.links],
+            "card": card.as_dict(),
         }
 
     @profile_tool("onboarding_status", annotations=_READ_ONLY)
@@ -2600,6 +2831,53 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             primary_action_label=primary_action[1],
             primary_action_instruction=primary_action[2],
         ).as_dict()
+
+    @profile_tool("project_catalogue", annotations=_READ_ONLY)
+    def project_catalogue(
+        page: Annotated[StrictInt, Field(ge=1)] = 1,
+        page_size: Annotated[StrictInt, Field(ge=1, le=10)] = 6,
+        query: str = "",
+    ) -> dict[str, object]:
+        """Browse cached GitHub discovery plus the approved project inventory without writes."""
+        return build_project_catalogue(
+            load_config(config_path),
+            store,
+            page=page,
+            page_size=page_size,
+            query=query,
+        ).as_dict()
+
+    @profile_tool(
+        "refresh_project_catalogue",
+        title="Refresh and browse the private GitHub project catalogue",
+        description=(
+            "Use the already-authorized GitHub CLI to refresh owned/collaborator repository "
+            "metadata in Erga's private local cache, then return the shared project catalogue. "
+            "This never approves evidence or changes a resume."
+        ),
+        annotations=_NETWORK_READ_AND_WRITE,
+    )
+    def refresh_project_catalogue(
+        page: Annotated[StrictInt, Field(ge=1)] = 1,
+        page_size: Annotated[StrictInt, Field(ge=1, le=10)] = 6,
+        query: str = "",
+    ) -> dict[str, object]:
+        """Refresh bounded GitHub metadata and reopen the catalogue without evidence writes."""
+        current_config = load_config(config_path)
+        discovered = discover_github_projects(
+            cache_path=current_config.data_dir / "github-project-catalogue.json"
+        )
+        payload = build_project_catalogue(
+            current_config,
+            store,
+            page=page,
+            page_size=page_size,
+            query=query,
+        ).as_dict()
+        payload["github_projects_refreshed"] = len(discovered)
+        payload["evidence_created"] = False
+        payload["resume_changed"] = False
+        return payload
 
     @profile_tool("update_skill_inventory", annotations=_LOCAL_IDEMPOTENT_WRITE)
     def update_skill_inventory(
@@ -2996,6 +3274,93 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "message": message,
         }
 
+    def public_tailoring_plan(plan: Any) -> dict[str, object]:
+        payload = plan.as_public_dict()
+        if plan.status in {"review", "ready", "completed"}:
+            payload["preferences"] = asdict(tailoring_plan_preferences(plan))
+        return cast(dict[str, object], _json_value(payload))
+
+    @profile_tool(
+        "create_tailoring_plan",
+        title="Plan a tailored résumé before generation",
+        description=(
+            "Fetch one official job posting, compare it with the approved project catalogue, "
+            "and persist a short review-only decision plan. This creates no application, résumé, "
+            "tracker note, or external message. Repeated calls reuse the active plan."
+        ),
+        annotations=_NETWORK_READ_AND_WRITE,
+    )
+    def create_tailoring_plan(job_url: str) -> dict[str, object]:
+        """Prepare deterministic project/copy choices without generating a résumé."""
+        existing = next(
+            (
+                plan
+                for plan in store.list_tailoring_plans()
+                if plan.job_url == job_url and plan.status in {"planning", "review", "ready"}
+            ),
+            None,
+        )
+        if existing is not None:
+            return public_tailoring_plan(existing)
+        snapshot = fetch_job_snapshot(job_url)
+        research = analyze_job_snapshot(snapshot, job_url=job_url)
+        approved = [item for item in store.list_evidence() if item.approved]
+        candidates = tuple(
+            candidate
+            for candidate in _inventory_candidates(config, approved)
+            if candidate.evidence_ids and candidate.bullet_evidence_ids
+        )
+        plan = build_tailoring_plan(
+            job_url=job_url,
+            company=research.company,
+            role=research.role,
+            job_snapshot=snapshot,
+            job_description=_tailoring_context(research, snapshot),
+            candidates=candidates,
+            project_count=config.resume.project_count,
+        )
+        store.save_tailoring_plan(plan)
+        return public_tailoring_plan(plan)
+
+    @profile_tool(
+        "update_tailoring_plan",
+        title="Answer or navigate one persisted résumé-plan question",
+        description=(
+            "Show, answer, go back, approve, or cancel a private tailoring plan. Answers only "
+            "change local review state; generation remains a separate explicit action."
+        ),
+        annotations=_LOCAL_IDEMPOTENT_WRITE,
+    )
+    def update_tailoring_plan(
+        plan_id: str,
+        operation: str,
+        question_id: str = "",
+        option_id: str = "",
+    ) -> dict[str, object]:
+        """Update one plan decision without creating a résumé or application."""
+        plan = store.get_tailoring_plan(plan_id)
+        if plan is None:
+            raise ValueError("tailoring plan does not exist")
+        normalized = operation.strip().casefold()
+        if normalized == "show":
+            return public_tailoring_plan(plan)
+        if normalized == "answer":
+            plan = answer_tailoring_plan(
+                plan,
+                question_id=question_id,
+                option_id=option_id,
+            )
+        elif normalized == "back":
+            plan = reopen_previous_question(plan)
+        elif normalized == "approve":
+            plan = approve_tailoring_plan(plan)
+        elif normalized == "cancel":
+            plan = set_tailoring_plan_status(plan, "cancelled")
+        else:
+            raise ValueError("operation must be show, answer, back, approve, or cancel")
+        store.save_tailoring_plan(plan)
+        return public_tailoring_plan(plan)
+
     @profile_tool(
         "intake_job_url",
         title="Intake a pasted job-posting URL",
@@ -3037,8 +3402,27 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 )
             ),
         ] = "",
+        tailoring_plan_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "Optional approved local tailoring-plan ID. Omit for ordinary direct intake."
+                )
+            ),
+        ] = "",
     ) -> IntakeJobResult:
         """Run the primary end-to-end local intake for one pasted job URL."""
+        tailoring_plan = None
+        preferences = None
+        if tailoring_plan_id:
+            tailoring_plan = store.get_tailoring_plan(tailoring_plan_id)
+            if tailoring_plan is None:
+                raise ValueError("tailoring plan does not exist")
+            if tailoring_plan.job_url != job_url:
+                raise ValueError("tailoring plan belongs to a different job URL")
+            if tailoring_plan.status != "ready":
+                raise ValueError("tailoring plan must be reviewed before generation")
+            preferences = tailoring_plan_preferences(tailoring_plan)
         legacy_package = _incomplete_package_by_identity(
             output_root=config.resume.output_root,
             job_url=job_url,
@@ -3064,6 +3448,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                     job_url,
                     cycle=legacy_package.parent.name,
                     application_slug=legacy_package.name,
+                    tailoring_plan_id=tailoring_plan_id,
                     ctx=ctx,
                 )
             except Exception:
@@ -3104,6 +3489,10 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 job_url=job_url,
             )
         if existing is not None:
+            if tailoring_plan is not None:
+                raise ValueError(
+                    "this job already has a completed intake; the new plan was not applied"
+                )
             with integration_lock:
                 existing = _upgrade_existing_tailoring(
                     existing,
@@ -3126,8 +3515,13 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             master_path=config.resume.master_path,
             template_path=config.resume.template_path,
         )
-        snapshot = fetch_job_snapshot(job_url)
+        snapshot = (
+            tailoring_plan.job_snapshot
+            if tailoring_plan is not None
+            else fetch_job_snapshot(job_url)
+        )
         source_research = analyze_job_snapshot(snapshot, job_url=job_url)
+        require_job_source(url=job_url, snapshot=snapshot, research=source_research)
         resolved_cycle, resolved_slug = _metadata_from_research(
             job_url,
             source_research,
@@ -3141,6 +3535,10 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             job_url=job_url,
         )
         if existing is not None:
+            if tailoring_plan is not None:
+                raise ValueError(
+                    "this job already has a completed intake; the new plan was not applied"
+                )
             with integration_lock:
                 existing = _upgrade_existing_tailoring(
                     existing,
@@ -3160,7 +3558,17 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         if not evidence:
             evidence = all_approved
             selection_strategy = "all_approved_baseline" if evidence else "no_approved_evidence"
-        tailoring_context = _tailoring_context(source_research, snapshot)
+        tailoring_context = (
+            tailoring_plan.job_description
+            if tailoring_plan is not None
+            else _tailoring_context(source_research, snapshot)
+        )
+        preferred_project_ids = (
+            preferences.project_ids
+            if preferences is not None
+            and len(preferences.project_ids) == config.resume.project_count
+            else ()
+        )
         enrichment = await _project_enrichment_for_tailoring(
             ctx=ctx,
             config=config,
@@ -3168,6 +3576,11 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             resume_path=config.resume.template_path,
             job_description=tailoring_context,
             evidence=all_approved,
+            preferred_project_ids=preferred_project_ids,
+            allow_ai_synthesis=(
+                preferences.allow_ai_synthesis if preferences is not None else True
+            ),
+            tailoring_emphasis=(preferences.emphasis if preferences is not None else "balanced"),
         )
         project_candidates = enrichment.candidates
         all_approved = _merge_evidence(all_approved, enrichment.evidence)
@@ -3244,6 +3657,14 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                     "project_selections": automatic.project_selection.get("selected", []),
                     "git_project_research": list(enrichment.reports),
                     "integration_warnings": list(enrichment.warnings),
+                    "tailoring_plan": (
+                        {
+                            "id": tailoring_plan.id,
+                            "preferences": asdict(preferences),
+                        }
+                        if tailoring_plan is not None and preferences is not None
+                        else None
+                    ),
                     "status": "complete",
                     "tailoring": {
                         "changed_sections": list(automatic.changed_sections),
@@ -3301,6 +3722,40 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                     store=store,
                     job_url=job_url,
                 )
+
+    @profile_tool(
+        "execute_tailoring_plan",
+        title="Generate a résumé from an approved tailoring plan",
+        description=(
+            "Explicitly approve a complete local tailoring plan, run the normal validated intake "
+            "once with its locked project/copy decisions, and mark the plan complete only after "
+            "success."
+        ),
+        annotations=_JOB_INTAKE,
+    )
+    async def execute_tailoring_plan(
+        plan_id: str,
+        ctx: Context = None,  # type: ignore[assignment]
+    ) -> dict[str, object]:
+        plan = store.get_tailoring_plan(plan_id)
+        if plan is None:
+            raise ValueError("tailoring plan does not exist")
+        if plan.status == "review":
+            plan = approve_tailoring_plan(plan)
+            store.save_tailoring_plan(plan)
+        if plan.status != "ready":
+            raise ValueError("tailoring plan is not ready for generation")
+        result = await intake_job_url(
+            plan.job_url,
+            tailoring_plan_id=plan.id,
+            ctx=ctx,
+        )
+        completed = set_tailoring_plan_status(plan, "completed")
+        store.save_tailoring_plan(completed)
+        return {
+            "plan": public_tailoring_plan(completed),
+            "intake": cast(dict[str, object], _json_value(result.model_dump())),
+        }
 
     @profile_tool(
         "scrape_public_page",
@@ -3365,17 +3820,19 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         searches: list[SecondarySearchInput],
     ) -> dict[str, object]:
         """Persist host-provided search results inside the matching local job package."""
-        existing = _existing_intake_result_by_identity(
+        package_dir = _research_package_by_identity(
             output_root=config.resume.output_root,
             job_url=job_url,
         )
-        if existing is None:
-            raise ValueError("intake_job_url must complete before secondary research is recorded")
+        if package_dir is None:
+            raise ValueError(
+                "a completed local job package must exist before secondary research is recorded"
+            )
         normalized = [(item.query, item.result) for item in searches[:4]]
         if not normalized:
             raise ValueError("at least one search result is required")
         path = write_secondary_research(
-            package_dir=Path(existing.package_dir),
+            package_dir=package_dir,
             searches=normalized,
             captured_at=datetime.now(UTC).isoformat(),
         )
@@ -3385,10 +3842,25 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         }
 
     @profile_tool("discover_job_research", annotations=_NETWORK_READ_AND_WRITE)
-    def discover_job_research(query: str) -> dict[str, object]:
+    def discover_job_research(query: str = "", job_url: str = "") -> dict[str, object]:
         """Run bounded public research for one tracked application and save a local cited note."""
-        application = _notes_application(query, store.list_applications())
-        package_dir = _package_for_application(config.resume.output_root, application)
+        applications = store.list_applications()
+        if job_url.strip():
+            identity = _job_identity(job_url)
+            matches = [
+                application
+                for application in applications
+                if _job_identity(application.source_url) == identity
+            ]
+            if not matches:
+                raise ValueError("no tracked application matches this job URL")
+            application = max(matches, key=lambda item: item.created_at)
+        else:
+            application = _notes_application(query, applications)
+        package_dir = _research_package_by_identity(
+            output_root=config.resume.output_root,
+            job_url=application.source_url,
+        )
         if package_dir is None:
             raise ValueError(
                 "research requires an existing local Erga package for this application"
@@ -3398,7 +3870,12 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "company": application.company,
             "role": application.role,
             "research_note": str(result.path),
+            "research_index": str(result.index_path) if result.index_path is not None else None,
+            "candidates_reviewed": result.candidates_reviewed,
+            "sources_retained": result.sources_retained,
+            "sources_rejected": result.sources_rejected,
             "sources_scraped": result.sources_scraped,
+            "coverage": list(result.coverage),
             "outreach_leads": result.outreach_leads,
             "messages_sent": 0,
             "community_sources_unverified": True,
@@ -3417,14 +3894,16 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
     )
     def create_research_brief(job_url: str, stage: str) -> dict[str, object]:
         """Write a stage-specific local research brief for an already-intaked job."""
-        existing = _existing_intake_result_by_identity(
+        package_dir = _research_package_by_identity(
             output_root=config.resume.output_root,
             job_url=job_url,
         )
-        if existing is None:
-            raise ValueError("intake_job_url must complete before a research brief is created")
+        if package_dir is None:
+            raise ValueError(
+                "a completed local job package must exist before a research brief is created"
+            )
         path = write_stage_research(
-            package_dir=Path(existing.package_dir),
+            package_dir=package_dir,
             stage=stage,
             depth="brief",
             captured_at=datetime.now(UTC).isoformat(),
@@ -3448,17 +3927,19 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         searches: list[SecondarySearchInput],
     ) -> dict[str, object]:
         """Write a stage-specific deep dossier from bounded host-provided search results."""
-        existing = _existing_intake_result_by_identity(
+        package_dir = _research_package_by_identity(
             output_root=config.resume.output_root,
             job_url=job_url,
         )
-        if existing is None:
-            raise ValueError("intake_job_url must complete before deep research is recorded")
+        if package_dir is None:
+            raise ValueError(
+                "a completed local job package must exist before deep research is recorded"
+            )
         normalized = [(item.query, item.result) for item in searches[:8]]
         if not normalized:
             raise ValueError("at least one search result is required for deep research")
         path = write_stage_research(
-            package_dir=Path(existing.package_dir),
+            package_dir=package_dir,
             stage=stage,
             depth="deep",
             captured_at=datetime.now(UTC).isoformat(),

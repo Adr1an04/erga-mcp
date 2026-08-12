@@ -300,6 +300,10 @@ class AIResumeTailoringTests(unittest.TestCase):
         self.assertIn("Engineered", prompt["allowed_lead_verbs"])
         self.assertIn("Validated", prompt["allowed_lead_verbs"])
         self.assertEqual(prompt["projects"][0]["relevance_rank"], 1)
+        self.assertIn("identity_profile", prompt["projects"][0])
+        self.assertIn("metric_categories", prompt["projects"][0]["identity_profile"])
+        self.assertIn("portfolio_differentiators", prompt["projects"][0])
+        self.assertIn("performance", prompt["preferred_metric_categories"])
         self.assertTrue(prompt["projects"][0]["git_engineering_signals"][0]["has_test_changes"])
         self.assertFalse(
             prompt["projects"][0]["git_engineering_signals"][0][
@@ -525,6 +529,28 @@ class AIResumeTailoringTests(unittest.TestCase):
                                 },
                                 {
                                     "text": "Engineered tests for 20 API routes and failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                }
+            )
+
+    def test_rejects_name_swappable_bullets_even_when_lead_verbs_differ(self) -> None:
+        with self.assertRaisesRegex(ValueError, "semantically interchangeable"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": "Engineered a Python API serving 100 users safely.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Developed a Python API serving 100 users safely.",
                                     "evidence_ids": ["ev_api"],
                                 },
                             ],

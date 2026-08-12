@@ -19,8 +19,10 @@ _READ_TOOLS = {
     "pipeline_status",
     "list_applications",
     "application_tracker",
+    "research_navigator",
     "onboarding_status",
     "git_skill_review_card",
+    "project_catalogue",
     "erga_settings_card",
     "list_evidence",
     "list_mail_events",
@@ -31,8 +33,10 @@ _CAREER_TOOLS = {
     "pipeline_status",
     "list_applications",
     "application_tracker",
+    "research_navigator",
     "onboarding_status",
     "git_skill_review_card",
+    "project_catalogue",
     "erga_settings_card",
     "list_evidence",
     "update_application_status",
@@ -41,6 +45,7 @@ _CAREER_TOOLS = {
     "intake_job_url",
     "prepare_job_workspace",
     "record_secondary_research",
+    "discover_job_research",
     "create_research_brief",
     "record_deep_research",
     "create_tailored_resume",
@@ -50,6 +55,10 @@ _CAREER_TOOLS = {
     "update_skill_inventory",
     "manage_portfolio_roots",
     "review_git_skill_group",
+    "refresh_project_catalogue",
+    "create_tailoring_plan",
+    "update_tailoring_plan",
+    "execute_tailoring_plan",
 }
 
 
@@ -169,6 +178,7 @@ class McpToolProfileTests(unittest.TestCase):
                 "update_skill_inventory",
                 "manage_portfolio_roots",
                 "review_git_skill_group",
+                "update_tailoring_plan",
             },
         )
 
@@ -181,10 +191,16 @@ class McpToolProfileTests(unittest.TestCase):
             | {
                 "sync_recruiting_mail",
                 "install_mail_monitor_scripts",
+                "discover_job_research",
+                "create_research_brief",
                 "research_git_worktrees",
                 "update_skill_inventory",
                 "manage_portfolio_roots",
                 "review_git_skill_group",
+                "refresh_project_catalogue",
+                "create_tailoring_plan",
+                "update_tailoring_plan",
+                "execute_tailoring_plan",
             },
         )
 

@@ -9,6 +9,7 @@ import re
 import secrets
 import shlex
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -19,11 +20,12 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 _DEFAULT_TOOL_NAME = "mcp__erga_mcp__intake_job_url"
-_DEFAULT_RESEARCH_TOOL_NAME = "mcp__erga_mcp__record_secondary_research"
 _DEFAULT_MONITOR_TOOL_NAME = "mcp__erga_mcp__install_mail_monitor_scripts"
 _DEFAULT_EXPORT_TOOL_NAME = "mcp__erga_mcp__export_data"
 _DEFAULT_TRACKER_TOOL_NAME = "mcp__erga_mcp__application_tracker"
+_DEFAULT_RESEARCH_NAVIGATOR_TOOL_NAME = "mcp__erga_mcp__research_navigator"
 _DEFAULT_DISCOVERY_RESEARCH_TOOL_NAME = "mcp__erga_mcp__discover_job_research"
+_DEFAULT_RESEARCH_BRIEF_TOOL_NAME = "mcp__erga_mcp__create_research_brief"
 _DEFAULT_MAIL_SYNC_TOOL_NAME = "mcp__erga_mcp__sync_recruiting_mail"
 _DEFAULT_GIT_RESEARCH_TOOL_NAME = "mcp__erga_mcp__research_git_worktrees"
 _DEFAULT_GIT_REVIEW_TOOL_NAME = "mcp__erga_mcp__review_git_drafts"
@@ -33,9 +35,17 @@ _DEFAULT_PORTFOLIO_ROOTS_TOOL_NAME = "mcp__erga_mcp__manage_portfolio_roots"
 _DEFAULT_SETTINGS_CARD_TOOL_NAME = "mcp__erga_mcp__erga_settings_card"
 _DEFAULT_GIT_SKILL_CARD_TOOL_NAME = "mcp__erga_mcp__git_skill_review_card"
 _DEFAULT_GIT_SKILL_REVIEW_TOOL_NAME = "mcp__erga_mcp__review_git_skill_group"
-_DEFAULT_WEB_SEARCH_TOOL_NAME = "web_search"
+_DEFAULT_PROJECT_CATALOGUE_TOOL_NAME = "mcp__erga_mcp__project_catalogue"
+_DEFAULT_PROJECT_CATALOGUE_REFRESH_TOOL_NAME = "mcp__erga_mcp__refresh_project_catalogue"
+_DEFAULT_TAILORING_PLAN_CREATE_TOOL_NAME = "mcp__erga_mcp__create_tailoring_plan"
+_DEFAULT_TAILORING_PLAN_UPDATE_TOOL_NAME = "mcp__erga_mcp__update_tailoring_plan"
+_DEFAULT_TAILORING_PLAN_EXECUTE_TOOL_NAME = "mcp__erga_mcp__execute_tailoring_plan"
 _DEFAULT_CRON_TOOL_NAME = "cronjob"
 _DEFAULT_TOKEN_TOOL_NAME = "mcp__erga_mcp__record_token_usage"
+_DISCORD_CONTENT_LIMIT = 2_000
+_DISCORD_TRUNCATION_NOTICE = (
+    "\n\n… Shortened to fit Discord. Use the controls or a narrower search for more detail."
+)
 _TRACKER_PAGE_SIZE = 6
 _MONITOR_SETTINGS_NAME = "erga-mcp-monitor.json"
 _MONITOR_MAIL_SCRIPT_NAME = "erga-mcp-mail.py"
@@ -58,11 +68,6 @@ _OPT_OUT = re.compile(
     r"\bsummari[sz]e\s+only\b|"
     r"\b(?:do\s+not|don't|dont|don’t|not|never|skip)\s+(?:run\s+)?(?:the\s+)?"
     r"(?:job\s+)?(?:intake|pipeline)\b)",
-    re.IGNORECASE,
-)
-_JOB_CONTEXT = re.compile(
-    r"\b(?:apply|company overview|employment|full[- ]time|hiring|internship|job|"
-    r"qualifications|responsibilities|role|salary|software engineer|work with us)\b",
     re.IGNORECASE,
 )
 _JOB_HOST_SUFFIXES = (
@@ -117,6 +122,7 @@ _JOB_QUERY_KEYS = frozenset({"gh_jid", "jk", "job", "job_id", "jobid", "posting_
 _NON_PAGE_SUFFIXES = (
     ".avif",
     ".gif",
+    ".git",
     ".jpeg",
     ".jpg",
     ".mp4",
@@ -195,6 +201,70 @@ class _ComponentTokenStore:
                 self._records.pop(token, None)
 
 
+def _run_in_background(callback: Callable[[], None]) -> None:
+    threading.Thread(
+        target=callback,
+        name="erga-tailoring-plan",
+        daemon=True,
+    ).start()
+
+
+def _deliver_discord_plan_result(channel_id: str, message: str, pdf: str | None) -> None:
+    """Deliver a completed explicit plan action without exposing gateway credentials."""
+    if re.fullmatch(r"\d+", channel_id) is None:
+        raise ValueError("Discord plan delivery requires a numeric channel ID")
+    executable = shutil.which("hermes")
+    if executable is None:
+        raise RuntimeError("Hermes CLI is unavailable for plan-result delivery")
+    body = message
+    if pdf is not None:
+        body += f'\n\n[[as_document]]\nMEDIA:"{pdf}"'
+    completed = subprocess.run(
+        [
+            executable,
+            "send",
+            "--quiet",
+            "--to",
+            f"discord:{channel_id}",
+            "--file",
+            "-",
+        ],
+        input=body,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("Hermes could not deliver the completed tailoring plan")
+
+
+def _deliver_plan_with_retries(
+    delivery: Callable[[str, str, str | None], None],
+    *,
+    channel_id: str,
+    message: str,
+    pdf: str | None,
+    sleep: Callable[[float], None] = time.sleep,
+    attempts: int = 3,
+) -> None:
+    """Retry one complete message-plus-attachment delivery as an indivisible operation."""
+    if attempts < 1:
+        raise ValueError("plan delivery attempts must be positive")
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            delivery(channel_id, message, pdf)
+            return
+        except Exception as error:  # Delivery adapters expose platform failures at runtime.
+            last_error = error
+            if attempt + 1 < attempts:
+                sleep(0.25 * (2**attempt))
+    raise RuntimeError(
+        f"Erga could not deliver the résumé after {attempts} attempts"
+    ) from last_error
+
+
 def _shared_card_payload(result: object) -> dict[str, Any] | None:
     return next(
         (
@@ -209,7 +279,9 @@ def _shared_card_payload(result: object) -> dict[str, Any] | None:
     )
 
 
-def _render_shared_card_text(card: dict[str, Any]) -> str:
+def _render_shared_card_text(
+    card: dict[str, Any], *, include_action_instructions: bool = True
+) -> str:
     lines = [f"**{card['title']}**", str(card["summary"])]
     for field in card.get("fields", []):
         if (
@@ -219,7 +291,7 @@ def _render_shared_card_text(card: dict[str, Any]) -> str:
         ):
             lines.extend(["", f"**{field['name']}**", field["value"]])
     actions = [item for item in card.get("actions", []) if isinstance(item, dict)]
-    if actions:
+    if actions and include_action_instructions:
         lines.extend(["", "**Available actions**"])
         for action in actions:
             label = action.get("label")
@@ -231,6 +303,19 @@ def _render_shared_card_text(card: dict[str, Any]) -> str:
     if isinstance(page, int) and isinstance(page_count, int) and page_count > 1:
         lines.extend(["", f"Page {page} of {page_count}"])
     return "\n".join(lines)
+
+
+def _fit_discord_content(text: str) -> str:
+    """Keep every component response within Discord's non-negotiable content limit."""
+    if len(text) <= _DISCORD_CONTENT_LIMIT:
+        return text
+    available = _DISCORD_CONTENT_LIMIT - len(_DISCORD_TRUNCATION_NOTICE)
+    boundary = text.rfind("\n\n", 0, available)
+    if boundary < available // 2:
+        boundary = text.rfind("\n", 0, available)
+    if boundary < available // 2:
+        boundary = available
+    return text[:boundary].rstrip() + _DISCORD_TRUNCATION_NOTICE
 
 
 def supports_hermes_version(version: str) -> bool:
@@ -322,6 +407,7 @@ def _result_payloads(result: object, *, depth: int = 0) -> list[dict[str, Any]]:
         "result",
         "content",
         "text",
+        "intake",
         "intake_result",
         "secondary_research",
     ):
@@ -447,6 +533,45 @@ def _validated_pdf_from_result(result: object) -> str | None:
     return str(pdf_path)
 
 
+def _planned_resume_delivery(result: object) -> tuple[str, str | None]:
+    """Render a truthful completion notice and require its validated PDF attachment."""
+    intake = next(
+        (
+            item
+            for item in _nested_objects(result)
+            if isinstance(item.get("package_dir"), str) and isinstance(item.get("validation"), dict)
+        ),
+        None,
+    )
+    if intake is None:
+        return (
+            "❌ Erga résumé generation failed: the tool returned no intake result.",
+            None,
+        )
+    application_id = intake.get("application_id")
+    app_text = (
+        str(application_id) if isinstance(application_id, str) and application_id else "local draft"
+    )
+    package_dir = str(intake["package_dir"])
+    pdf = _validated_pdf_from_result(result)
+    if pdf is None:
+        return (
+            "❌ Erga résumé generation completed, but no validated PDF attachment was "
+            "available.\n"
+            f"Application: `{app_text}`\n"
+            f"Package: `{package_dir}`\n"
+            "The run was not reported as successfully delivered. No application was submitted.",
+            None,
+        )
+    return (
+        "✅ **Planned résumé generated, validated, and attached**\n"
+        f"Application: `{app_text}`\n"
+        f"Package: `{package_dir}`\n"
+        "The selected plan was locked before generation. No application was submitted.",
+        pdf,
+    )
+
+
 def _validated_export_from_result(result: object) -> str | None:
     payload = next(
         (
@@ -504,52 +629,27 @@ def _secondary_research(
     job_url: str,
     intake_result: object,
 ) -> str | dict[str, Any]:
-    """Use the host's generic web search, then persist bounded, unverified leads."""
+    """Run Erga's unified role-aware discovery pipeline after successful intake."""
     subject = _research_subject(intake_result)
     if subject is None:
         return (
             "Secondary research skipped because source-derived company/role metadata "
             "was unavailable."
         )
-    company, role = subject
-    web_tool = os.getenv("ERGA_MCP_WEB_SEARCH_TOOL", _DEFAULT_WEB_SEARCH_TOOL_NAME).strip()
-    research_tool = os.getenv("ERGA_MCP_RESEARCH_TOOL", _DEFAULT_RESEARCH_TOOL_NAME).strip()
-    queries = (
-        f'"{company}" "{role}" internship interview experience site:reddit.com',
-        f'"{company}" engineering internship culture interview "{role}"',
-    )
-    searches: list[dict[str, str]] = []
-    errors: list[str] = []
-    for query in queries:
-        try:
-            search_result = ctx.dispatch_tool(web_tool, {"query": query, "limit": 5})
-        except Exception as error:
-            errors.append(f"{type(error).__name__}: {error}")
-            continue
-        error_text = _dispatch_error_text(search_result)
-        if error_text:
-            errors.append(error_text)
-            continue
-        searches.append({"query": query, "result": str(search_result)[:30_000]})
-    if not searches:
-        detail = "; ".join(errors) or "no search results"
-        return f"Secondary research unavailable from {web_tool}: {detail}"
+    research_tool = os.getenv(
+        "ERGA_MCP_DISCOVERY_RESEARCH_TOOL", _DEFAULT_DISCOVERY_RESEARCH_TOOL_NAME
+    ).strip()
     try:
-        recorded = ctx.dispatch_tool(
-            research_tool,
-            {"job_url": job_url, "searches": searches},
-        )
+        recorded = ctx.dispatch_tool(research_tool, {"job_url": job_url})
     except Exception as error:
-        return f"Secondary research could not be recorded: {type(error).__name__}: {error}"
+        return f"Role-aware research could not be completed: {type(error).__name__}: {error}"
     error_text = _dispatch_error_text(recorded)
     if error_text:
-        return f"Secondary research could not be recorded: {error_text}"
+        return f"Role-aware research could not be completed: {error_text}"
     return {
-        "recorded": str(recorded),
-        "search_results": [
-            {"query": item["query"], "result": item["result"][:6_000]} for item in searches
-        ],
-        "warnings": errors,
+        "discovery": str(recorded),
+        "company": subject[0],
+        "role": subject[1],
     }
 
 
@@ -714,15 +814,6 @@ def extract_job_url(message: str) -> str | None:
     for candidate in candidates:
         if _looks_like_job_url(candidate):
             return candidate
-    if _JOB_CONTEXT.search(message):
-        return next(
-            (
-                candidate
-                for candidate in candidates
-                if not urlsplit(candidate).path.casefold().endswith(_NON_PAGE_SUFFIXES)
-            ),
-            None,
-        )
     return None
 
 
@@ -731,6 +822,8 @@ def register(
     *,
     monotonic: Callable[[], float] | None = None,
     sleep: Callable[[float], None] | None = None,
+    background_runner: Callable[[Callable[[], None]], None] | None = None,
+    plan_delivery: Callable[[str, str, str | None], None] | None = None,
 ) -> None:
     """Register job-link routing and an explicit slash-command fallback."""
     _require_compatible_hermes()
@@ -746,12 +839,20 @@ def register(
     )
     monotonic_clock = monotonic or time.monotonic
     sleep_for = sleep or time.sleep
+    run_background = background_runner or _run_in_background
+    deliver_plan = plan_delivery or _deliver_discord_plan_result
     tool_name = os.getenv("ERGA_MCP_TOOL", _DEFAULT_TOOL_NAME).strip()
     monitor_tool = os.getenv("ERGA_MCP_MONITOR_TOOL", _DEFAULT_MONITOR_TOOL_NAME).strip()
     export_tool = os.getenv("ERGA_MCP_EXPORT_TOOL", _DEFAULT_EXPORT_TOOL_NAME).strip()
     tracker_tool = os.getenv("ERGA_MCP_TRACKER_TOOL", _DEFAULT_TRACKER_TOOL_NAME).strip()
+    research_navigator_tool = os.getenv(
+        "ERGA_MCP_RESEARCH_NAVIGATOR_TOOL", _DEFAULT_RESEARCH_NAVIGATOR_TOOL_NAME
+    ).strip()
     discovery_research_tool = os.getenv(
         "ERGA_MCP_DISCOVERY_RESEARCH_TOOL", _DEFAULT_DISCOVERY_RESEARCH_TOOL_NAME
+    ).strip()
+    research_brief_tool = os.getenv(
+        "ERGA_MCP_RESEARCH_BRIEF_TOOL", _DEFAULT_RESEARCH_BRIEF_TOOL_NAME
     ).strip()
     mail_sync_tool = os.getenv("ERGA_MCP_MAIL_SYNC_TOOL", _DEFAULT_MAIL_SYNC_TOOL_NAME).strip()
     git_research_tool = os.getenv(
@@ -773,6 +874,25 @@ def register(
     ).strip()
     git_skill_review_tool = os.getenv(
         "ERGA_MCP_GIT_SKILL_REVIEW_TOOL", _DEFAULT_GIT_SKILL_REVIEW_TOOL_NAME
+    ).strip()
+    project_catalogue_tool = os.getenv(
+        "ERGA_MCP_PROJECT_CATALOGUE_TOOL", _DEFAULT_PROJECT_CATALOGUE_TOOL_NAME
+    ).strip()
+    project_catalogue_refresh_tool = os.getenv(
+        "ERGA_MCP_PROJECT_CATALOGUE_REFRESH_TOOL",
+        _DEFAULT_PROJECT_CATALOGUE_REFRESH_TOOL_NAME,
+    ).strip()
+    tailoring_plan_create_tool = os.getenv(
+        "ERGA_MCP_TAILORING_PLAN_CREATE_TOOL",
+        _DEFAULT_TAILORING_PLAN_CREATE_TOOL_NAME,
+    ).strip()
+    tailoring_plan_update_tool = os.getenv(
+        "ERGA_MCP_TAILORING_PLAN_UPDATE_TOOL",
+        _DEFAULT_TAILORING_PLAN_UPDATE_TOOL_NAME,
+    ).strip()
+    tailoring_plan_execute_tool = os.getenv(
+        "ERGA_MCP_TAILORING_PLAN_EXECUTE_TOOL",
+        _DEFAULT_TAILORING_PLAN_EXECUTE_TOOL_NAME,
     ).strip()
     cron_tool = os.getenv("ERGA_MCP_CRON_TOOL", _DEFAULT_CRON_TOOL_NAME).strip()
     token_tool = os.getenv("ERGA_MCP_TOKEN_TOOL", _DEFAULT_TOKEN_TOOL_NAME).strip()
@@ -928,11 +1048,220 @@ def register(
             return None
         return f'{response_text.rstrip()}\n\n[[as_document]]\nMEDIA:"{pdf_path}"'
 
-    def intake_command(raw_args: str) -> str:
+    def tailoring_plan_payload(result: object) -> dict[str, Any] | None:
+        return next(
+            (
+                item
+                for item in _nested_objects(result)
+                if isinstance(item.get("id"), str)
+                and str(item["id"]).startswith("plan_")
+                and isinstance(item.get("questions"), list)
+                and isinstance(item.get("answers"), list)
+                and isinstance(item.get("status"), str)
+            ),
+            None,
+        )
+
+    def selected_plan_option(plan: dict[str, Any], question_id: str) -> dict[str, Any] | None:
+        answer = next(
+            (
+                item
+                for item in plan.get("answers", [])
+                if isinstance(item, dict) and item.get("question_id") == question_id
+            ),
+            None,
+        )
+        if not isinstance(answer, dict) or not isinstance(answer.get("option_id"), str):
+            return None
+        return next(
+            (
+                option
+                for question in plan.get("questions", [])
+                if isinstance(question, dict) and question.get("id") == question_id
+                for option in question.get("options", [])
+                if isinstance(option, dict) and option.get("id") == answer["option_id"]
+            ),
+            None,
+        )
+
+    def plan_action_button(
+        *,
+        label: str,
+        plan_id: str,
+        operation: str,
+        owner_user_id: str | None,
+        style: str = "secondary",
+        question_id: str = "",
+        option_id: str = "",
+    ) -> Any:
+        assert DiscordButton is not None
+        token = component_tokens.issue(
+            "tailoring.plan",
+            {
+                "plan_id": plan_id,
+                "operation": operation,
+                "question_id": question_id,
+                "option_id": option_id,
+            },
+            owner_user_id=owner_user_id,
+        )
+        return DiscordButton(
+            label=label[:80],
+            action_id="erga.plan.action",
+            payload=token,
+            style=style,
+        )
+
+    def tailoring_plan_response(result: object, *, owner_user_id: str | None = None) -> object:
+        error_text = _dispatch_error_text(result)
+        if error_text:
+            return f"Erga résumé planning failed: {error_text}"
+        plan = tailoring_plan_payload(result)
+        if plan is None:
+            return "Erga résumé planning failed: the plan tool returned no valid plan."
+        company = str(plan.get("company") or "Company")
+        role = str(plan.get("role") or "Role")
+        status = str(plan["status"])
+        plan_id = str(plan["id"])
+        if status == "cancelled":
+            return f"**Résumé plan cancelled**\n{company} — {role}\nNo résumé was generated."
+        if status == "completed":
+            return f"**Résumé plan complete**\n{company} — {role}"
+        current = plan.get("current_question")
+        if isinstance(current, dict):
+            questions = [item for item in plan["questions"] if isinstance(item, dict)]
+            position = next(
+                (
+                    index
+                    for index, question in enumerate(questions, start=1)
+                    if question.get("id") == current.get("id")
+                ),
+                len(plan.get("answers", [])) + 1,
+            )
+            lines = [
+                f"**Erga résumé plan · Question {position} of {len(questions)}**",
+                f"{company} — {role}",
+                "",
+                f"**{current.get('prompt', 'Choose an option')}**",
+            ]
+            buttons = []
+            for option in current.get("options", []):
+                if not isinstance(option, dict):
+                    continue
+                label = option.get("label")
+                option_id = option.get("id")
+                description = option.get("description")
+                if not all(isinstance(value, str) and value for value in (label, option_id)):
+                    continue
+                project_titles = option.get("project_titles")
+                projects = (
+                    f" Projects: {', '.join(str(item) for item in project_titles)}."
+                    if isinstance(project_titles, list) and project_titles
+                    else ""
+                )
+                lines.append(f"\n**{label}** — {description or ''}{projects}")
+                if supports_discord_buttons:
+                    buttons.append(
+                        plan_action_button(
+                            label=label,
+                            plan_id=plan_id,
+                            operation="answer",
+                            question_id=str(current.get("id") or ""),
+                            option_id=option_id,
+                            owner_user_id=owner_user_id,
+                            style="primary" if option.get("recommended") is True else "secondary",
+                        )
+                    )
+            lines.extend(
+                [
+                    "",
+                    "Planning is read-only: no application, résumé, or tracker entry exists yet.",
+                ]
+            )
+            if supports_discord_buttons:
+                if plan.get("answers"):
+                    buttons.append(
+                        plan_action_button(
+                            label="↩️ Back",
+                            plan_id=plan_id,
+                            operation="back",
+                            owner_user_id=owner_user_id,
+                        )
+                    )
+                buttons.append(
+                    plan_action_button(
+                        label="✖️ Cancel",
+                        plan_id=plan_id,
+                        operation="cancel",
+                        owner_user_id=owner_user_id,
+                        style="danger",
+                    )
+                )
+                assert DiscordCommandResponse is not None
+                return DiscordCommandResponse(
+                    text=_fit_discord_content("\n".join(lines)),
+                    buttons=tuple(buttons),
+                )
+            return "\n".join(lines)
+
+        portfolio = selected_plan_option(plan, "portfolio") or {}
+        copy_strategy = selected_plan_option(plan, "copy_strategy") or {}
+        titles = portfolio.get("project_titles")
+        project_text = (
+            ", ".join(str(item) for item in titles)
+            if isinstance(titles, list) and titles
+            else "Keep the strongest current approved projects"
+        )
+        lines = [
+            "**Erga résumé plan · Review before generation**",
+            f"{company} — {role}",
+            "",
+            f"**Projects:** {project_text}",
+            f"**Copy:** {copy_strategy.get('label', 'Approved evidence only')}",
+            f"**Catalogue considered:** {plan.get('catalogue_candidate_count', 0)} projects",
+            "",
+            "Generation will lock these decisions, validate the rendered PDF, and post the result "
+            "here. Nothing is submitted to an employer.",
+        ]
+        if not supports_discord_buttons:
+            lines.append("Run this command in Discord to approve or revise the plan.")
+            return "\n".join(lines)
+        assert DiscordCommandResponse is not None
+        return DiscordCommandResponse(
+            text=_fit_discord_content("\n".join(lines)),
+            buttons=(
+                plan_action_button(
+                    label="↩️ Back",
+                    plan_id=plan_id,
+                    operation="back",
+                    owner_user_id=owner_user_id,
+                ),
+                plan_action_button(
+                    label="✖️ Cancel",
+                    plan_id=plan_id,
+                    operation="cancel",
+                    owner_user_id=owner_user_id,
+                    style="danger",
+                ),
+                plan_action_button(
+                    label="🚀 Generate résumé",
+                    plan_id=plan_id,
+                    operation="generate",
+                    owner_user_id=owner_user_id,
+                    style="success",
+                ),
+            ),
+        )
+
+    def intake_command(raw_args: str) -> object:
         job_url = extract_job_url(raw_args)
         if job_url is None:
             return "Usage: /intake-job <job-posting-url>"
-        return dispatch(job_url)
+        try:
+            plan = ctx.dispatch_tool(tailoring_plan_create_tool, {"job_url": job_url})
+        except Exception as exc:
+            return f"Erga résumé planning failed: {exc}"
+        return tailoring_plan_response(plan)
 
     def setup_monitor_command(raw_args: str) -> str:
         raw_days = raw_args.strip()
@@ -1019,7 +1348,7 @@ def register(
             }
         )
 
-    def tracker_response(query: str, page: int) -> object:
+    def tracker_response(query: str, page: int, *, owner_user_id: str | None = None) -> object:
         try:
             tracker = ctx.dispatch_tool(
                 tracker_tool,
@@ -1045,14 +1374,7 @@ def register(
         message = str(payload["message"])
         resolved_page = payload.get("page")
         page_count = payload.get("page_count")
-        if (
-            not supports_discord_buttons
-            or not isinstance(resolved_page, int)
-            or isinstance(resolved_page, bool)
-            or not isinstance(page_count, int)
-            or isinstance(page_count, bool)
-            or page_count <= 1
-        ):
+        if not supports_discord_buttons:
             return message
         assert DiscordButton is not None
         assert DiscordCommandResponse is not None
@@ -1064,7 +1386,14 @@ def register(
             )
 
         buttons = []
-        if resolved_page > 1:
+        has_pagination = (
+            isinstance(resolved_page, int)
+            and not isinstance(resolved_page, bool)
+            and isinstance(page_count, int)
+            and not isinstance(page_count, bool)
+            and page_count > 1
+        )
+        if has_pagination and resolved_page > 1:
             buttons.append(
                 DiscordButton(
                     label="Previous",
@@ -1072,15 +1401,16 @@ def register(
                     payload=button_payload(resolved_page - 1),
                 )
             )
-        buttons.append(
-            DiscordButton(
-                label=f"Page {resolved_page}/{page_count}",
-                action_id="erga.tracker.page",
-                payload=button_payload(resolved_page),
-                disabled=True,
+        if has_pagination:
+            buttons.append(
+                DiscordButton(
+                    label=f"Page {resolved_page}/{page_count}",
+                    action_id="erga.tracker.page",
+                    payload=button_payload(resolved_page),
+                    disabled=True,
+                )
             )
-        )
-        if resolved_page < page_count:
+        if has_pagination and resolved_page < page_count:
             buttons.append(
                 DiscordButton(
                     label="Next",
@@ -1088,7 +1418,45 @@ def register(
                     payload=button_payload(resolved_page + 1),
                 )
             )
-        return DiscordCommandResponse(text=message, buttons=tuple(buttons))
+        entries = payload.get("entries")
+        if isinstance(entries, list):
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                research = entry.get("research")
+                source_url = entry.get("source_url")
+                company = entry.get("company")
+                if (
+                    not isinstance(research, dict)
+                    or research.get("eligible") is not True
+                    or not isinstance(source_url, str)
+                    or not source_url
+                    or not isinstance(company, str)
+                    or not company
+                ):
+                    continue
+                token = component_tokens.issue(
+                    "research.open",
+                    {
+                        "job_url": source_url,
+                        "query": query[:180],
+                        "page": resolved_page if isinstance(resolved_page, int) else page,
+                    },
+                    owner_user_id=owner_user_id,
+                )
+                buttons.append(
+                    DiscordButton(
+                        label=f"Research · {company}"[:80],
+                        action_id="erga.card.action",
+                        payload=token,
+                        style="primary",
+                    )
+                )
+                if len(buttons) == 25:
+                    break
+        if not buttons:
+            return message
+        return DiscordCommandResponse(text=_fit_discord_content(message), buttons=tuple(buttons))
 
     def tracker_command(raw_args: str) -> object:
         arguments = raw_args.strip()
@@ -1132,13 +1500,19 @@ def register(
             or page < 1
         ):
             return "Erga tracker failed: invalid pagination state. Run /erga-tracker again."
-        return tracker_response(query, page)
+        owner_user_id = getattr(interaction, "user_id", None)
+        return tracker_response(
+            query,
+            page,
+            owner_user_id=str(owner_user_id) if owner_user_id is not None else None,
+        )
 
     def card_response(
         result: object,
         *,
         owner_user_id: str | None = None,
         view_state: dict[str, Any] | None = None,
+        include_buttons: bool = True,
     ) -> object:
         error_text = _dispatch_error_text(result)
         if error_text:
@@ -1146,8 +1520,12 @@ def register(
         card = _shared_card_payload(result)
         if card is None:
             return "Erga card failed: the MCP tool returned no shared card."
-        rendered = _render_shared_card_text(card)
-        if not supports_discord_buttons:
+        buttons_enabled = supports_discord_buttons and include_buttons
+        rendered = _render_shared_card_text(
+            card,
+            include_action_instructions=not buttons_enabled,
+        )
+        if not buttons_enabled:
             return rendered
         assert DiscordButton is not None
         assert DiscordCommandResponse is not None
@@ -1167,6 +1545,10 @@ def register(
                 payload["page"] = page + 1
             elif action_id == "git.review.previous" and isinstance(page, int):
                 payload["page"] = page - 1
+            elif action_id == "project.catalogue.next" and isinstance(page, int):
+                payload["page"] = page + 1
+            elif action_id == "project.catalogue.previous" and isinstance(page, int):
+                payload["page"] = page - 1
             elif action_id.startswith("git.group.approve:"):
                 payload["skill"] = action_id.partition(":")[2]
             elif action_id.startswith("git.group.skip:"):
@@ -1181,7 +1563,14 @@ def register(
                 "onboarding.resume.help",
                 "git.scan",
                 "git.review",
+                "project.catalogue.open",
+                "project.catalogue.refresh",
+                "project.catalogue.next",
+                "project.catalogue.previous",
                 "tracker.show",
+                "research.refresh",
+                "research.brief",
+                "research.back",
             }:
                 # Actions requiring user input remain truthful command instructions in text.
                 continue
@@ -1202,7 +1591,55 @@ def register(
             )
             if len(buttons) == 25:
                 break
-        return DiscordCommandResponse(text=rendered, buttons=tuple(buttons))
+        return DiscordCommandResponse(text=_fit_discord_content(rendered), buttons=tuple(buttons))
+
+    def research_navigator_response(
+        job_url: str,
+        *,
+        owner_user_id: str | None = None,
+        tracker_query: str = "",
+        tracker_page: int = 1,
+        include_buttons: bool = True,
+    ) -> object:
+        try:
+            result = ctx.dispatch_tool(research_navigator_tool, {"job_url": job_url})
+        except Exception as exc:
+            return f"Erga research navigator failed: {exc}"
+        error_text = _dispatch_error_text(result)
+        if error_text:
+            return f"Erga research navigator failed: {error_text}"
+        payload = next(
+            (
+                item
+                for item in _nested_objects(result)
+                if isinstance(item.get("job_url"), str)
+                and isinstance(item.get("stage"), str)
+                and isinstance(item.get("card"), dict)
+            ),
+            None,
+        )
+        if payload is None:
+            return "Erga research navigator failed: the MCP tool returned no role view."
+        company = payload.get("company")
+        role = payload.get("role")
+        research_query = payload.get("research_query")
+        if not isinstance(research_query, str) or not research_query:
+            research_query = " ".join(
+                value for value in (company, role) if isinstance(value, str) and value
+            )
+        return card_response(
+            result,
+            owner_user_id=owner_user_id,
+            include_buttons=include_buttons,
+            view_state={
+                "view": "research",
+                "job_url": str(payload["job_url"]),
+                "stage": str(payload["stage"]),
+                "research_query": research_query,
+                "tracker_query": tracker_query,
+                "tracker_page": tracker_page,
+            },
+        )
 
     def onboarding_status_response(*, owner_user_id: str | None = None) -> object:
         try:
@@ -1287,16 +1724,54 @@ def register(
             view_state={"view": "git", "page": page, "source_filter": source_filter},
         )
 
+    def project_catalogue_response(
+        *,
+        page: int = 1,
+        query: str = "",
+        refresh: bool = False,
+        owner_user_id: str | None = None,
+    ) -> object:
+        tool = project_catalogue_refresh_tool if refresh else project_catalogue_tool
+        try:
+            result = ctx.dispatch_tool(
+                tool,
+                {"page": page, "page_size": 4, "query": query},
+            )
+        except Exception as exc:
+            return f"Erga project catalogue failed: {exc}"
+        return card_response(
+            result,
+            owner_user_id=owner_user_id,
+            view_state={"view": "projects", "page": page, "query": query},
+        )
+
     def git_skill_command(raw_args: str) -> object:
         try:
             arguments = shlex.split(raw_args)
         except ValueError:
             return (
-                "Usage: /erga-git [scan [local-root ...] | review "
+                "Usage: /erga-git [scan [local-root ...] | projects [search] [page N] | review "
                 "[confirmed|unconfirmed|discovered] [page N]]"
             )
         if arguments and arguments[0].casefold() == "scan":
             return git_scan_response(arguments[1:])
+        if arguments and arguments[0].casefold() == "projects":
+            project_arguments = arguments[1:]
+            project_page = 1
+            if len(project_arguments) >= 2 and project_arguments[-2].casefold() == "page":
+                try:
+                    project_page = int(project_arguments[-1])
+                except ValueError:
+                    return "Usage: /erga-git projects [search terms] [page N]"
+                project_arguments = project_arguments[:-2]
+            if project_page < 1:
+                return "Usage: /erga-git projects [search terms] [page N]"
+            if len(project_arguments) == 1 and project_arguments[0].casefold() in {"all", "*"}:
+                project_arguments = []
+            return project_catalogue_response(
+                page=project_page,
+                query=" ".join(project_arguments),
+            )
         if arguments and arguments[0].casefold() == "review":
             arguments = arguments[1:]
         page = 1
@@ -1317,18 +1792,19 @@ def register(
                     page = int(arguments[index + 1])
                 except ValueError:
                     return (
-                        "Usage: /erga-git [scan [local-root ...] | review "
+                        "Usage: /erga-git [scan [local-root ...] | "
+                        "projects [search] [page N] | review "
                         "[confirmed|unconfirmed|discovered] [page N]]"
                     )
                 index += 2
             else:
                 return (
-                    "Usage: /erga-git [scan [local-root ...] | review "
+                    "Usage: /erga-git [scan [local-root ...] | projects [search] [page N] | review "
                     "[confirmed|unconfirmed|discovered] [page N]]"
                 )
         if page < 1:
             return (
-                "Usage: /erga-git [scan [local-root ...] | review "
+                "Usage: /erga-git [scan [local-root ...] | projects [search] [page N] | review "
                 "[confirmed|unconfirmed|discovered] [page N]]"
             )
         return git_skill_response(page=page, source_filter=source_filter)
@@ -1398,7 +1874,115 @@ def register(
                 return git_scan_response([], owner_user_id=user_id)
             return settings_status_response(owner_user_id=user_id)
         if action == "tracker.show":
-            return tracker_response("", 1)
+            return tracker_response("", 1, owner_user_id=user_id)
+        if action == "research.open":
+            job_url = payload.get("job_url")
+            if not isinstance(job_url, str) or not job_url:
+                return "Erga research navigator failed: invalid role state."
+            return research_navigator_response(
+                job_url,
+                owner_user_id=user_id,
+                tracker_query=str(payload.get("query", "")),
+                tracker_page=int(payload.get("page", 1)),
+            )
+        if action in {"research.refresh", "research.brief", "research.back"}:
+            job_url = payload.get("job_url")
+            tracker_query = str(payload.get("tracker_query", ""))
+            tracker_page = int(payload.get("tracker_page", 1))
+            if action == "research.back":
+                return tracker_response(
+                    tracker_query,
+                    tracker_page,
+                    owner_user_id=user_id,
+                )
+            if not isinstance(job_url, str) or not job_url:
+                return "Erga research navigator failed: invalid role state."
+            research_query = payload.get("research_query")
+            stage = payload.get("stage")
+            if action == "research.refresh" and (
+                not isinstance(research_query, str) or not research_query
+            ):
+                return "Erga research refresh failed: invalid role state."
+            if action == "research.brief" and (not isinstance(stage, str) or not stage):
+                return "Erga research brief failed: invalid stage state."
+            channel_id = str(getattr(interaction, "channel_id", "") or "")
+            if re.fullmatch(r"\d+", channel_id) is None:
+                return "Erga research action failed: invalid Discord channel state."
+
+            def execute_and_deliver_research() -> None:
+                completion: str
+                try:
+                    if action == "research.refresh":
+                        result = ctx.dispatch_tool(
+                            discovery_research_tool,
+                            {"query": research_query, "job_url": job_url},
+                        )
+                        failure_prefix = "Erga research refresh failed"
+                        success_title = "✅ **Sources refreshed**"
+                    else:
+                        result = ctx.dispatch_tool(
+                            research_brief_tool,
+                            {"job_url": job_url, "stage": stage},
+                        )
+                        failure_prefix = "Erga research brief failed"
+                        success_title = f"✅ **{str(stage).upper()} brief created**"
+                except Exception as exc:
+                    completion = f"❌ Erga research action failed: {exc}"
+                else:
+                    error_text = _dispatch_error_text(result)
+                    if error_text:
+                        completion = f"❌ {failure_prefix}: {error_text}"
+                    else:
+                        refreshed_view = research_navigator_response(
+                            job_url,
+                            tracker_query=tracker_query,
+                            tracker_page=tracker_page,
+                            include_buttons=False,
+                        )
+                        completion = (
+                            f"{success_title}\n\n{refreshed_view}\n\n"
+                            "Run `/erga-tracker` to reopen the interactive controls."
+                        )
+                _deliver_plan_with_retries(
+                    deliver_plan,
+                    channel_id=channel_id,
+                    message=_fit_discord_content(completion),
+                    pdf=None,
+                    sleep=sleep_for,
+                )
+
+            run_background(execute_and_deliver_research)
+            if supports_discord_buttons:
+                assert DiscordCommandResponse is not None
+                if action == "research.refresh":
+                    return DiscordCommandResponse(
+                        text=(
+                            "⏳ **Research refresh started**\n"
+                            "Erga will post the updated sources here when the bounded search "
+                            "finishes."
+                        ),
+                        buttons=(),
+                    )
+                return DiscordCommandResponse(
+                    text=(
+                        f"⏳ **{str(stage).upper()} brief started**\n"
+                        "Erga will post the completed brief here."
+                    ),
+                    buttons=(),
+                )
+            return "Research action started. Erga will post the result here."
+        if action in {
+            "project.catalogue.open",
+            "project.catalogue.next",
+            "project.catalogue.previous",
+            "project.catalogue.refresh",
+        }:
+            return project_catalogue_response(
+                page=(1 if action == "project.catalogue.open" else int(payload.get("page", 1))),
+                query=("" if action == "project.catalogue.open" else str(payload.get("query", ""))),
+                refresh=action == "project.catalogue.refresh",
+                owner_user_id=user_id,
+            )
         if action == "git.review" or action in {"git.review.next", "git.review.previous"}:
             return git_skill_response(
                 page=int(payload.get("page", 1)),
@@ -1432,6 +2016,71 @@ def register(
                 owner_user_id=user_id,
             )
         return "This control is no longer supported. Run the command again."
+
+    def tailoring_plan_button(interaction: Any) -> object:
+        try:
+            action, payload = component_tokens.consume(
+                interaction.payload,
+                user_id=str(interaction.user_id),
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            return str(exc)
+        if action != "tailoring.plan":
+            return "This résumé-plan control is no longer supported."
+        plan_id = payload.get("plan_id")
+        operation = payload.get("operation")
+        if not isinstance(plan_id, str) or not isinstance(operation, str):
+            return "Erga résumé planning failed: invalid control state."
+        user_id = str(interaction.user_id)
+        if operation == "generate":
+            channel_id = str(getattr(interaction, "channel_id", "") or "")
+
+            def execute_and_deliver() -> None:
+                try:
+                    result = ctx.dispatch_tool(
+                        tailoring_plan_execute_tool,
+                        {"plan_id": plan_id},
+                    )
+                except Exception as exc:
+                    message = f"❌ Erga résumé generation failed: {exc}"
+                    pdf = None
+                else:
+                    error_text = _dispatch_error_text(result)
+                    if error_text:
+                        message = f"❌ Erga résumé generation failed: {error_text}"
+                        pdf = None
+                    else:
+                        message, pdf = _planned_resume_delivery(result)
+                _deliver_plan_with_retries(
+                    deliver_plan,
+                    channel_id=channel_id,
+                    message=message,
+                    pdf=pdf,
+                    sleep=sleep_for,
+                )
+
+            run_background(execute_and_deliver)
+            if supports_discord_buttons:
+                assert DiscordCommandResponse is not None
+                return DiscordCommandResponse(
+                    text=(
+                        "⏳ **Generation started**\n"
+                        "Erga is using the approved plan and will post the validated PDF here."
+                    ),
+                    buttons=(),
+                )
+            return "Generation started. Erga will post the validated result here."
+        arguments = {
+            "plan_id": plan_id,
+            "operation": operation,
+            "question_id": str(payload.get("question_id") or ""),
+            "option_id": str(payload.get("option_id") or ""),
+        }
+        try:
+            result = ctx.dispatch_tool(tailoring_plan_update_tool, arguments)
+        except Exception as exc:
+            return f"Erga résumé planning failed: {exc}"
+        return tailoring_plan_response(result, owner_user_id=user_id)
 
     def discovery_research_command(raw_args: str) -> str:
         query = raw_args.strip()
@@ -1630,7 +2279,7 @@ def register(
             assert DiscordButton is not None
             assert DiscordCommandResponse is not None
             return DiscordCommandResponse(
-                text=review_text,
+                text=_fit_discord_content(review_text),
                 buttons=(
                     DiscordButton(label="Back", action_id="erga.review.back", payload=draft_id),
                     DiscordButton(label="Skip", action_id="erga.review.skip", payload=draft_id),
@@ -1648,6 +2297,7 @@ def register(
     if supports_discord_buttons:
         ctx.register_discord_button_handler("erga.tracker.page", tracker_page_button)
         ctx.register_discord_button_handler("erga.card.action", card_action_button)
+        ctx.register_discord_button_handler("erga.plan.action", tailoring_plan_button)
         for action in ("back", "skip", "save", "next"):
             ctx.register_discord_button_handler(
                 f"erga.review.{action}",
@@ -1709,8 +2359,11 @@ def register(
     ctx.register_command(
         "erga-git",
         handler=git_skill_command,
-        description="Scan configured Git projects and review corroborated skills in one UI.",
-        args_hint="[scan [local-root ...]|review [confirmed|unconfirmed|discovered] [page N]]",
+        description="Browse projects, scan Git, and review corroborated skills in one UI.",
+        args_hint=(
+            "[projects [search] [page N]|scan [local-root ...]|"
+            "review [confirmed|unconfirmed|discovered] [page N]]"
+        ),
     )
     ctx.register_command(
         "erga-research",

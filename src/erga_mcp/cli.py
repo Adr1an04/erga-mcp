@@ -45,6 +45,7 @@ from .git_skills import (
     build_git_skill_review_card,
     reconcile_git_skill_groups,
 )
+from .github_projects import discover_github_projects
 from .host_connections import (
     SUPPORTED_HOSTS,
     HostName,
@@ -68,6 +69,7 @@ from .models import Application
 from .onboarding_view import build_onboarding_card
 from .portfolio_roots import update_portfolio_roots
 from .private_files import restrict_private_file
+from .project_catalogue import build_project_catalogue
 from .reporting import render_history_digest
 from .resume import (
     create_job_package,
@@ -331,6 +333,19 @@ def _parser() -> argparse.ArgumentParser:
         git_skill_action = git_skill_commands.add_parser(action)
         _config_argument(git_skill_action)
         git_skill_action.add_argument("skill")
+    git_projects = git_commands.add_parser(
+        "projects", help="browse the approved and GitHub-discovered project catalogue"
+    )
+    _config_argument(git_projects)
+    git_projects.add_argument("--page", type=int, default=1)
+    git_projects.add_argument("--page-size", type=int, default=6)
+    git_projects.add_argument("--query", default="")
+    git_projects.add_argument(
+        "--refresh",
+        action="store_true",
+        help="refresh the private GitHub project cache before rendering",
+    )
+    git_projects.add_argument("--json", action="store_true")
 
     obsidian = subcommands.add_parser("obsidian", help="import configured Obsidian evidence")
     obsidian_commands = obsidian.add_subparsers(dest="obsidian_command", required=True)
@@ -974,6 +989,24 @@ def main(arguments: Sequence[str] | None = None) -> int:
         _print_json(store.token_usage_summary(application_id=args.application_id))
         return 0
     if args.command == "git":
+        if args.git_command == "projects":
+            config = load_config(args.config)
+            if args.refresh:
+                discover_github_projects(
+                    cache_path=config.data_dir / "github-project-catalogue.json"
+                )
+            catalogue = build_project_catalogue(
+                config,
+                store,
+                page=args.page,
+                page_size=args.page_size,
+                query=args.query,
+            )
+            if args.json:
+                _print_json(catalogue.as_dict())
+            else:
+                print(catalogue.card.as_text())
+            return 0
         if args.git_command == "skills":
             action = args.git_skill_command
             if action == "show":

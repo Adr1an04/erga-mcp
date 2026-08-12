@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from itertools import combinations
 from pathlib import Path
 from typing import Any, Protocol
 
 from mcp.types import SamplingMessage, TextContent, Tool, ToolChoice, ToolUseContent
 
+from .bullet_quality import (
+    build_project_identity_profile,
+    bullet_semantic_overlap,
+    portfolio_quality_report,
+)
 from .models import Evidence
 from .project_inventory import (
     ProjectCandidate,
@@ -86,6 +92,7 @@ class AIProjectTailoring:
     candidates: tuple[ProjectCandidate, ...]
     model: str
     evidence_ids: tuple[str, ...]
+    quality_report: dict[str, object] = field(default_factory=dict)
 
 
 def _normalized_number(value: str) -> str:
@@ -542,6 +549,19 @@ def _validate_submission(
             "the tailoring model must preserve the required project selection: "
             + ", ".join(required_project_ids)
         )
+    submitted_bullets = tuple(
+        (candidate.id, latex_to_text(bullet))
+        for candidate in drafted
+        for bullet in resume_item_texts(candidate.latex)
+    )
+    for (left_project, left), (right_project, right) in combinations(submitted_bullets, 2):
+        overlap = bullet_semantic_overlap(left, right)
+        if overlap >= 70:
+            raise ValueError(
+                "AI-authored bullets are semantically interchangeable "
+                f"({overlap}% overlap across {left_project} and {right_project}); "
+                "use project-specific engineering details and a different supported metric story"
+            )
     return tuple(drafted)
 
 
@@ -563,6 +583,7 @@ async def draft_evidence_backed_projects(
     require_unique_lead_verbs: bool,
     retry_feedback: str = "",
     required_project_ids: tuple[str, ...] = (),
+    tailoring_emphasis: str = "balanced",
 ) -> AIProjectTailoring:
     """Ask the connected MCP client's model for bounded, evidence-cited project bullets."""
     resolved_minimum_bullets = (
@@ -641,6 +662,7 @@ async def draft_evidence_backed_projects(
             and context.get("status") == "verified"
         ]
         rationale = rationales.get(candidate.id)
+        identity_profile = build_project_identity_profile(candidate)
         contexts.append(
             {
                 "project_id": candidate.id,
@@ -650,6 +672,13 @@ async def draft_evidence_backed_projects(
                 "relevance_rank": relevance_rank[candidate.id],
                 "matched_role_terms": list(rationale.matched_terms) if rationale else [],
                 "matched_role_signals": list(rationale.matched_signals) if rationale else [],
+                "identity_profile": identity_profile.as_dict(),
+                "portfolio_differentiators": (list(rationale.differentiators) if rationale else []),
+                "selection_quality_score": rationale.quality_score if rationale else 0,
+                "selection_differentiation_score": (
+                    rationale.differentiation_score if rationale else 100
+                ),
+                "selection_score": rationale.selection_score if rationale else 0,
                 "git_engineering_signals": git_engineering_signals,
                 "supported_quantitative_tokens": sorted(quantitative_tokens),
                 "minimum_required_quantified_bullets": minimum_required_quantified_bullets,
@@ -687,6 +716,17 @@ async def draft_evidence_backed_projects(
         "maximum_bullets_per_project": bullets_per_project,
         "master_project_quantitative_coverage_percent": master_quantitative_coverage,
         "required_quantified_bullets_per_project_at_minimum": (minimum_required_quantified_bullets),
+        "preferred_metric_categories": [
+            "adoption",
+            "performance",
+            "scale",
+            "reliability",
+            "organizational scope",
+            "delivery",
+            "competition",
+            "functional scope",
+        ],
+        "tailoring_emphasis": tailoring_emphasis,
         "bullet_character_preferences": {
             "minimum_soft": bullet_min_chars,
             "target": bullet_target_chars,
@@ -736,8 +776,12 @@ async def draft_evidence_backed_projects(
         "Commit, pull-request, implementation-file, source-file, test-file, language, and line "
         "counts are activity accounting, not resume outcomes; never use them to satisfy the metric "
         "requirement or include them in a bullet. Use different supported quantitative facts "
-        "across bullets when possible. Prefer required role "
-        "terms, matched role signals, and complementary engineering depth when selecting projects. "
+        "and metric categories across bullets when the evidence allows. Apply a name-swap test: "
+        "if a bullet could be moved to another selected project unchanged, rewrite it with the "
+        "project's differentiating implementation, system layer, or outcome. "
+        "Apply the requested tailoring_emphasis only when the cited evidence supports it. "
+        "Prefer required role terms, matched role signals, and complementary engineering depth "
+        "when selecting projects. "
         "Use relevance_rank and matched role signals to compare projects. Do not mention commits, "
         "diffs, file counts, line counts, evidence, Git, or the tailoring process. "
         "When allowed_lead_verbs is non-empty, begin every bullet with a different verb from that "
@@ -812,4 +856,5 @@ async def draft_evidence_backed_projects(
                 evidence_id for candidate in drafted for evidence_id in candidate.evidence_ids
             )
         ),
+        quality_report=portfolio_quality_report(drafted).as_dict(),
     )

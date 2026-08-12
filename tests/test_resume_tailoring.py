@@ -16,7 +16,10 @@ from erga_mcp.project_inventory import ProjectCandidate
 from erga_mcp.resume import validate_single_line_resume_items
 from erga_mcp.resume_tailoring import (
     TAILORING_VERSION,
+    _adapt_project_heading_structure,
     _compact_generated_entry_section,
+    _infer_project_heading_contract,
+    _project_heading_contract_issues,
     _record_lead_verb_rewrites,
     _relevance,
     _separate_legacy_project_technology_stacks,
@@ -130,6 +133,51 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
         )
         self.assertEqual(_separate_legacy_project_technology_stacks(upgraded), upgraded)
 
+    def test_project_heading_contract_preserves_template_argument_semantics(self) -> None:
+        candidate = (
+            r"\resumeProjectHeading{\textbf{Candidate} $|$ \textit{Python, CUDA}}{}"
+            "\n\\resumeItemListStart\n"
+            r"\resumeItem{Built a verified system.}"
+            "\n\\resumeItemListEnd\n"
+        )
+        fixtures = (
+            (
+                r"\resumeProjectHeading{\textbf{Template} $|$ \textit{Rust}}{}"
+                "\n\\resumeItemListStart\n\\resumeItem{Template bullet.}\n"
+                r"\resumeItemListEnd",
+                r"\resumeProjectHeading{\textbf{Candidate} $|$ \textit{Python, CUDA}}{}",
+            ),
+            (
+                r"\resumeProjectHeading{\textbf{Template}}{\textit{Rust}}{Summer 2027}"
+                "\n\\resumeItemListStart\n\\resumeItem{Template bullet.}\n"
+                r"\resumeItemListEnd",
+                r"\resumeProjectHeading{\textbf{Candidate}}{\textit{Python, CUDA}}{}",
+            ),
+            (
+                r"\resumeProjectHeading{\textbf{Template}}{\textit{Rust, CUDA}}"
+                "\n\\resumeItemListStart\n\\resumeItem{Template bullet.}\n"
+                r"\resumeItemListEnd",
+                r"\resumeProjectHeading{\textbf{Candidate}}{\textit{Python, CUDA}}",
+            ),
+            (
+                r"\resumeProjectHeading{\textbf{Template}}{}"
+                "\n\\resumeItemListStart\n\\resumeItem{Template bullet.}\n"
+                r"\resumeItemListEnd",
+                r"\resumeProjectHeading{\textbf{Candidate}}{}",
+            ),
+        )
+
+        for template, expected_heading in fixtures:
+            with self.subTest(expected_heading=expected_heading):
+                contract = _infer_project_heading_contract(template)
+                adapted = _adapt_project_heading_structure(candidate, contract)
+                self.assertIn(expected_heading, adapted)
+                self.assertEqual(_project_heading_contract_issues(template, adapted), ())
+
+        inline_template = fixtures[0][0]
+        structured = fixtures[1][1] + "\n\\resumeItem{Candidate bullet.}"
+        self.assertTrue(_project_heading_contract_issues(inline_template, structured))
+
     def test_entry_bullet_pattern_ignores_structural_category_headings(self) -> None:
         section = r"""
 \section{Projects}
@@ -191,7 +239,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 28)
+        self.assertEqual(TAILORING_VERSION, 30)
 
     def test_semantic_layout_gate_rejects_flattened_generated_resume(self) -> None:
         flattened = r"""
@@ -533,8 +581,20 @@ Synthetic University
             self.assertIn("Embedded Controller", proposed)
             self.assertNotIn("Design Site", proposed)
             self.assertNotIn("Stream Engine", proposed)
+            self.assertIn(
+                r"\resumeProjectHeading{\textbf{Embedded Controller} $|$ \textit{C++, MCU}}{}",
+                proposed,
+            )
+            self.assertNotIn(
+                r"\resumeProjectHeading{\textbf{Embedded Controller}}{\textit{C++, MCU}}{}",
+                proposed,
+            )
             report = json.loads(result.proposal.claim_report_path.read_text(encoding="utf-8"))
             self.assertEqual(report["project_selection"]["selected_ids"], ["embedded-controller"])
+            self.assertEqual(
+                report["project_selection"]["heading_contract"],
+                {"argument_count": 2, "mode": "inline", "validated": True},
+            )
             self.assertEqual(result.changed_sections, ("Projects",))
 
     def test_selected_inventory_project_preserves_matching_master_block_formatting(self) -> None:
@@ -851,6 +911,14 @@ Synthetic University
             self.assertEqual(result.project_selection["selected_ids"], ["api-platform"])
             self.assertIn("Engineered a Python API platform", proposed)
             self.assertNotIn("Engineered a responsive website", proposed)
+            report = json.loads(result.proposal.claim_report_path.read_text(encoding="utf-8"))
+            selection = report["project_selection"]
+            self.assertEqual(selection["strategy"], "contrastive_project_identity_v1")
+            self.assertIn("portfolio_quality", selection)
+            self.assertIn("average_quality_score", selection["portfolio_quality"])
+            self.assertIn("quality_score", selection["selected"][0])
+            self.assertIn("differentiation_score", selection["selected"][0])
+            self.assertIn("metric_categories", selection["selected"][0])
 
     def test_duplicate_award_lead_verbs_use_an_award_specific_replacement(self) -> None:
         with TemporaryDirectory() as directory:

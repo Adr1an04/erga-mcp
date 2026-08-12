@@ -188,6 +188,10 @@ uv run erga git skills show --json
 uv run erga git skills show --filter seeded_and_confirmed
 uv run erga git skills approve fastapi
 uv run erga git skills skip react
+uv run erga git projects
+uv run erga git projects --query python --page 2
+# Explicitly refresh the private GitHub metadata cache, then browse it.
+uv run erga git projects --refresh
 ```
 
 Skill inventory entries are self-reported discovery hints. They improve audited alias matching,
@@ -217,7 +221,8 @@ to the connected GitHub identity and inspects all fetched refs. When the MCP cli
 sampling, its connected model receives bounded approved bullets plus authenticated diff evidence
 and returns structured, role-specific project bullets with evidence IDs. Server-side validation
 rejects unsupported numbers, cross-project citations, raw commit/file/line accounting, duplicate
-lead verbs, unsafe LaTeX, one- or two-word final bullet lines, and one-page PDFs whose text occupies
+lead verbs, semantically interchangeable bullets that merely change the opening verb, unsafe LaTeX,
+one- or two-word final bullet lines, and one-page PDFs whose text occupies
 less than the configured page-height ratio (82% by default). Lead-verb uniqueness is required even for older
 configs that contain the former `false` default. Project bullet count is automatic rather than a
 setup choice: the model produces one bounded pool of up to four evidence-backed bullets per project,
@@ -225,6 +230,24 @@ then local PDF trials begin with one bullet per project and add every supported 
 fits cleanly without creating a second page. Balanced multi-line bullets are allowed; candidates
 that strand only one or two words on the final line are replaced from approved evidence before
 publication.
+
+Project ranking is contrastive rather than raw keyword overlap. Each eligible project gets an
+identity profile from approved copy: technologies, engineering narratives, evidence tier, supported
+metric categories, and bullet-quality score. Selection combines role relevance (40%), approved-copy
+quality (30%), differentiation from projects already selected (20%), and provenance strength (10%),
+with a small bonus for uncovered role signals. Metric categories include adoption, performance,
+scale, reliability, organizational scope, delivery, competition, and functional scope. Git commit,
+file, language, and line counts remain Tier C activity accounting: useful research context, never a
+résumé outcome. The claim report records the profiles, pairwise differentiation, repeated metric
+stories, and exact selection rationale so a reviewer can see why every project won.
+
+Project insertion is also template-contract driven. Before replacing any project, Erga inspects
+real project entries in the supplied template and deterministically classifies their heading shape:
+inline `Project | Technologies`, structured three-argument, intentional right-column technologies,
+or title-only. Every selected inventory block is rewritten to that observed argument contract, and
+generation stops before compilation if the resulting headings deviate. This check is independent of
+the tailoring model and avoids imposing one user's LaTeX macro semantics on another user's résumé.
+
 PDF/DOCX-derived templates use the same agent-independent render search across semantic experience,
 project, open-source, and skills groups. Layout-preserving PDF extraction keeps wrapped source
 bullets attached to their headings, and a binary render search retains the fullest valid one-page
@@ -331,9 +354,17 @@ The recommended `career` MCP profile includes:
 | `list_applications` | Read local application records |
 | `update_application_status` | Set an application to draft, applied, OA, assessment, interview, offer, rejected, or withdrawn in the private local database |
 | `application_tracker` | Render the optional configured Obsidian tracker as a compact, read-only message card |
+| `research_navigator` | Open a stage-aware, read-only OA/interview/offer view with saved research and public links |
+| `discover_job_research` | Review a multi-query official/program/engineering/process/OA/community/technical source plan, retain role-relevant results with quality and recency evidence, save a cited note plus JSON audit index, and discover public recruiter leads; never sends outreach |
+| `create_research_brief` | Create or refresh a concise local OA, interview, or offer preparation checklist |
 | `onboarding_status` | Render the shared onboarding completion card without changing state |
 | `erga_settings_card` | Render a redacted local settings dashboard without credentials or secret paths |
 | `git_skill_review_card` | Paginate self-reported, Git-confirmed, and Git-discovered skill groups without approving them |
+| `project_catalogue` | Search and paginate approved-inventory and cached GitHub projects with repository links, technologies/tags, local Git activity, evidence coverage, and truthful résumé eligibility |
+| `refresh_project_catalogue` | Refresh the private GitHub metadata cache through the already-authorized GitHub CLI, then return the same catalogue; never approves evidence or changes a résumé |
+| `create_tailoring_plan` | Fetch one official posting and persist review-only project/copy choices without creating an application, résumé, package, or tracker entry |
+| `update_tailoring_plan` | Show, answer, revise, approve, or cancel a persisted tailoring plan without generation |
+| `execute_tailoring_plan` | Run validated intake only after explicit plan approval, using the saved posting and locked project/copy decisions |
 | `update_skill_inventory` | Explicitly set/add/check/uncheck/remove self-reported discovery hints; never creates evidence |
 | `manage_portfolio_roots` | Explicitly set/add/list/remove existing local roots; never performs an implicit home crawl |
 | `review_git_skill_group` | Inspect, skip, restore, or explicitly approve a Git-corroborated group |
@@ -361,6 +392,17 @@ With the optional `erga-mcp-router` Hermes plugin enabled, `/erga-onboard`, `/er
 `/erga-git`, and `/erga-tracker` render the same shared local cards directly in the current chat.
 Discord receives compact, allowlist-protected controls with opaque single-use state and a 15-minute
 expiry; text-only clients receive the same action instructions instead of false button success.
+In Discord, `/intake-job <job-posting-url>` starts a persisted résumé plan instead of immediately
+generating. One emoji-button question compares up to three evidence-backed project portfolios; a
+second chooses evidence-backed synthesis or preservation of approved master copy. The review screen
+locks those choices, and only **🚀 Generate résumé** creates the local application/package and runs
+PDF validation. Planning is deterministic and model-free, reuses its saved official posting during
+generation, and creates no application, résumé, package, or tracker entry by itself. Generation runs
+in the background and posts the validated PDF to the Discord channel where the user approved it.
+The completion path requires the validated PDF to exist inside the package, forces native-document
+delivery, and retries the whole message-plus-attachment operation three times; it never emits a
+green completion for a missing attachment.
+Sending a plain job URL outside `/intake-job` preserves the existing direct-intake behavior.
 `/erga-settings` marks incomplete stages as **Needs setup** and provides mobile-friendly actions:
 explicit audited skills can be imported from approved evidence in one tap, a conventional projects
 folder can be added in one tap when safely detected without crawling the home directory, and manual
@@ -372,11 +414,19 @@ error. Choosing the detected-folder action from the Git view configures that exp
 continues the original scan immediately.
 `/erga-tracker all page 2` and searches such as
 `/erga-tracker applied page 2` work on text-only platforms too. Each available company links to its
-saved posting. `/erga-git` is the only Discord Git entry point: its **Scan Git projects** control,
+saved posting. Once a role reaches OA, interview, or offer, Discord adds a **Research · Company**
+control. It opens the official posting, deduplicated public links, saved-research inventory,
+résumé/package context, next action, and stage-specific preparation guidance. Community and
+secondary sources stay visibly unverified; explicit controls can refresh bounded public research
+or create the concise local stage brief. `/erga-git` is the only Discord Git entry point: its
+**Scan Git projects** control,
 or `/erga-git scan`, runs the candidate and diff-research pipeline over roots saved during
 onboarding and refreshes the same review UI. Explicit root overrides use
-`/erga-git scan /path/to/projects`; `/erga-git review confirmed page 2` filters the resulting skill
-queue. Changes that require user input stay explicit commands such as
+`/erga-git scan /path/to/projects`; `/erga-git projects` browses the entire cached catalogue,
+`/erga-git projects python page 2` searches it, and its refresh control updates only the private
+GitHub metadata cache. A project is résumé-eligible only when its bullets trace to approved
+evidence; discovering a repository never auto-approves it. `/erga-git review confirmed page 2`
+filters the resulting skill queue. Changes that require user input stay explicit commands such as
 `/erga-onboard skills set Python, FastAPI`.
 `/erga-mail-sync` runs a bounded configured-mail sync. These commands return compact
 Markdown that remains readable across Discord, Signal, Telegram, Slack, and other Hermes platforms.

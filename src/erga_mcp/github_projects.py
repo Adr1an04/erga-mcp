@@ -173,11 +173,21 @@ def find_local_github_worktree(
 ) -> Path | None:
     """Resolve an explicit GitHub slug only against already-known local worktrees."""
     repository = _validated_repository(repository).casefold()
+    return index_local_github_worktrees(candidates, runner=runner).get(repository)
+
+
+def index_local_github_worktrees(
+    candidates: list[Path],
+    *,
+    runner: Runner = subprocess.run,
+) -> dict[str, Path]:
+    """Index already-known worktrees by GitHub slug with one remote read per worktree."""
+    indexed: dict[str, Path] = {}
     for candidate in candidates:
         remote = _remote_repository(candidate, runner=runner) if candidate.is_dir() else None
-        if (remote or "").casefold() == repository:
-            return candidate.resolve()
-    return None
+        if remote is not None:
+            indexed.setdefault(remote.casefold(), candidate.resolve())
+    return indexed
 
 
 def ensure_github_worktree(

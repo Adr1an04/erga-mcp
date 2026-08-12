@@ -9,6 +9,11 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
+from .bullet_quality import (
+    ProjectIdentityProfile,
+    build_project_identity_profile,
+    compare_project_profiles,
+)
 from .models import Evidence
 from .resume import latex_to_text, resume_item_texts
 
@@ -233,6 +238,13 @@ class ProjectSelection:
     title: str
     matched_terms: tuple[str, ...]
     matched_signals: tuple[str, ...] = ()
+    narrative_signals: tuple[str, ...] = ()
+    metric_categories: tuple[str, ...] = ()
+    differentiators: tuple[str, ...] = ()
+    evidence_tier: str = "C"
+    quality_score: int = 0
+    differentiation_score: int = 100
+    selection_score: float = 0
 
 
 @dataclass(frozen=True)
@@ -645,6 +657,73 @@ def _score(candidate: ProjectCandidate, job_description: str) -> int:
     return len(matched_terms) + 8 * len(required_matches) + 3 * len(role_signals)
 
 
+def _contrastive_selection_score(
+    candidate: ProjectCandidate,
+    *,
+    base_score: int,
+    maximum_base_score: int,
+    profile: ProjectIdentityProfile,
+    selected_profiles: list[ProjectIdentityProfile],
+    candidate_signals: frozenset[str],
+    covered_signals: set[str],
+) -> tuple[float, int]:
+    """Balance role fit, approved-copy strength, and portfolio differentiation."""
+    role_relevance = 40 * base_score / maximum_base_score
+    quality = 30 * profile.quality_score / 100
+    differentiation = (
+        min(
+            compare_project_profiles(selected, profile).differentiation_score
+            for selected in selected_profiles
+        )
+        if selected_profiles
+        else 100
+    )
+    diversity = 20 * differentiation / 100
+    evidence_strength = min(
+        10,
+        (5 * len(candidate.bullet_evidence_ids) + 5 * len(set(candidate.evidence_ids))) / 3,
+    )
+    role_coverage = 2 * len(candidate_signals - covered_signals)
+    repeated_role_penalty = len(candidate_signals & covered_signals)
+    return (
+        round(
+            role_relevance
+            + quality
+            + diversity
+            + evidence_strength
+            + role_coverage
+            - repeated_role_penalty,
+            3,
+        ),
+        differentiation,
+    )
+
+
+def _selection_differentiators(
+    profile: ProjectIdentityProfile,
+    prior: list[ProjectIdentityProfile],
+) -> tuple[tuple[str, ...], int]:
+    if not prior:
+        values = (*profile.narrative_signals, *profile.metric_categories)
+        return tuple(dict.fromkeys(values)), 100
+    comparisons = tuple(compare_project_profiles(item, profile) for item in prior)
+    shared_narratives = {
+        signal for comparison in comparisons for signal in comparison.shared_narrative_signals
+    }
+    shared_metrics = {
+        metric for comparison in comparisons for metric in comparison.shared_metric_categories
+    }
+    values = (
+        *(signal for signal in profile.narrative_signals if signal not in shared_narratives),
+        *(metric for metric in profile.metric_categories if metric not in shared_metrics),
+    )
+    if not values:
+        values = tuple(comparisons[-1].differentiating_terms[:4])
+    return tuple(dict.fromkeys(values)), min(
+        comparison.differentiation_score for comparison in comparisons
+    )
+
+
 def select_projects(
     candidates: Sequence[ProjectCandidate],
     job_description: str,
@@ -676,24 +755,51 @@ def select_projects(
             candidate,
             _score(candidate, job_description),
             _role_signal_matches(candidate, job_description),
+            build_project_identity_profile(candidate),
         )
         for candidate in eligible
     }
+    maximum_base_score = max((item[1] for item in remaining.values()), default=0)
+    if maximum_base_score <= 0:
+        return ()
     selected: list[ProjectCandidate] = []
+    selected_profiles: list[ProjectIdentityProfile] = []
     covered_signals: set[str] = set()
     while remaining and len(selected) < max_projects:
-        candidate, base_score, signals = min(
-            remaining.values(),
+        scored = [
+            (
+                *_contrastive_selection_score(
+                    candidate,
+                    base_score=base_score,
+                    maximum_base_score=maximum_base_score,
+                    profile=profile,
+                    selected_profiles=selected_profiles,
+                    candidate_signals=signals,
+                    covered_signals=covered_signals,
+                ),
+                candidate,
+                base_score,
+                signals,
+                profile,
+            )
+            for candidate, base_score, signals, profile in remaining.values()
+            if base_score > 0
+        ]
+        if not scored:
+            break
+        selection_score, _, candidate, base_score, signals, profile = min(
+            scored,
             key=lambda item: (
-                -(item[1] + 2 * len(item[2] - covered_signals) - len(item[2] & covered_signals)),
-                -item[1],
-                item[0].id,
+                -item[0],
+                -item[3],
+                item[2].id,
             ),
         )
         del remaining[candidate.id]
-        if base_score <= 0:
+        if selection_score <= 0 or base_score <= 0:
             break
         selected.append(candidate)
+        selected_profiles.append(profile)
         covered_signals.update(signals)
     return tuple(selected)
 
@@ -707,17 +813,47 @@ def select_project_rationales(
 ) -> tuple[ProjectSelection, ...]:
     """Return each selected project with the exact job terms that justified its selection."""
     job_terms = _terms(job_description)
-    return tuple(
-        ProjectSelection(
-            id=candidate.id,
-            title=candidate.title,
-            matched_terms=tuple(sorted(_candidate_terms(candidate) & job_terms)),
-            matched_signals=tuple(sorted(_role_signal_matches(candidate, job_description))),
-        )
-        for candidate in select_projects(
-            candidates,
-            job_description,
-            max_projects=max_projects,
-            minimum_bullets=minimum_bullets,
-        )
+    selected = select_projects(
+        candidates,
+        job_description,
+        max_projects=max_projects,
+        minimum_bullets=minimum_bullets,
     )
+    profiles = {candidate.id: build_project_identity_profile(candidate) for candidate in selected}
+    maximum_base_score = max(
+        (_score(candidate, job_description) for candidate in candidates), default=1
+    )
+    prior_profiles: list[ProjectIdentityProfile] = []
+    covered_signals: set[str] = set()
+    rationales: list[ProjectSelection] = []
+    for candidate in selected:
+        profile = profiles[candidate.id]
+        signals = _role_signal_matches(candidate, job_description)
+        differentiators, differentiation_score = _selection_differentiators(profile, prior_profiles)
+        selection_score, _ = _contrastive_selection_score(
+            candidate,
+            base_score=_score(candidate, job_description),
+            maximum_base_score=max(1, maximum_base_score),
+            profile=profile,
+            selected_profiles=prior_profiles,
+            candidate_signals=signals,
+            covered_signals=covered_signals,
+        )
+        rationales.append(
+            ProjectSelection(
+                id=candidate.id,
+                title=candidate.title,
+                matched_terms=tuple(sorted(_candidate_terms(candidate) & job_terms)),
+                matched_signals=tuple(sorted(signals)),
+                narrative_signals=profile.narrative_signals,
+                metric_categories=profile.metric_categories,
+                differentiators=differentiators,
+                evidence_tier=profile.evidence_tier,
+                quality_score=profile.quality_score,
+                differentiation_score=differentiation_score,
+                selection_score=selection_score,
+            )
+        )
+        prior_profiles.append(profile)
+        covered_signals.update(signals)
+    return tuple(rationales)

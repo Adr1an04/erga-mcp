@@ -20,7 +20,6 @@ from erga_mcp.ai_resume_tailoring import AIProjectTailoring
 from erga_mcp.config import DEFAULT_CONFIG, load_config
 from erga_mcp.git_project_enrichment import GitProjectEnrichment
 from erga_mcp.mcp_server import (
-    IntakeJobResult,
     IntakeValidationResult,
     _ai_research_shortlist_ids,
     _ai_tailored_project_enrichment,
@@ -28,6 +27,7 @@ from erga_mcp.mcp_server import (
     _create_render_packed_automatic_resume_proposal,
     _entry_limits_for_item_state,
     _generated_density_states,
+    _git_enriched_inventory_candidates,
     _layout_safe_project_selection,
     _metadata_from_url,
     _project_enrichment_for_tailoring,
@@ -270,6 +270,64 @@ class McpServerTests(unittest.TestCase):
             )
             self.assertEqual(packing["style_reference_item_budget"], 4)
             self.assertFalse(packing["spacing_fallback"])
+
+    def test_spacing_fallback_does_not_stretch_an_already_dense_master_template(self) -> None:
+        latexmk = shutil.which("latexmk")
+        if latexmk is None:
+            self.skipTest("latexmk is not installed")
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            resume = root / "resume.tex"
+            resume.write_text(
+                r"""
+\documentclass{article}
+\usepackage[margin=0.5in]{geometry}
+\pagestyle{empty}
+\newcommand{\resumeItem}[1]{\item #1}
+\begin{document}
+Top of the approved master template.
+\begin{itemize}
+\resumeItem{Approved result one.}
+\resumeItem{Approved result two.}
+\resumeItem{Approved result three.}
+\resumeItem{Approved result four.}
+\resumeItem{Approved result five.}
+\resumeItem{Approved result six.}
+\end{itemize}
+\vspace*{7in}
+Bottom of the approved master template.
+\end{document}
+""".lstrip(),
+                encoding="utf-8",
+            )
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace("max_pages = 0", "max_pages = 1").replace(
+                    'latexmk = "latexmk"', f"latexmk = {json.dumps(latexmk)}"
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(config_path)
+
+            with (
+                patch("erga_mcp.mcp_server.pdf_page_count", return_value=1),
+                patch(
+                    "erga_mcp.mcp_server.pdf_page_fill",
+                    return_value=SimpleNamespace(fill_ratio=0.9),
+                ),
+            ):
+                result = _create_render_packed_automatic_resume_proposal(
+                    resume_path=resume,
+                    output_dir=root / "artifacts",
+                    job_description="Python systems",
+                    evidence=[],
+                    project_candidates=(),
+                    config=config,
+                    spacing_fallback_requested=True,
+                )
+
+            proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
+            self.assertNotIn("ERGA-ADAPTIVE-PAGE-FILL", proposed)
 
     def test_project_bullet_density_adds_supported_bullets_until_page_is_filled(self) -> None:
         with TemporaryDirectory() as directory:
@@ -627,6 +685,54 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(selected[0], "api-runtime")
         self.assertEqual(len(selected), 2)
 
+    def test_planned_project_ids_lock_git_research_and_final_candidate_order(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            resume = root / "resume.tex"
+            resume.write_text("synthetic", encoding="utf-8")
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace("project_count = 4", "project_count = 2").replace(
+                    "editable_sections = []", 'editable_sections = ["Projects"]'
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(config_path)
+
+            def candidate(project_id: str) -> ProjectCandidate:
+                evidence_id = f"ev_{project_id}"
+                return ProjectCandidate(
+                    id=project_id,
+                    title=project_id.title(),
+                    latex=(
+                        rf"\resumeProjectHeading{{\textbf{{{project_id.title()}}}}}{{}}\n"
+                        r"\resumeItemListStart\n"
+                        rf"\resumeItem{{Built the approved {project_id} Python system.}}\n"
+                        r"\resumeItemListEnd"
+                    ),
+                    evidence_ids=(evidence_id,),
+                    bullet_evidence_ids=((evidence_id,),),
+                    tags=("python", project_id),
+                )
+
+            candidates = (candidate("alpha"), candidate("beta"), candidate("gamma"))
+            with (
+                patch("erga_mcp.mcp_server._inventory_candidates", return_value=candidates),
+                patch("erga_mcp.mcp_server.discover_github_projects", return_value=()),
+            ):
+                enrichment = _git_enriched_inventory_candidates(
+                    config=config,
+                    store=ErgaStore(root / "state" / "erga.sqlite3"),
+                    evidence=[],
+                    job_description="Required Python systems",
+                    resume_path=resume,
+                    ai_tailoring=True,
+                    preferred_project_ids=("beta", "alpha"),
+                )
+
+        self.assertEqual([item.id for item in enrichment.candidates], ["beta", "alpha"])
+        self.assertEqual([report["project_id"] for report in enrichment.reports], ["beta", "alpha"])
+
     def test_ai_layout_retry_lowers_the_hard_cap_and_disables_the_soft_minimum(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -698,6 +804,8 @@ class McpServerTests(unittest.TestCase):
             self.assertEqual(
                 result.reports[0]["resume_bullets_source"], "host_model_evidence_synthesis"
             )
+            self.assertIn("bullet_quality", result.reports[0])
+            self.assertIn("portfolio_quality", result.reports[0])
             self.assertEqual(
                 [call.kwargs["bullet_max_chars"] for call in draft.await_args_list],
                 [116, 106],
@@ -1396,12 +1504,18 @@ class McpServerTests(unittest.TestCase):
                     "list_applications",
                     "update_application_status",
                     "application_tracker",
+                    "research_navigator",
                     "onboarding_status",
                     "git_skill_review_card",
+                    "project_catalogue",
                     "erga_settings_card",
                     "update_skill_inventory",
                     "manage_portfolio_roots",
                     "review_git_skill_group",
+                    "refresh_project_catalogue",
+                    "create_tailoring_plan",
+                    "update_tailoring_plan",
+                    "execute_tailoring_plan",
                     "list_evidence",
                     "resume_source_context",
                     "list_mail_events",
@@ -1432,8 +1546,10 @@ class McpServerTests(unittest.TestCase):
                 "pipeline_status",
                 "list_applications",
                 "application_tracker",
+                "research_navigator",
                 "onboarding_status",
                 "git_skill_review_card",
+                "project_catalogue",
                 "erga_settings_card",
                 "list_evidence",
                 "resume_source_context",
@@ -1593,25 +1709,26 @@ class McpServerTests(unittest.TestCase):
 
     def test_creates_briefs_and_deep_dossiers_only_for_existing_packages(self) -> None:
         with TemporaryDirectory() as directory:
-            package_dir = Path(directory) / "package"
+            package_dir = Path(directory) / "output" / "fall-2026" / "example"
             research_dir = package_dir / "research"
             research_dir.mkdir(parents=True)
-            (research_dir / "role-research.md").write_text(
-                "# Example Co — Engineer research\n", encoding="utf-8"
+            (research_dir / "discovery-research.md").write_text(
+                "# Example Co research\n", encoding="utf-8"
+            )
+            (package_dir / "package.json").write_text(
+                json.dumps(
+                    {
+                        "company": "Example Co",
+                        "job_url": "https://jobs.example.test/123",
+                        "role": "Engineer",
+                        "status": "complete",
+                    }
+                ),
+                encoding="utf-8",
             )
             config_path = Path(directory) / "config.toml"
             config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
             server = build_server(config_path)
-            existing = IntakeJobResult(
-                package_dir=str(package_dir),
-                job_snapshot="",
-                selected_evidence="",
-                selection_strategy="",
-                proposal_tex="",
-                diff="",
-                claim_report="",
-                validation=IntakeValidationResult(returncode=None, pdf=None),
-            )
             result_json = json.dumps(
                 {
                     "data": {
@@ -1625,30 +1742,31 @@ class McpServerTests(unittest.TestCase):
                 }
             )
 
-            with patch(
-                "erga_mcp.mcp_server._existing_intake_result_by_identity", return_value=existing
-            ):
-                brief: Any = asyncio.run(
-                    server.call_tool(
-                        "create_research_brief",
-                        {"job_url": "https://jobs.example.test/123", "stage": "oa"},
-                    )
+            brief: Any = asyncio.run(
+                server.call_tool(
+                    "create_research_brief",
+                    {"job_url": "https://jobs.example.test/123", "stage": "oa"},
                 )
-                deep: Any = asyncio.run(
-                    server.call_tool(
-                        "record_deep_research",
-                        {
-                            "job_url": "https://jobs.example.test/123",
-                            "stage": "interview",
-                            "searches": [{"query": "Example interview", "result": result_json}],
-                        },
-                    )
+            )
+            deep: Any = asyncio.run(
+                server.call_tool(
+                    "record_deep_research",
+                    {
+                        "job_url": "https://jobs.example.test/123",
+                        "stage": "interview",
+                        "searches": [{"query": "Example interview", "result": result_json}],
+                    },
                 )
+            )
+            brief_text = Path(
+                cast(dict[str, Any], brief.structured_content)["research_brief"]
+            ).read_text(encoding="utf-8")
 
         self.assertEqual(
             Path(cast(dict[str, Any], brief.structured_content)["research_brief"]).name,
             "oa-brief.md",
         )
+        self.assertIn('"Example Co" "Engineer" online assessment', brief_text)
         self.assertEqual(
             Path(cast(dict[str, Any], deep.structured_content)["deep_research_note"]).name,
             "interview-deep-research.md",
@@ -1682,12 +1800,157 @@ class McpServerTests(unittest.TestCase):
         self.assertFalse(tool.annotations.read_only_hint)
         self.assertTrue(tool.annotations.open_world_hint)
         self.assertFalse(tool.annotations.idempotent_hint)
-
         advanced = by_name["prepare_job_workspace"]
         self.assertIn("Advanced second-stage", advanced.description or "")
         self.assertIn(
             "Do not use this tool for a pasted or bare job URL", advanced.description or ""
         )
+
+    def test_tailoring_plan_tools_collect_decisions_without_creating_an_application(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            candidates = tuple(
+                ProjectCandidate(
+                    id=f"project-{index}",
+                    title=f"Project {index}",
+                    latex=(
+                        rf"\resumeProjectHeading{{\textbf{{Project {index}}}}}{{}}\n"
+                        r"\resumeItemListStart\n"
+                        rf"\resumeItem{{Built Python system {index} serving {index + 2} APIs.}}\n"
+                        r"\resumeItemListEnd"
+                    ),
+                    evidence_ids=(f"ev_{index}",),
+                    bullet_evidence_ids=((f"ev_{index}",),),
+                    tags=("python", "api", "systems", f"specialty-{index}"),
+                )
+                for index in range(1, 6)
+            )
+            server = build_server(config_path)
+            snapshot = (
+                "Example Software Engineer Intern. Responsibilities include building Python "
+                "APIs and reliable systems. Requirements include Python experience."
+            )
+
+            with (
+                patch("erga_mcp.mcp_server.fetch_job_snapshot", return_value=snapshot),
+                patch("erga_mcp.mcp_server._inventory_candidates", return_value=candidates),
+            ):
+                created: Any = asyncio.run(
+                    server.call_tool(
+                        "create_tailoring_plan",
+                        {"job_url": "https://jobs.example.test/software-engineer"},
+                    )
+                )
+            payload = cast(dict[str, Any], created.structured_content)
+
+            self.assertEqual(payload["status"], "planning")
+            self.assertEqual(payload["current_question"]["id"], "portfolio")
+            self.assertNotIn("job_snapshot", payload)
+            self.assertNotIn("job_description", payload)
+            self.assertEqual(ErgaStore(root / "state" / "erga.sqlite3").list_applications(), [])
+
+            plan_id = str(payload["id"])
+            portfolio_option = payload["current_question"]["options"][0]["id"]
+            answered: Any = asyncio.run(
+                server.call_tool(
+                    "update_tailoring_plan",
+                    {
+                        "plan_id": plan_id,
+                        "operation": "answer",
+                        "question_id": "portfolio",
+                        "option_id": portfolio_option,
+                    },
+                )
+            )
+            copy_payload = cast(dict[str, Any], answered.structured_content)
+            self.assertEqual(copy_payload["current_question"]["id"], "copy_strategy")
+            reviewed: Any = asyncio.run(
+                server.call_tool(
+                    "update_tailoring_plan",
+                    {
+                        "plan_id": plan_id,
+                        "operation": "answer",
+                        "question_id": "copy_strategy",
+                        "option_id": "synthesize",
+                    },
+                )
+            )
+            self.assertEqual(cast(dict[str, Any], reviewed.structured_content)["status"], "review")
+
+    def test_execute_tailoring_plan_reuses_the_planned_snapshot_and_runs_only_after_approval(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            template = root / "resume.tex"
+            template.write_text("\\section{Experience}\nVerified work.\n", encoding="utf-8")
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace(
+                    'template_path = ""', 'template_path = "resume.tex"'
+                ).replace(
+                    'project_selection_mode = "inventory_optional"',
+                    'project_selection_mode = "template_only"',
+                ),
+                encoding="utf-8",
+            )
+            server = build_server(config_path)
+            job_url = "https://jobs.example.test/planned-engineer"
+            snapshot = (
+                "Example Software Engineer. Responsibilities include reliable Python services. "
+                "Requirements include Python experience."
+            )
+            validation = LatexValidation(command=("latexmk",), returncode=0, stdout="", stderr="")
+
+            def compile_success(proposal_path: Path, **_: Any) -> LatexValidation:
+                proposal_path.with_suffix(".pdf").write_bytes(b"planned synthetic pdf")
+                return validation
+
+            with (
+                patch("erga_mcp.mcp_server.fetch_job_snapshot", return_value=snapshot) as fetch,
+                patch(
+                    "erga_mcp.mcp_server.validate_latex_proposal",
+                    side_effect=compile_success,
+                ),
+            ):
+                created: Any = asyncio.run(
+                    server.call_tool("create_tailoring_plan", {"job_url": job_url})
+                )
+                plan = cast(dict[str, Any], created.structured_content)
+                self.assertEqual(plan["current_question"]["id"], "copy_strategy")
+                reopened: Any = asyncio.run(
+                    server.call_tool("create_tailoring_plan", {"job_url": job_url})
+                )
+                self.assertEqual(
+                    cast(dict[str, Any], reopened.structured_content)["id"], plan["id"]
+                )
+                reviewed: Any = asyncio.run(
+                    server.call_tool(
+                        "update_tailoring_plan",
+                        {
+                            "plan_id": plan["id"],
+                            "operation": "answer",
+                            "question_id": "copy_strategy",
+                            "option_id": "preserve",
+                        },
+                    )
+                )
+                self.assertEqual(
+                    cast(dict[str, Any], reviewed.structured_content)["status"], "review"
+                )
+                executed: Any = asyncio.run(
+                    server.call_tool("execute_tailoring_plan", {"plan_id": plan["id"]})
+                )
+
+            result = cast(dict[str, Any], executed.structured_content)
+            self.assertEqual(result["plan"]["status"], "completed")
+            self.assertTrue(Path(result["intake"]["validation"]["pdf"]).is_file())
+            self.assertEqual(fetch.call_count, 1)
+            store = ErgaStore(root / "state" / "erga.sqlite3")
+            self.assertEqual(store.get_tailoring_plan(str(plan["id"])).status, "completed")
+            self.assertEqual(len(store.list_applications()), 1)
 
     def test_uses_an_injected_store_factory_for_another_storage_backend(self) -> None:
         class RecordingStoreFactory:
@@ -1795,7 +2058,7 @@ class McpServerTests(unittest.TestCase):
             self.assertEqual(archive.suffix, ".zip")
             self.assertEqual(archive.parent, Path(str(exported["export_root"])))
 
-    def test_intake_accepts_the_public_url_explicitly_supplied_by_the_user(self) -> None:
+    def test_intake_rejects_a_repository_even_when_explicitly_supplied(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "resume.tex").write_text(
@@ -1807,12 +2070,6 @@ class McpServerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             server = build_server(config_path)
-            validation = LatexValidation(command=("latexmk",), returncode=0, stdout="", stderr="")
-
-            def compile_success(proposal_path: Path, **_: Any) -> LatexValidation:
-                proposal_path.with_suffix(".pdf").write_bytes(b"synthetic pdf")
-                return validation
-
             with (
                 patch(
                     "erga_mcp.mcp_server.fetch_job_snapshot",
@@ -1820,10 +2077,10 @@ class McpServerTests(unittest.TestCase):
                 ),
                 patch(
                     "erga_mcp.mcp_server.validate_latex_proposal",
-                    side_effect=compile_success,
-                ),
+                ) as validate,
+                self.assertRaisesRegex(Exception, "source_code_repository"),
             ):
-                call: Any = asyncio.run(
+                asyncio.run(
                     server.call_tool(
                         "intake_job_url",
                         {
@@ -1834,9 +2091,8 @@ class McpServerTests(unittest.TestCase):
                     )
                 )
 
-            result = cast(dict[str, Any], call.structured_content)
-            self.assertFalse(result["reused"])
-            self.assertTrue(Path(result["package_dir"]).is_dir())
+            self.assertFalse(validate.called)
+            self.assertFalse((root / "output" / "fall-2026" / "user-supplied-link").exists())
 
     def test_intakes_one_url_end_to_end_and_safely_reuses_an_exact_repeat(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1956,7 +2212,7 @@ class McpServerTests(unittest.TestCase):
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
             self.assertTrue(result["tailoring_meaningful_change"])
             self.assertEqual(result["tailoring_changed_sections"], ["Experience"])
-            self.assertEqual(result["tailoring_version"], 28)
+            self.assertEqual(result["tailoring_version"], 30)
             self.assertEqual(result["git_project_research"], [])
             output_pdf = Path(result["validation"]["pdf"])
             self.assertEqual(output_pdf.name, "Candidate_Resume.pdf")
@@ -1965,7 +2221,7 @@ class McpServerTests(unittest.TestCase):
                 (Path(result["package_dir"]) / "package.json").read_text(encoding="utf-8")
             )
             self.assertTrue(manifest["tailoring"]["meaningful_change"])
-        self.assertEqual(manifest["tailoring"]["version"], 28)
+            self.assertEqual(manifest["tailoring"]["version"], 30)
 
     def test_rebuilds_an_incomplete_legacy_package_and_preserves_its_files(self) -> None:
         with TemporaryDirectory() as directory:
@@ -2034,7 +2290,7 @@ class McpServerTests(unittest.TestCase):
             )
             manifest = json.loads((repaired / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["legacy_backup"], "legacy-backup")
-            self.assertEqual(manifest["tailoring"]["version"], 28)
+            self.assertEqual(manifest["tailoring"]["version"], 30)
             self.assertIn("Legacy package preserved", result["integration_warnings"][-1])
 
     def test_compile_rejects_a_pdf_over_the_configured_page_cap(self) -> None:

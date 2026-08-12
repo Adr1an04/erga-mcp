@@ -23,6 +23,7 @@ from .models import (
 )
 from .private_files import restrict_private_directory, restrict_private_file
 from .skill_inventory import clean_skill_name, normalize_skill_name, unique_skill_names
+from .tailoring_plan import TailoringPlan, tailoring_plan_from_storage
 
 APPLICATION_STATUSES = frozenset(
     {
@@ -110,6 +111,16 @@ CREATE TABLE IF NOT EXISTS applications (
     evidence_ids_json TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tailoring_plans (
+    id TEXT PRIMARY KEY,
+    job_url TEXT NOT NULL,
+    status TEXT NOT NULL,
+    plan_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tailoring_plans_updated_at_idx
+ON tailoring_plans(updated_at DESC);
 CREATE TABLE IF NOT EXISTS token_usage (
     id TEXT PRIMARY KEY,
     application_id TEXT NOT NULL REFERENCES applications(id),
@@ -1005,6 +1016,57 @@ class ErgaStore:
             )
             connection.commit()
         return application
+
+    def save_tailoring_plan(self, plan: TailoringPlan) -> TailoringPlan:
+        """Persist a private, review-only résumé plan without creating an application."""
+        self.initialize()
+        serialized = json.dumps(plan.as_storage_dict(), sort_keys=True)
+        with closing(self._connection()) as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM tailoring_plans WHERE id = ?", (plan.id,)
+            ).fetchone()
+            connection.execute(
+                "INSERT INTO tailoring_plans "
+                "(id, job_url, status, plan_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET job_url = excluded.job_url, "
+                "status = excluded.status, plan_json = excluded.plan_json, "
+                "updated_at = excluded.updated_at",
+                (
+                    plan.id,
+                    plan.job_url,
+                    plan.status,
+                    serialized,
+                    _as_text(plan.created_at),
+                    _as_text(plan.updated_at),
+                ),
+            )
+            self._record_audit(
+                connection,
+                "tailoring_plan.updated" if exists is not None else "tailoring_plan.created",
+                plan.id,
+                {"status": plan.status},
+            )
+            connection.commit()
+        return plan
+
+    def get_tailoring_plan(self, plan_id: str) -> TailoringPlan | None:
+        self.initialize()
+        with closing(self._connection()) as connection:
+            row = connection.execute(
+                "SELECT plan_json FROM tailoring_plans WHERE id = ?", (plan_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return tailoring_plan_from_storage(json.loads(str(row["plan_json"])))
+
+    def list_tailoring_plans(self) -> list[TailoringPlan]:
+        self.initialize()
+        with closing(self._connection()) as connection:
+            rows = connection.execute(
+                "SELECT plan_json FROM tailoring_plans ORDER BY updated_at DESC"
+            ).fetchall()
+        return [tailoring_plan_from_storage(json.loads(str(row["plan_json"]))) for row in rows]
 
     def list_applications(self) -> list[Application]:
         self.initialize()

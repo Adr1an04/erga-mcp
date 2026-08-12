@@ -1065,6 +1065,17 @@ def _stage_research_subject(package_dir: Path) -> tuple[str, str]:
         )
         if match is not None:
             return match.group(1).strip(), match.group(2).strip()
+    manifest_path = package_dir / "package.json"
+    if manifest_path.is_file() and not manifest_path.is_symlink():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            manifest = None
+        if isinstance(manifest, dict):
+            company = _clean_text(manifest.get("company"))
+            role = _clean_text(manifest.get("role"))
+            if company and role:
+                return company[:200], role[:300]
     return "company", "role"
 
 

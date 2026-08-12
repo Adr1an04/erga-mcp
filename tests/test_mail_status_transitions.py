@@ -97,6 +97,30 @@ class MailStatusTransitionTests(unittest.TestCase):
         self.assertEqual(self.store.list_applications()[0].status, "rejected")
         self.assertEqual(result["status_transitions"], 1)
 
+    def test_processed_mail_event_does_not_override_a_later_manual_status_change(self) -> None:
+        message = MailMessageMetadata(
+            message_id="processed-uber-denial",
+            received_at=datetime(2026, 7, 25, tzinfo=UTC),
+            sender="Talent@uber.com",
+            subject="Thanks for your interest in Uber",
+            preview="Unfortunately, we will not be moving forward.",
+        )
+        older_message = MailMessageMetadata(
+            message_id="second-recorded-uber-denial",
+            received_at=datetime(2026, 7, 24, tzinfo=UTC),
+            sender="Talent@uber.com",
+            subject="Update on your Uber application",
+            preview="Unfortunately, we will not be moving forward.",
+        )
+        first = sync_metadata(self.store, [message, older_message])
+        self.assertEqual(first["status_transitions"], 1)
+        self.store.update_application_status(self.application.id, status="oa")
+
+        replay = sync_metadata(self.store, [])
+
+        self.assertEqual(replay["status_transitions"], 0)
+        self.assertEqual(self.store.list_applications()[0].status, "oa")
+
 
 if __name__ == "__main__":
     unittest.main()

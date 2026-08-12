@@ -469,6 +469,7 @@ class ProjectInventoryTests(unittest.TestCase):
                 r"\resumeItemListEnd"
             ),
             evidence_ids=("ev_realtime",),
+            bullet_evidence_ids=(("ev_realtime",),),
             tags=("python", "redis", "real-time"),
         )
 
@@ -486,6 +487,12 @@ class ProjectInventoryTests(unittest.TestCase):
             ("python", "real", "services", "time"),
         )
         self.assertIn("real-time / interactive systems", selections[0].matched_signals)
+        self.assertIn("real-time / robotics", selections[0].narrative_signals)
+        self.assertIn("real-time / robotics", selections[0].differentiators)
+        self.assertEqual(selections[0].evidence_tier, "B")
+        self.assertGreater(selections[0].quality_score, 0)
+        self.assertEqual(selections[0].differentiation_score, 100)
+        self.assertGreater(selections[0].selection_score, 0)
 
     def test_role_signal_coverage_prefers_complementary_projects_over_redundant_overlap(
         self,
