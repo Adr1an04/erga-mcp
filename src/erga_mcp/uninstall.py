@@ -18,9 +18,7 @@ from .discord_bridge import (
     delete_discord_token,
     stop_discord_bridge,
 )
-from .discord_bridge import (
-    settings_path as discord_settings_path,
-)
+from .discord_settings import settings_path as discord_settings_path
 from .host_connections import (
     HOST_ADAPTERS,
     HostConnectionRecord,

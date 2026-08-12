@@ -9,8 +9,11 @@ from tempfile import TemporaryDirectory
 from typing import Any, cast
 from unittest.mock import patch
 
+from mcp.server.mcpserver.exceptions import ToolError
+
 from erga_mcp.config import DEFAULT_CONFIG
-from erga_mcp.mcp_server import _profile_visible_evidence, build_server
+from erga_mcp.mcp.profiles import profile_visible_evidence
+from erga_mcp.mcp_server import build_server
 from erga_mcp.models import Evidence
 from erga_mcp.store import ErgaStore
 
@@ -66,7 +69,7 @@ _CAREER_TOOLS = {
 
 class McpToolProfileTests(unittest.TestCase):
     def _config_with_profile(self, profile: str) -> str:
-        return DEFAULT_CONFIG.replace('tool_profile = "default"', f'tool_profile = "{profile}"')
+        return DEFAULT_CONFIG.replace('tool_profile = "career"', f'tool_profile = "{profile}"')
 
     def _tool_names(self, config: str, environment: dict[str, str] | None = None) -> set[str]:
         with TemporaryDirectory() as directory:
@@ -79,6 +82,22 @@ class McpToolProfileTests(unittest.TestCase):
         tool_names = self._tool_names(self._config_with_profile("read"))
 
         self.assertEqual(tool_names, _READ_TOOLS)
+
+    def test_read_profile_discovery_does_not_generate_or_rewrite_resume_templates(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master = root / "master.tex"
+            master.write_text("synthetic master", encoding="utf-8")
+            config_path = root / "config.toml"
+            config_text = self._config_with_profile("read").replace(
+                'master_path = ""', 'master_path = "master.tex"'
+            )
+            config_path.write_text(config_text, encoding="utf-8")
+
+            asyncio.run(build_server(config_path).list_tools())
+
+            self.assertEqual(config_path.read_text(encoding="utf-8"), config_text)
+            self.assertFalse((root / "state" / "resume-templates").exists())
 
     def test_career_profile_exposes_exact_safe_career_boundary(self) -> None:
         tool_names = self._tool_names(self._config_with_profile("career"))
@@ -146,10 +165,10 @@ class McpToolProfileTests(unittest.TestCase):
         )
 
         for profile in {"career", "read", "research", "write", "hermes"}:
-            self.assertEqual(_profile_visible_evidence(profile, [master, ordinary]), [ordinary])
+            self.assertEqual(profile_visible_evidence(profile, [master, ordinary]), [ordinary])
         for profile in {"career-private", "default"}:
             self.assertEqual(
-                _profile_visible_evidence(profile, [master, ordinary]), [master, ordinary]
+                profile_visible_evidence(profile, [master, ordinary]), [master, ordinary]
             )
 
     def test_research_profile_adds_only_network_read_tools(self) -> None:
@@ -215,12 +234,26 @@ class McpToolProfileTests(unittest.TestCase):
         self.assertEqual(tool_names, _READ_TOOLS | {"scrape_public_page", "extract_public_page"})
 
     def test_default_profile_preserves_the_complete_legacy_surface(self) -> None:
-        tool_names = self._tool_names(DEFAULT_CONFIG)
+        tool_names = self._tool_names(self._config_with_profile("default"))
 
         self.assertIn("intake_job_url", tool_names)
         self.assertIn("prepare_job_workspace", tool_names)
         self.assertIn("sync_recruiting_mail", tool_names)
         self.assertIn("install_mail_monitor_scripts", tool_names)
+
+    def test_all_tool_schemas_reject_unknown_arguments(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(self._config_with_profile("default"), encoding="utf-8")
+            server = build_server(config_path)
+            tools = asyncio.run(server.list_tools())
+
+            self.assertTrue(tools)
+            self.assertTrue(
+                all(tool.input_schema.get("additionalProperties") is False for tool in tools)
+            )
+            with self.assertRaisesRegex(ToolError, "Extra inputs are not permitted"):
+                asyncio.run(server.call_tool("pipeline_status", {"misspelled_argument": True}))
 
     def test_network_read_and_mutating_tool_annotations_are_accurate(self) -> None:
         with TemporaryDirectory() as directory:
@@ -242,6 +275,11 @@ class McpToolProfileTests(unittest.TestCase):
             self.assertIsNotNone(annotations)
             assert annotations is not None
             self.assertFalse(annotations.idempotent_hint)
+        for name in {"create_tailored_resume", "create_cover_letter"}:
+            annotations = tools[name].annotations
+            self.assertIsNotNone(annotations)
+            assert annotations is not None
+            self.assertTrue(annotations.destructive_hint)
 
 
 if __name__ == "__main__":

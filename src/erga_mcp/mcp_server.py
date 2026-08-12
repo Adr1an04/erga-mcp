@@ -1,44 +1,37 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
 from collections.abc import Callable, Iterable, Mapping
-from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
+from functools import partial
+from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Lock
 from typing import Annotated, Any, cast
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-import uvicorn
+import anyio
 from mcp.server import CacheHint
 from mcp.server.mcpserver import Context, MCPServer
-from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import (
-    ElicitRequest,
-    ElicitRequestFormParams,
-    ElicitResult,
+    CreateMessageRequest,
+    CreateMessageRequestParams,
     InputRequiredResult,
-    ToolAnnotations,
 )
-from pydantic import BaseModel, Field, StrictInt
-from starlette.applications import Starlette
-from starlette.routing import Mount
+from pydantic import Field, StrictInt
 
 from .ai_resume_tailoring import (
     draft_evidence_backed_projects,
     project_quantitative_bullet_count,
 )
+from .application_lookup import select_tracked_application
 from .bullet_quality import portfolio_quality_report
-from .cli import DEFAULT_CONFIG_PATH, _notes_application
-from .config import ErgaConfig, load_config
-from .contact_projection import project_recruiter_contacts
+from .config import DEFAULT_CONFIG_PATH, ErgaConfig, load_config
 from .cover_letter import create_cover_letter_proposal, load_style_context
 from .cron_setup import install_hermes_monitor_scripts
 from .exporting import export_bundle
@@ -55,21 +48,34 @@ from .git_project_enrichment import (
     merge_github_project_catalogue,
 )
 from .git_skills import (
-    approve_git_skill_group,
     build_git_skill_review_card,
-    explicit_skills_in_texts,
-    reconcile_git_skill_groups,
 )
 from .github_projects import discover_github_projects
-from .http_transport import HttpTransportSettings, protect_http_app
-from .integrations.mail_provider import build_mail_provider
 from .integrations.obsidian_tracker import (
-    import_confirmed_application_tracker_rows,
-    reconcile_confirmed_application_tracker_rows,
     write_job_tracker_note,
 )
-from .integrations.zoho_live import sync_metadata
 from .job_discovery import discover_job_research as run_job_discovery
+from .job_identity import (
+    cycle_from_package as _cycle_from_package,
+)
+from .job_identity import (
+    job_identity as _job_identity,
+)
+from .job_identity import (
+    metadata_from_research as _metadata_from_research,
+)
+from .job_identity import (
+    metadata_from_url as _metadata_from_url,
+)
+from .job_identity import (
+    package_created_at as _package_created_at,
+)
+from .job_identity import (
+    package_dir as _package_dir,
+)
+from .job_identity import (
+    selected_evidence_ids as _selected_evidence_ids,
+)
 from .job_intake import fetch_job_snapshot, select_relevant_evidence
 from .job_research import (
     JobResearch,
@@ -81,12 +87,55 @@ from .job_research import (
 )
 from .job_source import require_job_source
 from .job_workspace import create_job_workspace
-from .keryx import keryx_status
-from .keryx import search_keryx_jobs as search_cached_keryx_jobs
+from .mcp.contracts import (
+    IntakeJobResult,
+    IntakeProjectSelection,
+    IntakeValidationResult,
+    SecondarySearchInput,
+)
+from .mcp.package_manifest import (
+    validation_from_manifest as _validation_from_manifest,
+)
+from .mcp.profiles import (
+    DESTRUCTIVE_LOCAL_WRITE as _DESTRUCTIVE_LOCAL_WRITE,
+)
+from .mcp.profiles import (
+    JOB_INTAKE as _JOB_INTAKE,
+)
+from .mcp.profiles import (
+    LOCAL_EXEC as _LOCAL_EXEC,
+)
+from .mcp.profiles import (
+    LOCAL_IDEMPOTENT_WRITE as _LOCAL_IDEMPOTENT_WRITE,
+)
+from .mcp.profiles import (
+    LOCAL_WRITE as _LOCAL_WRITE,
+)
+from .mcp.profiles import (
+    NETWORK_READ as _NETWORK_READ,
+)
+from .mcp.profiles import (
+    NETWORK_READ_AND_WRITE as _NETWORK_READ_AND_WRITE,
+)
+from .mcp.profiles import (
+    READ_ONLY as _READ_ONLY,
+)
+from .mcp.profiles import (
+    enabled_tool_names as _enabled_tool_names,
+)
+from .mcp.profiles import (
+    profile_visible_evidence as _profile_visible_evidence,
+)
+from .mcp.profiles import (
+    selected_tool_profile as _selected_tool_profile,
+)
+from .mcp.read_tools import register_read_tools
+from .mcp.registry import ToolRegistry
+from .mcp.sampling import MCPTailoringDraftClient
+from .mcp.transport import HttpTransportSettings, run_streamable_http
+from .mcp.transport import build_streamable_http_app as build_streamable_http_app
+from .mcp.workspace_tools import register_workspace_tools
 from .models import Evidence
-from .onboarding_view import build_onboarding_card
-from .portfolio_roots import detected_portfolio_root, update_portfolio_roots
-from .project_catalogue import build_project_catalogue
 from .project_inventory import (
     ProjectCandidate,
     limit_project_candidate_bullets,
@@ -94,17 +143,13 @@ from .project_inventory import (
     select_projects,
     sync_project_inventory_from_master,
 )
-from .project_metrics import propose_git_project_metrics
-from .research_navigator import build_research_navigator, research_stage_for_status
 from .resume import (
     ResumeItemLayoutValidation,
     create_section_resume_proposal,
-    normalize_cycle,
     resume_item_texts,
     validate_latex_proposal,
     validate_single_line_resume_items,
 )
-from .resume_sources import resume_source_context as build_resume_source_context
 from .resume_tailoring import (
     TAILORING_VERSION,
     AutomaticResumeProposal,
@@ -117,8 +162,6 @@ from .resume_tailoring import (
     semantic_resume_structure_issues,
 )
 from .resume_template import ensure_resume_template
-from .settings_view import build_settings_card
-from .skill_inventory import parse_skill_seed_csv
 from .store import ErgaStore, SQLiteStoreFactory, StoreFactory
 from .tailoring_plan import (
     answer_tailoring_plan,
@@ -128,200 +171,11 @@ from .tailoring_plan import (
     set_tailoring_plan_status,
     tailoring_plan_preferences,
 )
-from .tracker_view import (
-    build_tracker_card,
-    filter_application_tracker,
-    paginate_application_tracker,
-    read_application_tracker,
-    render_tracker_message,
-)
-from .versioning import capabilities
 from .web_scraping import extract_page, scrape_page
 
 _VISUAL_SPACING_MARKER = "% Erga visual spacing is template-controlled."
-_READ_ONLY = ToolAnnotations(
-    read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
-)
-_NETWORK_READ = ToolAnnotations(
-    read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True
-)
-_LOCAL_WRITE = ToolAnnotations(
-    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
-)
-_LOCAL_IDEMPOTENT_WRITE = ToolAnnotations(
-    read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
-)
-_NETWORK_READ_AND_WRITE = ToolAnnotations(
-    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True
-)
-_JOB_INTAKE = ToolAnnotations(
-    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True
-)
-_LOCAL_EXEC = ToolAnnotations(
-    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
-)
-_READ_TOOL_NAMES = frozenset(
-    {
-        "erga_capabilities",
-        "pipeline_status",
-        "list_applications",
-        "application_tracker",
-        "research_navigator",
-        "onboarding_status",
-        "git_skill_review_card",
-        "project_catalogue",
-        "erga_settings_card",
-        "list_evidence",
-        "list_mail_events",
-        "token_usage",
-        "search_keryx_jobs",
-    }
-)
-_LOCAL_ANALYSIS_TOOL_NAMES = frozenset({"propose_project_metrics"})
-_NETWORK_READ_TOOL_NAMES = frozenset({"scrape_public_page", "extract_public_page"})
-_NETWORK_WRITE_TOOL_NAMES = frozenset(
-    {"discover_job_research", "refresh_project_catalogue", "create_tailoring_plan"}
-)
-_LOCAL_WRITE_TOOL_NAMES = frozenset(
-    {
-        "record_token_usage",
-        "update_application_status",
-        "export_data",
-        "record_secondary_research",
-        "create_research_brief",
-        "record_deep_research",
-        "create_tailored_resume",
-        "create_cover_letter",
-        "cover_letter_style_context",
-        "validate_tailored_resume",
-        "research_git_worktrees",
-        "review_git_drafts",
-        "review_git_draft_prompt",
-        "update_skill_inventory",
-        "manage_portfolio_roots",
-        "review_git_skill_group",
-        "update_tailoring_plan",
-    }
-)
-_HERMES_TOOL_NAMES = frozenset(
-    {
-        "sync_recruiting_mail",
-        "install_mail_monitor_scripts",
-        "discover_job_research",
-        "create_research_brief",
-        "research_git_worktrees",
-        "update_skill_inventory",
-        "manage_portfolio_roots",
-        "review_git_skill_group",
-        "refresh_project_catalogue",
-        "create_tailoring_plan",
-        "update_tailoring_plan",
-        "execute_tailoring_plan",
-    }
-)
-_LOOPBACK_HOST_HEADERS = [
-    "127.0.0.1",
-    "127.0.0.1:*",
-    "localhost",
-    "localhost:*",
-    "[::1]",
-    "[::1]:*",
-]
-_CAREER_TOOL_NAMES = frozenset(
-    {
-        "erga_capabilities",
-        "pipeline_status",
-        "list_applications",
-        "application_tracker",
-        "research_navigator",
-        "onboarding_status",
-        "git_skill_review_card",
-        "project_catalogue",
-        "erga_settings_card",
-        "list_evidence",
-        "update_application_status",
-        "scrape_public_page",
-        "extract_public_page",
-        "intake_job_url",
-        "prepare_job_workspace",
-        "record_secondary_research",
-        "discover_job_research",
-        "create_research_brief",
-        "record_deep_research",
-        "create_tailored_resume",
-        "validate_tailored_resume",
-        "create_cover_letter",
-        "propose_project_metrics",
-        "update_skill_inventory",
-        "manage_portfolio_roots",
-        "review_git_skill_group",
-        "refresh_project_catalogue",
-        "create_tailoring_plan",
-        "update_tailoring_plan",
-        "execute_tailoring_plan",
-        "search_keryx_jobs",
-    }
-)
-_CAREER_PRIVATE_TOOL_NAMES = _CAREER_TOOL_NAMES | frozenset(
-    {"resume_source_context", "cover_letter_style_context", "export_data"}
-)
-_ALL_TOOL_NAMES = frozenset(
-    {
-        *_READ_TOOL_NAMES,
-        *_LOCAL_ANALYSIS_TOOL_NAMES,
-        *_NETWORK_READ_TOOL_NAMES,
-        *_NETWORK_WRITE_TOOL_NAMES,
-        *_LOCAL_WRITE_TOOL_NAMES,
-        *_HERMES_TOOL_NAMES,
-        "resume_source_context",
-        "intake_job_url",
-        "execute_tailoring_plan",
-        "prepare_job_workspace",
-    }
-)
-_TOOL_PROFILES = {
-    "career": _CAREER_TOOL_NAMES,
-    "career-private": _CAREER_PRIVATE_TOOL_NAMES,
-    "default": _ALL_TOOL_NAMES,
-    "read": _READ_TOOL_NAMES,
-    "research": _READ_TOOL_NAMES | _NETWORK_READ_TOOL_NAMES,
-    "write": _READ_TOOL_NAMES | _LOCAL_WRITE_TOOL_NAMES,
-    "hermes": _READ_TOOL_NAMES | _HERMES_TOOL_NAMES,
-}
 _AUTO_PROJECT_BULLET_MIN = 1
 _AUTO_PROJECT_BULLET_MAX = 4
-
-
-def _selected_tool_profile(config: ErgaConfig, environment: Mapping[str, str]) -> str:
-    """Resolve a non-secret MCP capability profile, with environment taking precedence."""
-    profile = environment.get("ERGA_MCP_TOOL_PROFILE", config.mcp.tool_profile).strip().casefold()
-    if profile not in _TOOL_PROFILES:
-        raise ValueError(
-            "ERGA_MCP_TOOL_PROFILE must be career, career-private, default, read, research, "
-            "write, or hermes"
-        )
-    return profile
-
-
-def _enabled_tool_names(config: ErgaConfig, environment: Mapping[str, str]) -> frozenset[str]:
-    """Return the tool names enabled by the selected non-secret capability profile."""
-    return _TOOL_PROFILES[_selected_tool_profile(config, environment)]
-
-
-_SAFE_PACKAGE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
-_TRACKING_QUERY_KEYS = frozenset(
-    {
-        "gh_src",
-        "fbclid",
-        "lever-source",
-        "ref",
-        "referrer",
-        "source",
-        "sourceid",
-        "trk",
-        "tracking",
-    }
-)
 _JOB_URL_INTAKE_DESCRIPTION = """Primary job-link intake tool. Use this tool immediately when the
 user provides a job-posting URL, including a bare URL, a Markdown or chat link, or a URL followed
 by an unfurled title and job-description preview. Pass the complete original HTTP(S) URL unchanged
@@ -341,55 +195,42 @@ service. If the user explicitly asks to summarize only or not to run intake, res
 and do not call this tool."""
 
 
-class IntakeValidationResult(BaseModel):
-    """Structured local LaTeX validation status returned by job intake."""
+class _ModernSamplingRequired(Exception):
+    """Carry one MCP 2026 sampling request back to the outer tool round."""
 
-    returncode: int | None
-    pdf: str | None
-    page_count: int | None = None
-    page_fill_ratio: float | None = None
-    minimum_page_fill_ratio: float | None = None
-    skipped: str | None = None
+    def __init__(self, request: CreateMessageRequest, request_state: str) -> None:
+        super().__init__("modern MCP client sampling requires another tool round")
+        self.request = request
+        self.request_state = request_state
 
 
-class IntakeProjectSelection(BaseModel):
-    """One selected project and the role terms that deterministically justified it."""
+class _CaptureSamplingSession:
+    def __init__(self, request_state: str) -> None:
+        self.request_state = request_state
 
-    id: str
-    title: str
-    matched_terms: list[str] = Field(default_factory=list)
-    matched_signals: list[str] = Field(default_factory=list)
-
-
-class IntakeJobResult(BaseModel):
-    """Structured paths and status returned by the primary job-link intake tool."""
-
-    package_dir: str
-    job_snapshot: str
-    selected_evidence: str
-    selection_strategy: str
-    project_selections: list[IntakeProjectSelection] = Field(default_factory=list)
-    git_project_research: list[dict[str, object]] = Field(default_factory=list)
-    proposal_tex: str
-    diff: str
-    claim_report: str
-    validation: IntakeValidationResult
-    tailoring_meaningful_change: bool = False
-    tailoring_changed_sections: list[str] = Field(default_factory=list)
-    tailoring_version: int | None = None
-    research_note: str | None = None
-    application_id: str | None = None
-    tracker_notes: list[str] = Field(default_factory=list)
-    tracker_cycles: list[str] = Field(default_factory=list)
-    integration_warnings: list[str] = Field(default_factory=list)
-    reused: bool = False
+    async def create_message(self, messages: list[Any], **kwargs: Any) -> object:
+        raise _ModernSamplingRequired(
+            CreateMessageRequest(
+                params=CreateMessageRequestParams(
+                    messages=messages,
+                    max_tokens=kwargs["max_tokens"],
+                    system_prompt=kwargs.get("system_prompt"),
+                    include_context=kwargs.get("include_context"),
+                    temperature=kwargs.get("temperature"),
+                    tools=kwargs.get("tools"),
+                    tool_choice=kwargs.get("tool_choice"),
+                )
+            ),
+            self.request_state,
+        )
 
 
-class SecondarySearchInput(BaseModel):
-    """One bounded host-provided search result captured after primary intake."""
+class _ReplaySamplingSession:
+    def __init__(self, result: object) -> None:
+        self.result = result
 
-    query: str = Field(min_length=1, max_length=400)
-    result: str = Field(min_length=1, max_length=30_000)
+    async def create_message(self, *_: object, **__: object) -> object:
+        return self.result
 
 
 def _tailoring_context(research: JobResearch, snapshot: str) -> str:
@@ -1235,6 +1076,7 @@ async def _ai_tailored_project_enrichment(
     evidence: list[Evidence],
     enrichment: GitProjectEnrichment,
     tailoring_emphasis: str = "balanced",
+    sampling_session: object | None = None,
 ) -> GitProjectEnrichment:
     """Use host-model sampling to draft evidence-cited bullets, then enforce exact layout."""
     researched_ids = _git_researched_project_ids(enrichment)
@@ -1251,7 +1093,7 @@ async def _ai_tailored_project_enrichment(
     for attempt in range(3):
         try:
             drafted = await draft_evidence_backed_projects(
-                session=ctx.session,
+                session=MCPTailoringDraftClient(sampling_session or ctx.session),
                 related_request_id=ctx.request_id,
                 resume_path=resume_path,
                 job_description=job_description,
@@ -1399,18 +1241,36 @@ async def _project_enrichment_for_tailoring(
     if config.resume.project_selection_mode == "template_only":
         return GitProjectEnrichment((), (), (), (), 0)
     ai_tailoring = allow_ai_synthesis and _client_supports_ai_tailoring(ctx)
-    enrichment = _git_enriched_inventory_candidates(
-        config=config,
-        store=store,
-        evidence=evidence,
-        job_description=job_description,
-        resume_path=resume_path,
-        ai_tailoring=ai_tailoring,
-        preferred_project_ids=preferred_project_ids,
+    enrichment = await anyio.to_thread.run_sync(
+        partial(
+            _git_enriched_inventory_candidates,
+            config=config,
+            store=store,
+            evidence=evidence,
+            job_description=job_description,
+            resume_path=resume_path,
+            ai_tailoring=ai_tailoring,
+            preferred_project_ids=preferred_project_ids,
+        ),
+        abandon_on_cancel=True,
     )
     if not ai_tailoring or not enrichment.candidates:
         return enrichment
     assert ctx is not None
+    sampling_session: object | None = None
+    try:
+        modern_protocol = ctx.protocol_version == "2026-07-28"
+    except (AttributeError, ValueError):
+        modern_protocol = False
+    if modern_protocol:
+        request_state = "resume-projects:" + sha256(job_description.encode("utf-8")).hexdigest()
+        response = (ctx.input_responses or {}).get("resume_project_draft")
+        if response is None:
+            sampling_session = _CaptureSamplingSession(request_state)
+        else:
+            if ctx.request_state != request_state:
+                raise ValueError("resume-project sampling response belongs to another job")
+            sampling_session = _ReplaySamplingSession(response)
     try:
         return await _ai_tailored_project_enrichment(
             ctx=ctx,
@@ -1420,7 +1280,10 @@ async def _project_enrichment_for_tailoring(
             evidence=evidence,
             enrichment=enrichment,
             tailoring_emphasis=tailoring_emphasis,
+            sampling_session=sampling_session,
         )
+    except _ModernSamplingRequired:
+        raise
     except Exception as error:  # Sampling/provider failures must never lower résumé quality.
         return GitProjectEnrichment(
             candidates=(),
@@ -1678,17 +1541,6 @@ def _json_value(value: object) -> object:
     return value
 
 
-def _profile_visible_evidence(profile: str, evidence_records: list[Evidence]) -> list[Evidence]:
-    """Withhold managed master-resume records unless a profile explicitly permits them."""
-    if profile in {"career-private", "default"}:
-        return evidence_records
-    return [
-        evidence
-        for evidence in evidence_records
-        if not str(getattr(evidence, "source_ref", "")).startswith("master-resume:")
-    ]
-
-
 def _git_research_report(store: ErgaStore, roots: list[str]) -> dict[str, object]:
     """Run the shared Git scan/research pipeline and redact raw source and diff text."""
     normalized_roots = [Path(root).expanduser() for root in roots if root.strip()]
@@ -1791,225 +1643,6 @@ def _combine_token_summaries(
         for field in result:
             result[field] += summary.get(field, 0)
     return result
-
-
-def _safe_slug(value: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
-    return slug[:80] or "job-intake"
-
-
-def _slug_with_identifier(label: str, identifier: str) -> str:
-    """Keep the stable identifier inside the 80-character slug limit."""
-    safe_identifier = _safe_slug(identifier)[:20]
-    safe_label = re.sub(r"[^a-z0-9]+", "-", label.casefold()).strip("-") or "job"
-    label_limit = 80 - len(safe_identifier) - 1
-    prefix = safe_label[:label_limit].rstrip("-") or "job"
-    return f"{prefix}-{safe_identifier}"
-
-
-def _job_identity(job_url: str) -> str:
-    """Return a stable listing identity while discarding common tracking parameters."""
-    parsed = urlsplit(job_url)
-    scheme = parsed.scheme.casefold()
-    hostname = (parsed.hostname or "").rstrip(".").casefold()
-    try:
-        port = parsed.port
-    except ValueError:
-        port = None
-    default_port = (scheme == "https" and port == 443) or (scheme == "http" and port == 80)
-    netloc = hostname if port is None or default_port else f"{hostname}:{port}"
-    query = [
-        (key, value)
-        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
-        if not key.casefold().startswith("utm_") and key.casefold() not in _TRACKING_QUERY_KEYS
-    ]
-    query.sort(key=lambda item: (item[0].casefold(), item[1]))
-    return urlunsplit((scheme, netloc, parsed.path or "/", urlencode(query, doseq=True), ""))
-
-
-def _posting_identifier(job_url: str) -> str:
-    """Hash the complete canonical identity instead of a collision-prone raw ID prefix."""
-    return hashlib.sha256(_job_identity(job_url).encode("utf-8")).hexdigest()[:16]
-
-
-def _metadata_from_url(job_url: str, *, cycle: str, application_slug: str) -> tuple[str, str]:
-    parsed = urlsplit(job_url)
-    host_parts = [part for part in parsed.hostname.split(".") if part] if parsed.hostname else []
-    path_parts = [part for part in parsed.path.split("/") if part]
-    generic = {
-        "apply",
-        "boards",
-        "careers",
-        "en",
-        "external",
-        "job",
-        "jobs",
-        "openings",
-        "positions",
-        "us",
-        "view",
-        "viewjob",
-        "www",
-    }
-    hosted_boards = {
-        "ashbyhq",
-        "greenhouse",
-        "job-boards",
-        "lever",
-    }
-    host_candidate = ""
-    if host_parts:
-        host_candidate = next(
-            (part for part in host_parts if part.casefold() not in generic), host_parts[0]
-        )
-    company_source = host_candidate if host_candidate.casefold() not in hosted_boards else ""
-    if not company_source:
-        company_source = next(
-            (part for part in path_parts if part.casefold() not in generic), "company"
-        )
-    company = re.sub(r"[-_]", " ", company_source).title()
-    role_source = path_parts[-1] if path_parts else "job opportunity"
-    posting_identifier = _posting_identifier(job_url)
-    if (
-        role_source.casefold() in generic
-        or re.fullmatch(r"[0-9a-f-]{20,}", role_source.casefold())
-        or re.fullmatch(r"\d{5,}", role_source)
-    ):
-        role_source = "job opportunity"
-    role = re.sub(r"[-_]", " ", role_source).title()
-    resolved_cycle = cycle.strip() or "unsorted"
-    resolved_slug = application_slug.strip() or _slug_with_identifier(
-        f"{company}-{role}", posting_identifier
-    )
-    return resolved_cycle, resolved_slug
-
-
-def _metadata_from_research(
-    job_url: str,
-    research: JobResearch,
-    *,
-    cycle: str,
-    application_slug: str,
-) -> tuple[str, str]:
-    """Prefer source-derived metadata after fetch while preserving explicit overrides."""
-    resolved_cycle = cycle.strip() or (research.cycles[0] if research.cycles else "unsorted")
-    resolved_slug = application_slug.strip() or _slug_with_identifier(
-        f"{research.company}-{research.role}", _posting_identifier(job_url)
-    )
-    return resolved_cycle, resolved_slug
-
-
-def _package_dir(output_root: Path, cycle: str, application_slug: str) -> Path:
-    """Resolve and validate the final package location without creating it."""
-    normalized_cycle = normalize_cycle(cycle)
-    if not _SAFE_PACKAGE_COMPONENT.fullmatch(
-        normalized_cycle
-    ) or not _SAFE_PACKAGE_COMPONENT.fullmatch(application_slug):
-        raise ValueError("cycle and application slug must be safe path component values")
-    return output_root / normalized_cycle / application_slug
-
-
-def _validation_from_manifest(
-    *, package_dir: Path, manifest: dict[str, object], reused: bool
-) -> IntakeValidationResult:
-    raw_validation = manifest.get("validation")
-    if not isinstance(raw_validation, dict):
-        proposal_pdf = package_dir / "artifacts" / "proposal.pdf"
-        return IntakeValidationResult(
-            returncode=0 if proposal_pdf.is_file() else None,
-            pdf=str(proposal_pdf) if proposal_pdf.is_file() else None,
-            skipped=(
-                "Legacy package reused; the original validation outcome was not recorded."
-                if reused
-                else None
-            ),
-        )
-
-    raw_returncode = raw_validation.get("returncode")
-    returncode = (
-        raw_returncode
-        if isinstance(raw_returncode, int) and not isinstance(raw_returncode, bool)
-        else None
-    )
-    raw_skipped = raw_validation.get("skipped")
-    skipped = raw_skipped if isinstance(raw_skipped, str) else None
-    raw_page_count = raw_validation.get("page_count")
-    page_count = (
-        raw_page_count
-        if isinstance(raw_page_count, int) and not isinstance(raw_page_count, bool)
-        else None
-    )
-    raw_page_fill_ratio = raw_validation.get("page_fill_ratio")
-    page_fill_ratio = (
-        float(raw_page_fill_ratio)
-        if isinstance(raw_page_fill_ratio, (int, float))
-        and not isinstance(raw_page_fill_ratio, bool)
-        else None
-    )
-    raw_minimum_page_fill_ratio = raw_validation.get("minimum_page_fill_ratio")
-    minimum_page_fill_ratio = (
-        float(raw_minimum_page_fill_ratio)
-        if isinstance(raw_minimum_page_fill_ratio, (int, float))
-        and not isinstance(raw_minimum_page_fill_ratio, bool)
-        else None
-    )
-    raw_pdf = raw_validation.get("pdf")
-    pdf: str | None = None
-    if isinstance(raw_pdf, str):
-        relative_pdf = Path(raw_pdf)
-        safe_pdf = (
-            not relative_pdf.is_absolute()
-            and len(relative_pdf.parts) == 2
-            and relative_pdf.parts[0] == "artifacts"
-            and relative_pdf.suffix.casefold() == ".pdf"
-        )
-        recorded_pdf = package_dir / relative_pdf if safe_pdf else None
-        if recorded_pdf is not None and recorded_pdf.is_file():
-            pdf = str(recorded_pdf)
-        else:
-            missing = "Recorded validation PDF is missing from the package."
-            skipped = f"{skipped} {missing}" if skipped else missing
-    if reused:
-        reuse_note = "Existing complete package reused; no job-page network request ran."
-        skipped = f"{skipped} {reuse_note}" if skipped else reuse_note
-    return IntakeValidationResult(
-        returncode=returncode,
-        pdf=pdf,
-        page_count=page_count,
-        page_fill_ratio=page_fill_ratio,
-        minimum_page_fill_ratio=minimum_page_fill_ratio,
-        skipped=skipped,
-    )
-
-
-def _selected_evidence_ids(path: Path) -> list[str]:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    if not isinstance(value, list):
-        return []
-    return [
-        item["id"] for item in value if isinstance(item, dict) and isinstance(item.get("id"), str)
-    ]
-
-
-def _package_created_at(package_dir: Path) -> str:
-    try:
-        manifest = json.loads((package_dir / "package.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        manifest = None
-    if isinstance(manifest, dict) and isinstance(manifest.get("created_at"), str):
-        return manifest["created_at"]
-    return datetime.now(UTC).isoformat()
-
-
-def _cycle_from_package(package_dir: Path) -> str | None:
-    value = package_dir.parent.name
-    match = re.fullmatch(r"(spring|summer|fall|winter)-(20\d{2})", value, re.IGNORECASE)
-    if match is None:
-        return None
-    return f"{match.group(1).title()} {match.group(2)}"
 
 
 _GENERATED_MASTER_IDENTITY = re.compile(
@@ -2542,9 +2175,11 @@ def _incomplete_package_by_identity(*, output_root: Path, job_url: str) -> Path 
 def build_server(config_path: Path, *, store_factory: StoreFactory | None = None) -> MCPServer:
     """Build a local MCP interface with read, local-write, and local-exec tools."""
     config = load_config(config_path)
+    selected_tool_profile = _selected_tool_profile(config, os.environ)
     template_path = config.resume.template_path
     if (
-        config.resume.master_path is not None
+        selected_tool_profile not in {"read", "research"}
+        and config.resume.master_path is not None
         and config.resume.master_path.is_file()
         and (
             template_path is None
@@ -2554,7 +2189,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
     ):
         ensure_resume_template(config_path)
         config = load_config(config_path)
-    selected_tool_profile = _selected_tool_profile(config, os.environ)
+        selected_tool_profile = _selected_tool_profile(config, os.environ)
     enabled_tool_names = _enabled_tool_names(config, os.environ)
     store = (store_factory or SQLiteStoreFactory()).create(config.data_dir / "erga.sqlite3")
     store.initialize()
@@ -2571,6 +2206,9 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "reasoning and Erga requires no model API credential. When a user provides a "
             "job-posting URL, including a bare link or a link followed by an unfurled preview, "
             "call intake_job_url first with the complete URL unchanged. "
+            "For MCP 2026-07-28, fulfill any input_required resume-project sampling request and "
+            "retry the same tool with its sealed request state; do not replace it with a legacy "
+            "server-initiated sampling backchannel. "
             "Do not browse or summarize the posting before intake unless the user explicitly "
             "asks for summary-only behavior. pipeline_status/list_* are read-only; "
             "prepare_job_workspace is an advanced second-stage tool for callers that already "
@@ -2581,734 +2219,26 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         ),
     )
 
-    def profile_tool(name: str, **kwargs: Any):
-        if name in enabled_tool_names:
-            return server.tool(**kwargs)
-        return lambda function: function
-
-    @profile_tool("erga_capabilities", annotations=_READ_ONLY)
-    def erga_capabilities() -> dict[str, object]:
-        """Return the compact, versioned local MCP compatibility contract."""
-        capability_classes = ["local-read"]
-        if enabled_tool_names & _NETWORK_READ_TOOL_NAMES:
-            capability_classes.append("network-read")
-        if enabled_tool_names & _LOCAL_WRITE_TOOL_NAMES:
-            capability_classes.append("local-write")
-        if enabled_tool_names & _HERMES_TOOL_NAMES:
-            capability_classes.append("hermes-integration")
-        if "intake_job_url" in enabled_tool_names:
-            capability_classes.append("network-write")
-        result = capabilities(
-            tool_profile=selected_tool_profile,
-            capability_classes=capability_classes,
-        )
-        result.update({"model_api_required": False, "reasoning_host": "mcp-client"})
-        keryx = keryx_status(config)
-        result["optional_integrations"] = {
-            "keryx": {"enabled": keryx.enabled, "cache_ready": keryx.cache_ready}
-        }
-        return result
-
-    @profile_tool("pipeline_status", annotations=_READ_ONLY)
-    def pipeline_status() -> dict[str, int]:
-        """Return counts for local-only recruiting records."""
-        return {
-            "applications": len(store.list_applications()),
-            "evidence": len(store.list_evidence()),
-            "mail_events": len(store.list_mail_events()),
-            "audit_events": len(store.audit_events()),
-        }
-
-    @profile_tool("list_applications", annotations=_READ_ONLY)
-    def list_applications() -> list[dict[str, object]]:
-        """List local application records; no external system is queried."""
-        return [
-            cast(dict[str, object], _json_value(asdict(application)))
-            for application in store.list_applications()
-        ]
-
-    @profile_tool(
-        "search_keryx_jobs",
-        title="Search the optional local Keryx opportunity cache",
-        description=(
-            "Search a user-enabled local cache of Keryx's public US internships and new-graduate "
-            "roles. This tool performs no network request, sends no query or Erga private data, "
-            "and creates no application record. To act on one returned posting, the user must "
-            "separately request the ordinary intake_job_url workflow with its URL."
-        ),
-        annotations=_READ_ONLY,
+    registry = ToolRegistry(server, enabled_tool_names)
+    register_read_tools(
+        registry,
+        config=config,
+        config_path=config_path,
+        store=store,
+        selected_tool_profile=selected_tool_profile,
+        research_package_by_identity=_research_package_by_identity,
+        combine_token_summaries=_combine_token_summaries,
     )
-    def search_keryx_jobs(
-        query: str = "",
-        program: str = "",
-        cycle: str = "",
-        location: str = "",
-        limit: int = 20,
-    ) -> dict[str, object]:
-        """Return bounded public listings from the explicitly enabled local Keryx cache."""
-        return search_cached_keryx_jobs(
-            config,
-            query=query,
-            program=program,
-            cycle=cycle,
-            location=location,
-            limit=limit,
-        )
 
-    @profile_tool(
-        "update_application_status",
-        title="Update one local application status",
-        description=(
-            "Set the status of one existing application in Erga's private local database. "
-            "Allowed statuses are draft, applied, oa, assessment, interview, offer, rejected, "
-            "and withdrawn. This records a local audit event when the value changes; it never "
-            "contacts an employer, submits an application, or mutates a remote service."
-        ),
-        annotations=_LOCAL_IDEMPOTENT_WRITE,
+    register_workspace_tools(
+        registry,
+        config=config,
+        config_path=config_path,
+        store=store,
+        selected_tool_profile=selected_tool_profile,
+        json_value=_json_value,
+        git_research_report=_git_research_report,
     )
-    def update_application_status(application_id: str, status: str) -> dict[str, object]:
-        """Set an existing application's canonical local workflow status."""
-        return cast(
-            dict[str, object],
-            _json_value(asdict(store.update_application_status(application_id, status=status))),
-        )
-
-    @profile_tool("application_tracker", annotations=_READ_ONLY)
-    def application_tracker(
-        query: str = "",
-        page: Annotated[StrictInt, Field(ge=1)] = 1,
-        page_size: Annotated[StrictInt, Field(ge=1, le=10)] = 6,
-    ) -> dict[str, object]:
-        """Render or search every local tracker cycle with stable pagination."""
-        if not config.tracker.enabled or config.tracker.tracker_dir is None:
-            return {
-                "enabled": False,
-                "entries": [],
-                "summary": {},
-                "message": (
-                    "### Erga application tracker\n\n"
-                    "Obsidian application tracking is not configured for this Erga workspace."
-                ),
-            }
-        normalized_query = "" if query.strip().casefold() in {"all", "*"} else query.strip()
-        snapshot = filter_application_tracker(
-            read_application_tracker(config.tracker.tracker_dir), normalized_query
-        )
-        pagination = paginate_application_tracker(snapshot, page=page, page_size=page_size)
-        applications = store.list_applications()
-        summaries_by_identity: dict[str, list[dict[str, int]]] = {}
-        for application in applications:
-            summaries_by_identity.setdefault(_job_identity(application.source_url), []).append(
-                store.token_usage_summary(application_id=application.id)
-            )
-        token_usage_by_source_url = {
-            entry.source_url: _combine_token_summaries(
-                summaries_by_identity.get(_job_identity(entry.source_url), [])
-            )
-            for entry in pagination.entries
-            if entry.source_url
-        }
-        entries = []
-        for entry in pagination.entries:
-            serialized = asdict(entry)
-            research_stage = research_stage_for_status(entry.status)
-            serialized["research"] = {
-                "eligible": research_stage is not None and bool(entry.source_url),
-                "stage": research_stage,
-            }
-            entries.append(serialized)
-        return {
-            "enabled": True,
-            "entries": entries,
-            "summary": snapshot.summary,
-            "total_entries": pagination.total,
-            "page": pagination.page,
-            "page_count": pagination.page_count,
-            "page_size": pagination.page_size,
-            "has_previous": pagination.page > 1,
-            "has_next": pagination.page < pagination.page_count,
-            "cycles": sorted({entry.cycle for entry in snapshot.entries}),
-            "local_application_records": len(applications),
-            "token_usage": store.token_usage_summary(),
-            "message": render_tracker_message(
-                snapshot,
-                page=pagination.page,
-                page_size=pagination.page_size,
-                query=normalized_query,
-                token_usage_by_source_url=token_usage_by_source_url,
-                local_application_count=len(applications),
-            ),
-            "card": build_tracker_card(
-                snapshot,
-                page=pagination.page,
-                page_size=pagination.page_size,
-                query=normalized_query,
-            ).as_dict(),
-        }
-
-    @profile_tool(
-        "research_navigator",
-        title="Open stage-aware role research",
-        description=(
-            "Open a read-only navigator for a tracked role once it reaches an OA, interview, or "
-            "offer. It lists the official posting, saved local research artifacts, bounded public "
-            "links, résumé availability, and stage-specific preparation guidance. Community and "
-            "secondary sources remain explicitly unverified."
-        ),
-        annotations=_READ_ONLY,
-    )
-    def research_navigator(job_url: str) -> dict[str, object]:
-        """Return a mobile-safe research card for one exact eligible tracker row."""
-        if not config.tracker.enabled or config.tracker.tracker_dir is None:
-            raise ValueError("application tracking must be configured to open role research")
-        identity = _job_identity(job_url)
-        matches = [
-            entry
-            for entry in read_application_tracker(config.tracker.tracker_dir).entries
-            if entry.source_url and _job_identity(entry.source_url) == identity
-        ]
-        if not matches:
-            raise ValueError("no tracker row matches this job URL")
-        eligible = [entry for entry in matches if research_stage_for_status(entry.status)]
-        if not eligible:
-            raise ValueError("research navigation becomes available when the role reaches OA")
-        entry = eligible[0]
-        application_matches = [
-            application
-            for application in store.list_applications()
-            if _job_identity(application.source_url) == identity
-        ]
-        package_dir = _research_package_by_identity(
-            output_root=config.resume.output_root,
-            job_url=entry.source_url,
-        )
-        navigator = build_research_navigator(entry=entry, package_dir=package_dir)
-        available_actions = tuple(
-            action
-            for action in navigator.card.actions
-            if action.action_id == "research.back"
-            or (
-                action.action_id == "research.refresh"
-                and "discover_job_research" in enabled_tool_names
-                and package_dir is not None
-                and bool(application_matches)
-            )
-            or (
-                action.action_id == "research.brief"
-                and "create_research_brief" in enabled_tool_names
-                and package_dir is not None
-            )
-        )
-        card = replace(navigator.card, actions=available_actions)
-        return {
-            "company": entry.company,
-            "role": entry.role,
-            "job_url": entry.source_url,
-            "stage": navigator.stage,
-            "research_query": f"{entry.company} {entry.role}",
-            "package_available": navigator.package_available,
-            "resume_available": navigator.resume_available,
-            "source_warning": navigator.source_warning,
-            "saved_artifact_count": navigator.saved_artifact_count,
-            "artifacts": [artifact.as_dict() for artifact in navigator.artifacts],
-            "links": [link.as_dict() for link in navigator.links],
-            "card": card.as_dict(),
-        }
-
-    @profile_tool("onboarding_status", annotations=_READ_ONLY)
-    def onboarding_status() -> dict[str, object]:
-        """Return the shared truthful onboarding card without mutating local state."""
-        return build_onboarding_card(load_config(config_path), store).as_dict()
-
-    @profile_tool("erga_settings_card", annotations=_READ_ONLY)
-    def erga_settings_card(host_integration: str = "") -> dict[str, object]:
-        """Return a redacted shared settings card; credentials and secret paths are omitted."""
-        if host_integration not in {"", "hermes"}:
-            raise ValueError("host_integration is not supported")
-        return build_settings_card(
-            load_config(config_path), store, host_integration=host_integration
-        ).as_dict()
-
-    @profile_tool("git_skill_review_card", annotations=_READ_ONLY)
-    def git_skill_review_card(
-        page: Annotated[StrictInt, Field(ge=1)] = 1,
-        page_size: Annotated[StrictInt, Field(ge=1, le=10)] = 5,
-        source_filter: str = "",
-        seed_csv: str = "",
-    ) -> dict[str, object]:
-        """Render paginated Git/seed skill groups; rendering never approves evidence."""
-        seed_override = parse_skill_seed_csv(seed_csv) if seed_csv.strip() else ()
-        current_config = load_config(config_path)
-        if current_config.portfolio_roots:
-            primary_action = (
-                "git.scan",
-                "Scan Git projects",
-                "Scan configured roots and refresh this review.",
-            )
-        elif detected_portfolio_root() is not None:
-            primary_action = (
-                "onboarding.roots.use_detected",
-                "Use detected folder and scan",
-                "One tap: configure the detected projects folder, then continue this scan.",
-            )
-        else:
-            primary_action = (
-                "onboarding.roots.help",
-                "Set up Git projects",
-                "Choose the projects folder on the computer running Erga before scanning.",
-            )
-        return build_git_skill_review_card(
-            store,
-            page=page,
-            page_size=page_size,
-            source_filter=source_filter or None,
-            seed_override=seed_override,
-            primary_action_id=primary_action[0],
-            primary_action_label=primary_action[1],
-            primary_action_instruction=primary_action[2],
-        ).as_dict()
-
-    @profile_tool("project_catalogue", annotations=_READ_ONLY)
-    def project_catalogue(
-        page: Annotated[StrictInt, Field(ge=1)] = 1,
-        page_size: Annotated[StrictInt, Field(ge=1, le=10)] = 6,
-        query: str = "",
-    ) -> dict[str, object]:
-        """Browse cached GitHub discovery plus the approved project inventory without writes."""
-        return build_project_catalogue(
-            load_config(config_path),
-            store,
-            page=page,
-            page_size=page_size,
-            query=query,
-        ).as_dict()
-
-    @profile_tool(
-        "refresh_project_catalogue",
-        title="Refresh and browse the private GitHub project catalogue",
-        description=(
-            "Use the already-authorized GitHub CLI to refresh owned/collaborator repository "
-            "metadata in Erga's private local cache, then return the shared project catalogue. "
-            "This never approves evidence or changes a resume."
-        ),
-        annotations=_NETWORK_READ_AND_WRITE,
-    )
-    def refresh_project_catalogue(
-        page: Annotated[StrictInt, Field(ge=1)] = 1,
-        page_size: Annotated[StrictInt, Field(ge=1, le=10)] = 6,
-        query: str = "",
-    ) -> dict[str, object]:
-        """Refresh bounded GitHub metadata and reopen the catalogue without evidence writes."""
-        current_config = load_config(config_path)
-        discovered = discover_github_projects(
-            cache_path=current_config.data_dir / "github-project-catalogue.json"
-        )
-        payload = build_project_catalogue(
-            current_config,
-            store,
-            page=page,
-            page_size=page_size,
-            query=query,
-        ).as_dict()
-        payload["github_projects_refreshed"] = len(discovered)
-        payload["evidence_created"] = False
-        payload["resume_changed"] = False
-        return payload
-
-    @profile_tool("update_skill_inventory", annotations=_LOCAL_IDEMPOTENT_WRITE)
-    def update_skill_inventory(
-        operation: str,
-        skill: str = "",
-        skill_csv: str = "",
-    ) -> dict[str, object]:
-        """Explicitly manage self-reported review hints without creating résumé evidence."""
-        if operation == "set":
-            if skill or not skill_csv.strip():
-                raise ValueError("set requires skill_csv and does not accept skill")
-            store.set_skill_seeds(parse_skill_seed_csv(skill_csv))
-        elif operation == "import_approved":
-            if skill or skill_csv:
-                raise ValueError("import_approved does not accept skill or skill_csv")
-            imported = explicit_skills_in_texts(
-                item.text for item in store.list_evidence() if item.approved
-            )
-            if not imported:
-                raise ValueError("approved evidence contains no explicit audited skill names")
-            for imported_skill in imported:
-                store.add_skill_seed(imported_skill, source="approved_evidence")
-        elif operation == "add":
-            if not skill or skill_csv:
-                raise ValueError("add requires skill and does not accept skill_csv")
-            store.add_skill_seed(skill)
-        elif operation in {"check", "uncheck"}:
-            if not skill or skill_csv:
-                raise ValueError(f"{operation} requires skill and does not accept skill_csv")
-            store.set_skill_seed_checked(skill, checked=operation == "check")
-        elif operation == "remove":
-            if not skill or skill_csv:
-                raise ValueError("remove requires skill and does not accept skill_csv")
-            store.remove_skill_seed(skill)
-        elif operation != "list" or skill or skill_csv:
-            raise ValueError(
-                "operation must be set, add, list, check, uncheck, remove, or import_approved"
-            )
-        return {
-            "skills": [asdict(item) for item in store.list_skill_seeds()],
-            "evidence_created": False,
-            "card": build_onboarding_card(load_config(config_path), store).as_dict(),
-        }
-
-    @profile_tool("manage_portfolio_roots", annotations=_LOCAL_IDEMPOTENT_WRITE)
-    def manage_portfolio_roots(
-        operation: str,
-        root: str = "",
-        roots: list[str] | None = None,
-    ) -> dict[str, object]:
-        """Manage only explicit existing local roots; never crawl a home directory by default."""
-        current = list(load_config(config_path).portfolio_roots)
-        if operation == "add":
-            if not root or roots is not None:
-                raise ValueError("add requires root and does not accept roots")
-            current.append(Path(root))
-            current = list(update_portfolio_roots(config_path, current))
-        elif operation == "add_detected":
-            if root or roots is not None:
-                raise ValueError("add_detected does not accept root or roots")
-            detected = detected_portfolio_root()
-            if detected is None:
-                raise ValueError(
-                    "no conventional local projects folder with Git repositories found"
-                )
-            current.append(detected)
-            current = list(update_portfolio_roots(config_path, current))
-        elif operation == "remove":
-            if not root or roots is not None:
-                raise ValueError("remove requires root and does not accept roots")
-            target = Path(root).expanduser().absolute()
-            if target.is_symlink() or not target.is_dir():
-                raise ValueError(f"portfolio root must be an existing directory: {target}")
-            resolved = target.resolve(strict=True)
-            if resolved not in current:
-                raise ValueError("portfolio root is not configured")
-            current.remove(resolved)
-            current = list(update_portfolio_roots(config_path, current))
-        elif operation == "set":
-            if root or roots is None:
-                raise ValueError("set requires roots and does not accept root")
-            current = list(update_portfolio_roots(config_path, [Path(item) for item in roots]))
-        elif operation != "list" or root or roots is not None:
-            raise ValueError("operation must be set, add, add_detected, list, or remove")
-        return {
-            "roots": [str(item) for item in current],
-            "card": build_onboarding_card(load_config(config_path), store).as_dict(),
-        }
-
-    @profile_tool("review_git_skill_group", annotations=_LOCAL_WRITE)
-    def review_git_skill_group(operation: str, skill: str) -> dict[str, object]:
-        """Inspect, skip, restore, or explicitly approve one Git skill group."""
-        matches = [
-            item
-            for item in reconcile_git_skill_groups(store, include_skipped=True)
-            if item.normalized_skill == skill.strip().casefold()
-        ]
-        if operation == "inspect":
-            if not matches:
-                raise ValueError("git skill group does not exist")
-            return {
-                "group": asdict(matches[0]),
-                "approved_evidence_count": 0,
-                "resume_changed": False,
-            }
-        if operation in {"skip", "restore"}:
-            if not matches:
-                raise ValueError("git skill group does not exist")
-            store.set_git_skill_group_skipped(skill, skipped=operation == "skip")
-            return {
-                "group": asdict(matches[0]),
-                "skipped": operation == "skip",
-                "approved_evidence_count": 0,
-                "resume_changed": False,
-            }
-        if operation != "approve":
-            raise ValueError("operation must be inspect, approve, skip, or restore")
-        approved = approve_git_skill_group(store, skill)
-        return {
-            "group": asdict(
-                next(
-                    item
-                    for item in reconcile_git_skill_groups(store)
-                    if item.normalized_skill == skill.strip().casefold()
-                )
-            ),
-            "approved_evidence_count": len(approved),
-            "evidence": [asdict(item) for item in approved],
-            "resume_changed": False,
-        }
-
-    @profile_tool("list_evidence", annotations=_READ_ONLY)
-    def list_evidence() -> list[dict[str, object]]:
-        """List evidence records while withholding master-resume text from non-private profiles."""
-        evidence_records = _profile_visible_evidence(selected_tool_profile, store.list_evidence())
-        return [
-            cast(dict[str, object], _json_value(asdict(evidence))) for evidence in evidence_records
-        ]
-
-    @profile_tool("resume_source_context", annotations=_READ_ONLY)
-    def resume_source_context() -> dict[str, object]:
-        """Return approved master knowledge and style-only layout metadata."""
-        if config.resume.master_path is None:
-            raise ValueError("import a master resume before requesting source context")
-        return build_resume_source_context(
-            master_path=config.resume.master_path,
-            reference_path=config.resume.reference_path,
-            template_path=config.resume.template_path,
-        )
-
-    @profile_tool("list_mail_events", annotations=_READ_ONLY)
-    def list_mail_events() -> list[dict[str, object]]:
-        """List normalized local mail events; previews and message bodies are not retained."""
-        return [
-            cast(dict[str, object], _json_value(asdict(event)))
-            for event in store.list_mail_events()
-        ]
-
-    @profile_tool("token_usage", annotations=_READ_ONLY)
-    def token_usage(application_id: str = "") -> dict[str, object]:
-        """Show recorded input, output, and total model tokens; no dollar-cost estimate is made."""
-        normalized = application_id.strip()
-        return cast(
-            dict[str, object],
-            store.token_usage_summary(application_id=normalized or None),
-        )
-
-    @profile_tool(
-        "propose_project_metrics",
-        title="Analyze attributable Git-backed project scope",
-        description=(
-            "Inspect a single explicit local Git worktree and return review-only, "
-            "author-attributed engineering context plus deterministic test-case, HTTP-route, "
-            "and CLI-command scope from recognized source and test files. "
-            "Generated assets, dependencies, locks, snapshots, docs, and data are excluded. "
-            "Commit, file, language, and line counts remain internal review facts and are never "
-            "promoted into resume metrics or mistaken for product impact."
-        ),
-        annotations=_READ_ONLY,
-    )
-    def propose_project_metrics(
-        repo_path: str, author_email: str, commit_limit: int = 200
-    ) -> dict[str, object]:
-        """Return confirmation-required Git scope for one repository, not resume claims."""
-        proposal = propose_git_project_metrics(
-            Path(repo_path), author_email=author_email, commit_limit=commit_limit
-        )
-        return cast(dict[str, object], _json_value(asdict(proposal)))
-
-    @profile_tool(
-        "research_git_worktrees",
-        title="Research explicit local Git worktrees from diffs",
-        description=(
-            "Run the unified candidate scan and diff-research pipeline below explicit existing "
-            "roots, or below roots saved during onboarding when the list is empty. This tool "
-            "never defaults to home-directory scanning, uses no network, returns only "
-            "review-required provenance, and never auto-approves evidence or edits a resume."
-        ),
-        annotations=_LOCAL_WRITE,
-    )
-    def research_git_worktrees(roots: list[str]) -> dict[str, object]:
-        """Scan Git candidates and create unapproved diff drafts below configured or given roots."""
-        selected_roots = roots or [str(root) for root in load_config(config_path).portfolio_roots]
-        if not selected_roots:
-            return {
-                "repositories_scanned": 0,
-                "candidates_created": 0,
-                "observations_created": 0,
-                "research_drafts": 0,
-                "drafts": [],
-                "auto_approved": False,
-                "scan_started": False,
-                "setup_required": True,
-                "card": build_onboarding_card(load_config(config_path), store).as_dict(),
-            }
-        return _git_research_report(store, selected_roots)
-
-    @profile_tool(
-        "review_git_drafts",
-        title="Review one persisted Git or manual project draft",
-        description=(
-            "Display or explicitly navigate, save, skip, edit, or add a local review draft. "
-            "Saving never approves evidence or changes a resume; Git provenance remains local."
-        ),
-        annotations=_LOCAL_WRITE,
-    )
-    def review_git_drafts(
-        action: str = "show",
-        draft_id: str | None = None,
-        title: str = "",
-        description: str = "",
-    ) -> dict[str, object]:
-        """Operate one persisted review draft at a time without an evidence-approval route."""
-        if action == "add":
-            if draft_id is not None:
-                raise ValueError("adding a manual project draft does not accept a draft ID")
-            store.add_manual_git_research_draft(title=title, description=description)
-            draft, position, total = store.review_git_research_draft(action="show", draft_id=None)
-        else:
-            if action == "edit" and (not title or not description):
-                raise ValueError("editing a review draft requires title and description")
-            if action != "edit" and (title or description):
-                raise ValueError("title and description are only valid when adding or editing")
-            draft, position, total = store.review_git_research_draft(
-                action=action,
-                draft_id=draft_id,
-                title=title or None,
-                description=description or None,
-            )
-        return {
-            "draft": {
-                "id": draft.id,
-                "title": draft.title,
-                "description": draft.description,
-                "source": draft.source,
-                "review_status": draft.review_status,
-                "needs_review": draft.needs_review,
-            },
-            "position": position,
-            "total": total,
-            "evidence_approved": False,
-            "resume_changed": False,
-        }
-
-    @profile_tool(
-        "review_git_draft_prompt",
-        title="Prompt for an explicit Git-project review decision",
-        description=(
-            "On MCP 2026-07-28 clients, display one local draft and ask for an explicit Save or "
-            "Skip decision. Save or Skip changes only the local draft review status; neither "
-            "approves evidence nor changes a resume. Older clients receive the draft without a "
-            "prompt and must use review_git_drafts explicitly."
-        ),
-        annotations=_LOCAL_WRITE,
-    )
-    async def review_git_draft_prompt(
-        draft_id: str,
-        ctx: Context,
-    ) -> dict[str, object] | InputRequiredResult:
-        """Use a sealed MCP multi-round-trip request for one explicit review decision."""
-        shown = review_git_drafts(action="show", draft_id=draft_id)
-        if ctx.protocol_version != "2026-07-28":
-            return shown
-
-        response = (ctx.input_responses or {}).get("review_decision")
-        if response is not None:
-            if not isinstance(response, ElicitResult) or response.action != "accept":
-                return shown
-            decision = (response.content or {}).get("decision")
-            if decision not in {"save", "skip"}:
-                return shown
-            if ctx.request_state != draft_id:
-                raise ValueError("review decision does not match the requested draft")
-            return review_git_drafts(action=decision, draft_id=draft_id)
-
-        draft_data = cast(dict[str, object], shown["draft"])
-        title = cast(str, draft_data["title"])
-        return InputRequiredResult(
-            input_requests={
-                "review_decision": ElicitRequest(
-                    params=ElicitRequestFormParams(
-                        message=(
-                            f"Review local project draft: {title}. Save keeps it as a reviewable "
-                            "draft; Skip marks it skipped. Neither action approves evidence or "
-                            "changes a resume."
-                        ),
-                        requested_schema={
-                            "type": "object",
-                            "properties": {
-                                "decision": {
-                                    "type": "string",
-                                    "enum": ["save", "skip"],
-                                    "description": "Choose Save only after reviewing the draft.",
-                                }
-                            },
-                            "required": ["decision"],
-                            "additionalProperties": False,
-                        },
-                    )
-                )
-            },
-            request_state=draft_id,
-        )
-
-    @profile_tool("record_token_usage", annotations=_LOCAL_WRITE)
-    def record_token_usage(
-        application_id: str,
-        operation: str,
-        input_tokens: StrictInt,
-        output_tokens: StrictInt,
-        model: str = "",
-    ) -> dict[str, object]:
-        """Record host-reported tokens against one local application without a dollar estimate."""
-        usage = store.record_token_usage(
-            application_id=application_id,
-            operation=operation,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            model=model or None,
-        )
-        return {
-            "usage": cast(dict[str, object], _json_value(asdict(usage))),
-            "summary": store.token_usage_summary(application_id=application_id),
-        }
-
-    @profile_tool("sync_recruiting_mail", annotations=_NETWORK_READ_AND_WRITE)
-    def sync_recruiting_mail() -> dict[str, object]:
-        """Read configured mail page by page, persist local events, and summarize safely."""
-        known_message_ids = {event.message_id for event in store.list_mail_events()}
-        messages = build_mail_provider(config).fetch_inbox_metadata(
-            page_size=100,
-            max_messages=1000,
-            include_content=config.mail_provider != "gmail",
-            known_message_ids=known_message_ids,
-        )
-        new_messages = [
-            message for message in messages if message.message_id not in known_message_ids
-        ]
-        sync_result = sync_metadata(store, new_messages)
-        tracker_updates = 0
-        tracker_imports = 0
-        if config.tracker.enabled and config.tracker.tracker_dir is not None:
-            tracker_updates = reconcile_confirmed_application_tracker_rows(
-                tracker_dir=config.tracker.tracker_dir,
-                events=store.list_mail_events(),
-            )
-            tracker_imports = import_confirmed_application_tracker_rows(
-                tracker_dir=config.tracker.tracker_dir,
-                active_cycles=config.tracker.active_cycles,
-                events=store.list_mail_events(),
-            )
-        tracker_rows_updated = tracker_updates + tracker_imports
-        contacts_projected = project_recruiter_contacts(
-            store.list_recruiter_contacts(), config.contact_outputs
-        )
-        created = cast(int, sync_result["created"])
-        recruiting_events = cast(int, sync_result["application"]) + cast(int, sync_result["job"])
-        message = (
-            "📬 **Erga mail sync complete**\n\n"
-            f"{config.mail_provider.title()} {config.mail_folder} checked: "
-            f"{len(messages)} messages scanned · {created} new events · "
-            f"{recruiting_events} recruiting updates · "
-            f"{tracker_rows_updated} tracker rows updated · "
-            f"{contacts_projected} contacts projected."
-        )
-        return {
-            "provider": config.mail_provider,
-            "fetched": len(messages),
-            "created": created,
-            "recruiting_events": recruiting_events,
-            "tracker_updates": tracker_rows_updated,
-            "tracker_imports": tracker_imports,
-            "contacts_projected": contacts_projected,
-            "message": message,
-        }
 
     def public_tailoring_plan(plan: Any) -> dict[str, object]:
         payload = plan.as_public_dict()
@@ -3316,7 +2246,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             payload["preferences"] = asdict(tailoring_plan_preferences(plan))
         return cast(dict[str, object], _json_value(payload))
 
-    @profile_tool(
+    @registry.tool(
         "create_tailoring_plan",
         title="Plan a tailored résumé before generation",
         description=(
@@ -3358,7 +2288,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         store.save_tailoring_plan(plan)
         return public_tailoring_plan(plan)
 
-    @profile_tool(
+    @registry.tool(
         "update_tailoring_plan",
         title="Answer or navigate one persisted résumé-plan question",
         description=(
@@ -3397,7 +2327,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         store.save_tailoring_plan(plan)
         return public_tailoring_plan(plan)
 
-    @profile_tool(
+    @registry.tool(
         "intake_job_url",
         title="Intake a pasted job-posting URL",
         description=_JOB_URL_INTAKE_DESCRIPTION,
@@ -3446,7 +2376,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 )
             ),
         ] = "",
-    ) -> IntakeJobResult:
+    ) -> IntakeJobResult | InputRequiredResult:
         """Run the primary end-to-end local intake for one pasted job URL."""
         tailoring_plan = None
         preferences = None
@@ -3492,6 +2422,11 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                     preserved_manifest.rename(legacy_manifest)
                 quarantine.rename(legacy_package)
                 raise
+            if isinstance(repaired, InputRequiredResult):
+                if preserved_manifest.is_file():
+                    preserved_manifest.rename(legacy_manifest)
+                quarantine.rename(legacy_package)
+                return repaired
             repaired_package = Path(repaired.package_dir)
             backup_dir = repaired_package / "legacy-backup"
             quarantine.rename(backup_dir)
@@ -3554,10 +2489,25 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         snapshot = (
             tailoring_plan.job_snapshot
             if tailoring_plan is not None
-            else fetch_job_snapshot(job_url)
+            else await anyio.to_thread.run_sync(
+                fetch_job_snapshot,
+                job_url,
+                abandon_on_cancel=True,
+            )
         )
-        source_research = analyze_job_snapshot(snapshot, job_url=job_url)
-        require_job_source(url=job_url, snapshot=snapshot, research=source_research)
+        source_research = await anyio.to_thread.run_sync(
+            partial(analyze_job_snapshot, snapshot, job_url=job_url),
+            abandon_on_cancel=True,
+        )
+        await anyio.to_thread.run_sync(
+            partial(
+                require_job_source,
+                url=job_url,
+                snapshot=snapshot,
+                research=source_research,
+            ),
+            abandon_on_cancel=True,
+        )
         resolved_cycle, resolved_slug = _metadata_from_research(
             job_url,
             source_research,
@@ -3605,19 +2555,27 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             and len(preferences.project_ids) == config.resume.project_count
             else ()
         )
-        enrichment = await _project_enrichment_for_tailoring(
-            ctx=ctx,
-            config=config,
-            store=store,
-            resume_path=config.resume.template_path,
-            job_description=tailoring_context,
-            evidence=all_approved,
-            preferred_project_ids=preferred_project_ids,
-            allow_ai_synthesis=(
-                preferences.allow_ai_synthesis if preferences is not None else True
-            ),
-            tailoring_emphasis=(preferences.emphasis if preferences is not None else "balanced"),
-        )
+        try:
+            enrichment = await _project_enrichment_for_tailoring(
+                ctx=ctx,
+                config=config,
+                store=store,
+                resume_path=config.resume.template_path,
+                job_description=tailoring_context,
+                evidence=all_approved,
+                preferred_project_ids=preferred_project_ids,
+                allow_ai_synthesis=(
+                    preferences.allow_ai_synthesis if preferences is not None else True
+                ),
+                tailoring_emphasis=(
+                    preferences.emphasis if preferences is not None else "balanced"
+                ),
+            )
+        except _ModernSamplingRequired as required:
+            return InputRequiredResult(
+                input_requests={"resume_project_draft": required.request},
+                request_state=required.request_state,
+            )
         project_candidates = enrichment.candidates
         all_approved = _merge_evidence(all_approved, enrichment.evidence)
         evidence = _merge_evidence(evidence, enrichment.evidence)
@@ -3639,49 +2597,69 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         # callers either publish once or reuse the completed winner.
         with TemporaryDirectory(prefix=f".{resolved_slug}.intake-", dir=cycle_dir) as staging:
             staging_root = Path(staging)
-            workspace = create_job_workspace(
-                output_root=staging_root,
-                cycle=resolved_cycle,
-                application_slug=resolved_slug,
-                job_url=job_url,
-                job_snapshot=snapshot,
-                template_path=config.resume.template_path,
-                selected_evidence=evidence,
+            workspace = await anyio.to_thread.run_sync(
+                partial(
+                    create_job_workspace,
+                    output_root=staging_root,
+                    cycle=resolved_cycle,
+                    application_slug=resolved_slug,
+                    job_url=job_url,
+                    job_snapshot=snapshot,
+                    template_path=config.resume.template_path,
+                    selected_evidence=evidence,
+                ),
+                abandon_on_cancel=True,
             )
-            automatic = _create_render_packed_automatic_resume_proposal(
-                resume_path=workspace.template_copy_path,
-                output_dir=workspace.package.package_dir / "artifacts",
-                job_description=tailoring_context,
-                evidence=evidence,
-                project_candidates=project_candidates,
-                config=config,
-                additional_project_quality_rejections=enrichment.quality_rejections,
-                spacing_fallback_requested=enrichment.requires_spacing_fallback,
+            automatic = await anyio.to_thread.run_sync(
+                partial(
+                    _create_render_packed_automatic_resume_proposal,
+                    resume_path=workspace.template_copy_path,
+                    output_dir=workspace.package.package_dir / "artifacts",
+                    job_description=tailoring_context,
+                    evidence=evidence,
+                    project_candidates=project_candidates,
+                    config=config,
+                    additional_project_quality_rejections=enrichment.quality_rejections,
+                    spacing_fallback_requested=enrichment.requires_spacing_fallback,
+                ),
+                abandon_on_cancel=True,
             )
             automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
-            enrichment = _realign_git_project_research(
-                project_selection=automatic.project_selection,
-                enrichment=enrichment,
-                config=config,
-                store=store,
-                job_description=tailoring_context,
+            enrichment = await anyio.to_thread.run_sync(
+                partial(
+                    _realign_git_project_research,
+                    project_selection=automatic.project_selection,
+                    enrichment=enrichment,
+                    config=config,
+                    store=store,
+                    job_description=tailoring_context,
+                ),
+                abandon_on_cancel=True,
             )
             _require_git_research_alignment(automatic.project_selection, enrichment)
             _require_constraint_valid_proposal(automatic)
             proposal = automatic.proposal
-            _require_single_line_resume_layout(
-                proposal.proposed_tex_path,
-                latexmk=config.resume.latexmk,
-                enabled=True,
-            )
-            validation = _compile_intake_proposal(
-                proposal.proposed_tex_path,
-                latexmk=config.resume.latexmk,
-                output_pdf_name=config.resume.output_pdf_name,
-                max_pages=config.resume.max_pages,
-                minimum_page_fill_ratio=(
-                    config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
+            await anyio.to_thread.run_sync(
+                partial(
+                    _require_single_line_resume_layout,
+                    proposal.proposed_tex_path,
+                    latexmk=config.resume.latexmk,
+                    enabled=True,
                 ),
+                abandon_on_cancel=True,
+            )
+            validation = await anyio.to_thread.run_sync(
+                partial(
+                    _compile_intake_proposal,
+                    proposal.proposed_tex_path,
+                    latexmk=config.resume.latexmk,
+                    output_pdf_name=config.resume.output_pdf_name,
+                    max_pages=config.resume.max_pages,
+                    minimum_page_fill_ratio=(
+                        config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
+                    ),
+                ),
+                abandon_on_cancel=True,
             )
             manifest = json.loads(workspace.package.manifest_path.read_text(encoding="utf-8"))
             manifest.update(
@@ -3759,7 +2737,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                     job_url=job_url,
                 )
 
-    @profile_tool(
+    @registry.tool(
         "execute_tailoring_plan",
         title="Generate a résumé from an approved tailoring plan",
         description=(
@@ -3772,7 +2750,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
     async def execute_tailoring_plan(
         plan_id: str,
         ctx: Context = None,  # type: ignore[assignment]
-    ) -> dict[str, object]:
+    ) -> dict[str, object] | InputRequiredResult:
         plan = store.get_tailoring_plan(plan_id)
         if plan is None:
             raise ValueError("tailoring plan does not exist")
@@ -3786,6 +2764,8 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             tailoring_plan_id=plan.id,
             ctx=ctx,
         )
+        if isinstance(result, InputRequiredResult):
+            return result
         completed = set_tailoring_plan_status(plan, "completed")
         store.save_tailoring_plan(completed)
         return {
@@ -3793,7 +2773,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "intake": cast(dict[str, object], _json_value(result.model_dump())),
         }
 
-    @profile_tool(
+    @registry.tool(
         "scrape_public_page",
         title="Scrape one public research page",
         description=(
@@ -3817,7 +2797,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "untrusted": result.untrusted,
         }
 
-    @profile_tool(
+    @registry.tool(
         "extract_public_page",
         title="Extract a targeted public-page section",
         description=(
@@ -3840,7 +2820,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "untrusted": True,
         }
 
-    @profile_tool(
+    @registry.tool(
         "record_secondary_research",
         title="Record cited secondary job research",
         description=(
@@ -3877,7 +2857,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "searches_recorded": len(normalized),
         }
 
-    @profile_tool("discover_job_research", annotations=_NETWORK_READ_AND_WRITE)
+    @registry.tool("discover_job_research", annotations=_NETWORK_READ_AND_WRITE)
     def discover_job_research(query: str = "", job_url: str = "") -> dict[str, object]:
         """Run bounded public research for one tracked application and save a local cited note."""
         applications = store.list_applications()
@@ -3892,7 +2872,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 raise ValueError("no tracked application matches this job URL")
             application = max(matches, key=lambda item: item.created_at)
         else:
-            application = _notes_application(query, applications)
+            application = select_tracked_application(query, applications)
         package_dir = _research_package_by_identity(
             output_root=config.resume.output_root,
             job_url=application.source_url,
@@ -3917,7 +2897,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "community_sources_unverified": True,
         }
 
-    @profile_tool(
+    @registry.tool(
         "create_research_brief",
         title="Create a fast stage-gated research brief",
         description=(
@@ -3946,7 +2926,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         )
         return {"research_brief": str(path), "stage": stage.strip().casefold()}
 
-    @profile_tool(
+    @registry.tool(
         "record_deep_research",
         title="Record a cited deep stage-research dossier",
         description=(
@@ -3987,7 +2967,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "searches_recorded": len(normalized),
         }
 
-    @profile_tool("install_mail_monitor_scripts", annotations=_LOCAL_WRITE)
+    @registry.tool("install_mail_monitor_scripts", annotations=_DESTRUCTIVE_LOCAL_WRITE)
     def install_mail_monitor_scripts(
         history_days: int = 7, replace: bool = True
     ) -> dict[str, object]:
@@ -4003,7 +2983,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             replace=replace,
         )
 
-    @profile_tool("export_data", annotations=_LOCAL_WRITE)
+    @registry.tool("export_data", annotations=_LOCAL_WRITE)
     def export_data() -> dict[str, object]:
         """Create a private ZIP export suitable for native messaging attachment delivery."""
         export_root = config.data_dir / "exports"
@@ -4015,7 +2995,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         )
         return {**result, "export_root": str(export_root.resolve())}
 
-    @profile_tool("prepare_job_workspace", annotations=_NETWORK_READ_AND_WRITE)
+    @registry.tool("prepare_job_workspace", annotations=_NETWORK_READ_AND_WRITE)
     async def prepare_job_workspace(
         job_url: str,
         company: str,
@@ -4023,7 +3003,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         cycle: str,
         application_slug: str,
         ctx: Context = None,  # type: ignore[assignment]
-    ) -> dict[str, object]:
+    ) -> dict[str, object] | InputRequiredResult:
         """Advanced second-stage workspace setup when all job metadata is already known.
 
         Do not use this tool for a pasted or bare job URL; intake_job_url is the primary
@@ -4032,19 +3012,32 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         """
         if config.resume.template_path is None or config.vault_path is None:
             raise ValueError("resume template_path and vault_path must be configured")
-        snapshot = fetch_job_snapshot(job_url)
-        research = analyze_job_snapshot(snapshot, job_url=job_url)
+        snapshot = await anyio.to_thread.run_sync(
+            fetch_job_snapshot,
+            job_url,
+            abandon_on_cancel=True,
+        )
+        research = await anyio.to_thread.run_sync(
+            partial(analyze_job_snapshot, snapshot, job_url=job_url),
+            abandon_on_cancel=True,
+        )
         all_approved = [item for item in store.list_evidence() if item.approved]
         evidence = select_relevant_evidence(snapshot, all_approved)
         tailoring_context = _tailoring_context(research, snapshot)
-        enrichment = await _project_enrichment_for_tailoring(
-            ctx=ctx,
-            config=config,
-            store=store,
-            resume_path=config.resume.template_path,
-            job_description=tailoring_context,
-            evidence=all_approved,
-        )
+        try:
+            enrichment = await _project_enrichment_for_tailoring(
+                ctx=ctx,
+                config=config,
+                store=store,
+                resume_path=config.resume.template_path,
+                job_description=tailoring_context,
+                evidence=all_approved,
+            )
+        except _ModernSamplingRequired as required:
+            return InputRequiredResult(
+                input_requests={"resume_project_draft": required.request},
+                request_state=required.request_state,
+            )
         project_candidates = enrichment.candidates
         all_approved = _merge_evidence(all_approved, enrichment.evidence)
         evidence = _merge_evidence(evidence, enrichment.evidence)
@@ -4129,7 +3122,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             ],
         }
 
-    @profile_tool("create_tailored_resume", annotations=_LOCAL_WRITE)
+    @registry.tool("create_tailored_resume", annotations=_DESTRUCTIVE_LOCAL_WRITE)
     def create_tailored_resume(
         package_dir: str, section: str, latex_content: str, evidence_ids: list[str]
     ) -> dict[str, str]:
@@ -4155,7 +3148,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "claim_report": str(proposal.claim_report_path),
         }
 
-    @profile_tool("cover_letter_style_context", annotations=_READ_ONLY)
+    @registry.tool("cover_letter_style_context", annotations=_READ_ONLY)
     def cover_letter_style_context() -> dict[str, object]:
         """Read the configured cover-letter template and user writing sample locally.
 
@@ -4176,7 +3169,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "writing_sample_sha256": style.sha256,
         }
 
-    @profile_tool("create_cover_letter", annotations=_LOCAL_WRITE)
+    @registry.tool("create_cover_letter", annotations=_DESTRUCTIVE_LOCAL_WRITE)
     def create_cover_letter(package_dir: str, body: str, evidence_ids: list[str]) -> dict[str, str]:
         """Create a reviewable local cover-letter proposal from configured sources."""
         settings = config.cover_letter
@@ -4200,7 +3193,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             "provenance": str(proposal.provenance_path),
         }
 
-    @profile_tool("validate_tailored_resume", annotations=_LOCAL_EXEC)
+    @registry.tool("validate_tailored_resume", annotations=_LOCAL_EXEC)
     def validate_tailored_resume(proposal_tex: str) -> dict[str, object]:
         """Compile a proposal and enforce the configured page-count and fill guarantees."""
         proposal_path = Path(proposal_tex).expanduser().resolve()
@@ -4223,37 +3216,6 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         return cast(dict[str, object], _json_value(validation.model_dump()))
 
     return server
-
-
-def build_streamable_http_app(
-    server: MCPServer,
-    settings: HttpTransportSettings | None = None,
-) -> Starlette:
-    """Build a loopback-only, stateless Streamable HTTP app for modern and legacy clients."""
-    transport_settings = settings or HttpTransportSettings(host="127.0.0.1", port=8765)
-    transport_app = server.streamable_http_app(
-        host=transport_settings.host,
-        stateless_http=True,
-        transport_security=TransportSecuritySettings(
-            enable_dns_rebinding_protection=True,
-            allowed_hosts=_LOOPBACK_HOST_HEADERS,
-        ),
-    )
-
-    @asynccontextmanager
-    async def lifespan(_: Starlette):
-        async with server.session_manager.run():
-            yield
-
-    return Starlette(
-        routes=[Mount("/", app=protect_http_app(transport_app))],
-        lifespan=lifespan,
-    )
-
-
-def run_streamable_http(server: MCPServer, settings: HttpTransportSettings) -> None:
-    """Run the MCP server on loopback-only Streamable HTTP with an Origin guard."""
-    uvicorn.run(build_streamable_http_app(server, settings), host=settings.host, port=settings.port)
 
 
 def main() -> None:

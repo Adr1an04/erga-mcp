@@ -16,11 +16,12 @@ from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamable_http_client
+from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 
 from erga_mcp.config import DEFAULT_CONFIG
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_HTTP_TOKEN = "test-token-with-at-least-thirty-two-characters"
 
 
 def _free_loopback_port() -> int:
@@ -67,6 +68,7 @@ def _running_http_server(config_path: Path, port: int) -> Iterator[subprocess.Po
         "ERGA_MCP_TRANSPORT": "streamable-http",
         "ERGA_MCP_HTTP_HOST": "127.0.0.1",
         "ERGA_MCP_HTTP_PORT": str(port),
+        "ERGA_MCP_HTTP_TOKEN": _HTTP_TOKEN,
     }
     process = subprocess.Popen(
         [sys.executable, "-m", "erga_mcp.mcp_server"],
@@ -81,18 +83,21 @@ def _running_http_server(config_path: Path, port: int) -> Iterator[subprocess.Po
     finally:
         process.terminate()
         try:
-            process.wait(timeout=10)
+            process.communicate(timeout=10)
         except subprocess.TimeoutExpired:
             process.kill()
-            process.wait(timeout=10)
+            process.communicate(timeout=10)
 
 
 class McpInteroperabilityTests(unittest.TestCase):
     def test_official_python_sdk_uses_actual_streamable_http_server(self) -> None:
         async def connect(url: str) -> None:
-            async with streamable_http_client(url) as transport:
-                read_stream, write_stream, *_ = transport
-                await _assert_protocol_contract(read_stream, write_stream)
+            async with create_mcp_http_client(
+                headers={"Authorization": f"Bearer {_HTTP_TOKEN}"},
+            ) as http_client:
+                async with streamable_http_client(url, http_client=http_client) as transport:
+                    read_stream, write_stream, *_ = transport
+                    await _assert_protocol_contract(read_stream, write_stream)
 
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"

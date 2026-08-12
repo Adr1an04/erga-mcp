@@ -5,9 +5,7 @@ import re
 from dataclasses import dataclass, field, replace
 from itertools import combinations
 from pathlib import Path
-from typing import Any, Protocol
-
-from mcp.types import SamplingMessage, TextContent, Tool, ToolChoice, ToolUseContent
+from typing import Literal, Protocol
 
 from .bullet_quality import (
     build_project_identity_profile,
@@ -83,8 +81,37 @@ _ACTION_VERBS = (
 )
 
 
-class SamplingSession(Protocol):
-    async def create_message(self, *args: Any, **kwargs: Any) -> object: ...
+@dataclass(frozen=True)
+class TailoringDraftMessage:
+    role: Literal["user", "assistant"]
+    text: str
+
+
+@dataclass(frozen=True)
+class TailoringDraftTool:
+    name: str
+    description: str
+    input_schema: dict[str, object]
+
+
+@dataclass(frozen=True)
+class TailoringDraftRequest:
+    messages: tuple[TailoringDraftMessage, ...]
+    max_tokens: int
+    system_prompt: str
+    temperature: float
+    tools: tuple[TailoringDraftTool, ...]
+    related_request_id: str
+
+
+@dataclass(frozen=True)
+class TailoringDraftResponse:
+    submission: dict[str, object]
+    model: str
+
+
+class TailoringDraftClient(Protocol):
+    async def draft(self, request: TailoringDraftRequest) -> TailoringDraftResponse: ...
 
 
 @dataclass(frozen=True)
@@ -357,20 +384,6 @@ def _submission_schema(
     }
 
 
-def _tool_submission(result: object) -> tuple[dict[str, object], str]:
-    model = str(getattr(result, "model", "host-model"))
-    content = getattr(result, "content", None)
-    blocks = content if isinstance(content, list) else [content]
-    submissions = [
-        block.input
-        for block in blocks
-        if isinstance(block, ToolUseContent) and block.name == _SUBMIT_TOOL
-    ]
-    if len(submissions) != 1 or not isinstance(submissions[0], dict):
-        raise ValueError("the tailoring model did not return one structured project submission")
-    return submissions[0], model
-
-
 def _latex_text(value: str) -> str:
     if "\\" in value or "{" in value or "}" in value:
         raise ValueError("AI-authored bullets must be plain text, not LaTeX")
@@ -567,7 +580,7 @@ def _validate_submission(
 
 async def draft_evidence_backed_projects(
     *,
-    session: SamplingSession,
+    session: TailoringDraftClient,
     related_request_id: str,
     resume_path: Path,
     job_description: str,
@@ -585,7 +598,7 @@ async def draft_evidence_backed_projects(
     required_project_ids: tuple[str, ...] = (),
     tailoring_emphasis: str = "balanced",
 ) -> AIProjectTailoring:
-    """Ask the connected MCP client's model for bounded, evidence-cited project bullets."""
+    """Ask an injected model client for bounded, evidence-cited project bullets."""
     resolved_minimum_bullets = (
         bullets_per_project if minimum_bullets_per_project is None else minimum_bullets_per_project
     )
@@ -788,20 +801,18 @@ async def draft_evidence_backed_projects(
         "exact list; no two bullets anywhere in the submission may share a lead verb. Return plain "
         "text, never LaTeX. Prefer concrete engineering scope and outcomes over generic prose."
     )
-    messages = [SamplingMessage(role="user", content=TextContent(text=json.dumps(prompt)))]
+    messages = [TailoringDraftMessage(role="user", text=json.dumps(prompt))]
     if retry_feedback:
         system_prompt += (
             " This is a correction attempt. Obey the final correction message, do not repeat the "
             "rejected defect, and omit every forbidden numeric token from the prior attempt."
         )
         messages.append(
-            SamplingMessage(
+            TailoringDraftMessage(
                 role="user",
-                content=TextContent(
-                    text=(
-                        "CORRECTION REQUIRED FOR THIS RETRY: "
-                        f"{retry_feedback}. Return a newly corrected tool submission."
-                    )
+                text=(
+                    "CORRECTION REQUIRED FOR THIS RETRY: "
+                    f"{retry_feedback}. Return a newly corrected tool submission."
                 ),
             )
         )
@@ -810,30 +821,29 @@ async def draft_evidence_backed_projects(
             " Preserve exactly the required_project_ids selection. Do not substitute another "
             "project during correction; rewrite the same projects to fix copy or layout defects."
         )
-    result = await session.create_message(
-        messages,
-        max_tokens=4096,
-        system_prompt=system_prompt,
-        include_context="none",
-        temperature=0.2,
-        tools=[
-            Tool(
-                name=_SUBMIT_TOOL,
-                description="Submit the final evidence-cited project selection and bullets.",
-                input_schema=_submission_schema(
-                    project_count=project_count,
-                    minimum_bullets_per_project=resolved_minimum_bullets,
-                    maximum_bullets_per_project=bullets_per_project,
-                    bullet_max_chars=bullet_max_chars,
+    response = await session.draft(
+        TailoringDraftRequest(
+            messages=tuple(messages),
+            max_tokens=4096,
+            system_prompt=system_prompt,
+            temperature=0.2,
+            tools=(
+                TailoringDraftTool(
+                    name=_SUBMIT_TOOL,
+                    description="Submit the final evidence-cited project selection and bullets.",
+                    input_schema=_submission_schema(
+                        project_count=project_count,
+                        minimum_bullets_per_project=resolved_minimum_bullets,
+                        maximum_bullets_per_project=bullets_per_project,
+                        bullet_max_chars=bullet_max_chars,
+                    ),
                 ),
-            )
-        ],
-        tool_choice=ToolChoice(mode="required"),
-        related_request_id=related_request_id,
+            ),
+            related_request_id=related_request_id,
+        )
     )
-    submission, model = _tool_submission(result)
     drafted = _validate_submission(
-        submission,
+        response.submission,
         candidate_by_id=candidate_by_id,
         source_text_by_project=source_text_by_project,
         allowed_ids_by_project=allowed_ids_by_project,
@@ -850,7 +860,7 @@ async def draft_evidence_backed_projects(
     )
     return AIProjectTailoring(
         candidates=drafted,
-        model=model,
+        model=response.model,
         evidence_ids=tuple(
             dict.fromkeys(
                 evidence_id for candidate in drafted for evidence_id in candidate.evidence_ids

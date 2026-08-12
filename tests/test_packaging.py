@@ -21,6 +21,7 @@ class PackagingTests(unittest.TestCase):
     def test_mcp_metadata_and_documentation_inventory_stay_aligned(self) -> None:
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
         contribution_docs = (PROJECT_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+        development_docs = (PROJECT_ROOT / "docs" / "development.md").read_text(encoding="utf-8")
         client_docs = (PROJECT_ROOT / "docs" / "mcp-clients.md").read_text(encoding="utf-8")
         security_docs = (PROJECT_ROOT / "docs" / "security.md").read_text(encoding="utf-8")
         getting_started = (PROJECT_ROOT / "docs" / "getting-started.md").read_text(encoding="utf-8")
@@ -41,7 +42,7 @@ class PackagingTests(unittest.TestCase):
         self.assertNotIn("--extra mcp", ci_workflow)
         self.assertNotIn("--extra mcp", release_workflow)
         self.assertNotIn("[mcp]", ci_workflow)
-        self.assertIn("tests.test_mcp_interoperability", contribution_docs)
+        self.assertIn("tests.test_mcp_interoperability", development_docs)
         self.assertIn("Streamable HTTP", client_docs)
         self.assertIn("Claude Desktop and Cursor", client_docs)
         self.assertIn("Claude Code", client_docs)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -10,6 +12,23 @@ from erga_mcp.resume import create_job_package
 
 
 class ResumePackageTests(unittest.TestCase):
+    def test_job_package_is_owner_only_on_posix(self) -> None:
+        with TemporaryDirectory() as directory:
+            package = create_job_package(
+                output_root=Path(directory) / "output",
+                cycle="summer-2027",
+                application_slug="example-role",
+                job_url="https://jobs.example.test/123",
+            )
+
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(package.package_dir.stat().st_mode), 0o700)
+                self.assertEqual(stat.S_IMODE(package.manifest_path.stat().st_mode), 0o600)
+                for name in ("source", "artifacts", "research"):
+                    self.assertEqual(
+                        stat.S_IMODE((package.package_dir / name).stat().st_mode), 0o700
+                    )
+
     def test_creates_an_isolated_job_package_beneath_the_configured_root(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory) / "applications"

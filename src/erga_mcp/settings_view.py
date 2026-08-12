@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .card_view import CardAction, CardField, CardView
 from .config import ErgaConfig
-from .discord_bridge import settings_path as discord_settings_path
+from .discord_settings import settings_path as discord_settings_path
 from .portfolio_roots import detected_portfolio_root
 from .store import ErgaStore
 

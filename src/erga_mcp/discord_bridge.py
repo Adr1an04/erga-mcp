@@ -29,10 +29,10 @@ from .discord_backends import (
     DiscordBackendName,
     discord_backend,
 )
+from .discord_settings import settings_path
 from .private_files import restrict_private_directory, restrict_private_file
 
 _TOKEN_SERVICE = "erga-mcp.discord"
-_SETTINGS_NAME = "discord-bridge.json"
 _PID_NAME = "discord-bridge-process.json"
 _LOG_NAME = "discord-bridge.log"
 _READY_NAME = "discord-bridge-ready.json"
@@ -123,10 +123,6 @@ class DiscordCard:
     fields: tuple[DiscordCardField, ...] = ()
     footer: str = "Private by default • Erga never submits applications"
     image_filename: str | None = None
-
-
-def settings_path(config_path: Path) -> Path:
-    return config_path.expanduser().absolute().parent / _SETTINGS_NAME
 
 
 def _token_account(config_path: Path) -> str:

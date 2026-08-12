@@ -19,7 +19,8 @@ class MailSyncMcpTests(unittest.TestCase):
             root = Path(directory)
             config_path = root / "config.toml"
             config_path.write_text(
-                DEFAULT_CONFIG.replace('client_id = ""', 'client_id = "test-client"')
+                DEFAULT_CONFIG.replace('tool_profile = "career"', 'tool_profile = "hermes"')
+                .replace('client_id = ""', 'client_id = "test-client"')
                 .replace('folder = "Job Applications"', 'folder = "Inbox"')
                 .replace("enabled = false", "enabled = true")
                 .replace('tracker_dir = ""', 'tracker_dir = "tracker"'),
@@ -42,11 +43,11 @@ class MailSyncMcpTests(unittest.TestCase):
                     return_value=[message],
                 ) as fetch,
                 patch(
-                    "erga_mcp.mcp_server.reconcile_confirmed_application_tracker_rows",
+                    "erga_mcp.mcp.workspace_tools.reconcile_confirmed_application_tracker_rows",
                     return_value=1,
                 ) as reconcile,
                 patch(
-                    "erga_mcp.mcp_server.import_confirmed_application_tracker_rows",
+                    "erga_mcp.mcp.workspace_tools.import_confirmed_application_tracker_rows",
                     return_value=2,
                 ) as imports,
             ):
@@ -82,9 +83,9 @@ class MailSyncMcpTests(unittest.TestCase):
             root = Path(directory)
             config_path = root / "config.toml"
             config_path.write_text(
-                DEFAULT_CONFIG.replace('client_id = ""', 'client_id = "test-client"').replace(
-                    'folder = "Job Applications"', 'folder = "Inbox"'
-                ),
+                DEFAULT_CONFIG.replace('tool_profile = "career"', 'tool_profile = "hermes"')
+                .replace('client_id = ""', 'client_id = "test-client"')
+                .replace('folder = "Job Applications"', 'folder = "Inbox"'),
                 encoding="utf-8",
             )
             known_id_calls: list[set[str]] = []

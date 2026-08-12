@@ -18,6 +18,7 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 from .models import Evidence
+from .private_files import restrict_private_directory, restrict_private_file
 
 
 @dataclass(frozen=True)
@@ -309,15 +310,18 @@ def create_job_package(
     if cycle_dir.is_symlink():
         raise ValueError("resume package directories must not be a symlink")
     cycle_dir.mkdir(exist_ok=True)
+    restrict_private_directory(cycle_dir)
     package_dir = cycle_dir / _safe_path_component(application_slug)
     if package_dir.is_symlink():
         raise ValueError("resume package directories must not be a symlink")
     if package_dir.exists():
         raise FileExistsError(f"resume package already exists: {package_dir}")
     package_dir.mkdir()
-    (package_dir / "source").mkdir()
-    (package_dir / "artifacts").mkdir()
-    (package_dir / "research").mkdir()
+    restrict_private_directory(package_dir)
+    for directory_name in ("source", "artifacts", "research"):
+        directory = package_dir / directory_name
+        directory.mkdir()
+        restrict_private_directory(directory)
     manifest_path = package_dir / "package.json"
     manifest_path.write_text(
         json.dumps(
@@ -334,6 +338,7 @@ def create_job_package(
         + "\n",
         encoding="utf-8",
     )
+    restrict_private_file(manifest_path)
     return ResumePackage(package_dir=package_dir, manifest_path=manifest_path)
 
 

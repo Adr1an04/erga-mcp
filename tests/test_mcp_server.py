@@ -4,6 +4,7 @@ import asyncio
 import json
 import shutil
 import subprocess
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -16,11 +17,18 @@ from unittest.mock import AsyncMock, patch
 
 from starlette.testclient import TestClient
 
-from erga_mcp.ai_resume_tailoring import AIProjectTailoring
+from erga_mcp.ai_resume_tailoring import (
+    AIProjectTailoring,
+    TailoringDraftMessage,
+    TailoringDraftRequest,
+    TailoringDraftTool,
+)
 from erga_mcp.config import DEFAULT_CONFIG, load_config
 from erga_mcp.git_project_enrichment import GitProjectEnrichment
+from erga_mcp.http_transport import HttpTransportSettings
+from erga_mcp.job_identity import metadata_from_url
+from erga_mcp.mcp.contracts import IntakeValidationResult
 from erga_mcp.mcp_server import (
-    IntakeValidationResult,
     _ai_research_shortlist_ids,
     _ai_tailored_project_enrichment,
     _compile_intake_proposal,
@@ -29,7 +37,7 @@ from erga_mcp.mcp_server import (
     _generated_density_states,
     _git_enriched_inventory_candidates,
     _layout_safe_project_selection,
-    _metadata_from_url,
+    _ModernSamplingRequired,
     _project_enrichment_for_tailoring,
     _refresh_generated_package_template,
     _repeat_entry_patterns,
@@ -44,6 +52,17 @@ from erga_mcp.project_inventory import ProjectCandidate
 from erga_mcp.resume import LatexValidation, ResumeItemLayoutValidation
 from erga_mcp.resume_tailoring import create_automatic_resume_proposal
 from erga_mcp.store import ErgaStore
+
+_HTTP_TOKEN = "test-token-with-at-least-thirty-two-characters"
+_BROAD_CONFIG = DEFAULT_CONFIG.replace('tool_profile = "career"', 'tool_profile = "default"')
+
+
+def _http_settings() -> HttpTransportSettings:
+    return HttpTransportSettings(
+        host="127.0.0.1",
+        port=8765,
+        bearer_token=_HTTP_TOKEN,
+    )
 
 
 class McpServerTests(unittest.TestCase):
@@ -831,7 +850,7 @@ Bottom of the approved master template.
             resume = root / "resume.tex"
             resume.write_text("synthetic resume", encoding="utf-8")
             config_path = root / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
             config = load_config(config_path)
             evidence = Evidence(
                 "ev_api",
@@ -880,6 +899,125 @@ Bottom of the approved master template.
         self.assertEqual(result.candidates, ())
         self.assertEqual(result.reports, enrichment.reports)
         self.assertIn("preserved and only reordered", result.warnings[0])
+
+    def test_git_enrichment_does_not_block_the_async_mcp_server(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
+            config = load_config(config_path)
+            empty = GitProjectEnrichment((), (), (), (), 0)
+
+            def slow_enrichment(**_: object) -> GitProjectEnrichment:
+                time.sleep(0.4)
+                return empty
+
+            async def exercise() -> float:
+                started = time.monotonic()
+                work = asyncio.create_task(
+                    _project_enrichment_for_tailoring(
+                        ctx=None,
+                        config=config,
+                        store=ErgaStore(root / "state.sqlite3"),
+                        resume_path=root / "resume.tex",
+                        job_description="Python API",
+                        evidence=[],
+                    )
+                )
+                await asyncio.sleep(0.02)
+                heartbeat = time.monotonic() - started
+                await work
+                return heartbeat
+
+            with patch(
+                "erga_mcp.mcp_server._git_enriched_inventory_candidates",
+                side_effect=slow_enrichment,
+            ):
+                heartbeat = asyncio.run(exercise())
+
+        self.assertLess(heartbeat, 0.25)
+
+    def test_modern_ai_tailoring_uses_input_required_instead_of_a_backchannel(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(
+                _BROAD_CONFIG.replace("project_count = 4", "project_count = 1"),
+                encoding="utf-8",
+            )
+            config = load_config(config_path)
+            evidence = Evidence(
+                "ev_api",
+                "approved:api",
+                "Shipped 3 API routes for 200 users.",
+                True,
+                datetime.now(UTC),
+            )
+            candidate = ProjectCandidate(
+                id="api",
+                title="API",
+                latex="synthetic project",
+                evidence_ids=(evidence.id,),
+                bullet_evidence_ids=((evidence.id,),),
+                tags=("python", "api"),
+            )
+            enrichment = GitProjectEnrichment(
+                candidates=(candidate,),
+                evidence=(evidence,),
+                reports=({"project_id": "api", "title": "API", "evidence_ids": []},),
+                warnings=(),
+                catalogue_candidate_count=1,
+            )
+            context = SimpleNamespace(
+                client_capabilities=SimpleNamespace(sampling=object()),
+                protocol_version="2026-07-28",
+                input_responses={},
+                request_state=None,
+                request_id="request-1",
+            )
+
+            async def request_sampling(**kwargs: Any) -> object:
+                return await kwargs["session"].draft(
+                    TailoringDraftRequest(
+                        messages=(TailoringDraftMessage(role="user", text="Use evidence only."),),
+                        tools=(
+                            TailoringDraftTool(
+                                name="submit_projects",
+                                description="Submit projects.",
+                                input_schema={"type": "object"},
+                            ),
+                        ),
+                        related_request_id="request-1",
+                        max_tokens=100,
+                        system_prompt="Use evidence only.",
+                        temperature=0.2,
+                    )
+                )
+
+            with (
+                patch(
+                    "erga_mcp.mcp_server._git_enriched_inventory_candidates",
+                    return_value=enrichment,
+                ),
+                patch(
+                    "erga_mcp.mcp_server.draft_evidence_backed_projects",
+                    new=AsyncMock(side_effect=request_sampling),
+                ),
+                self.assertRaises(_ModernSamplingRequired) as captured,
+            ):
+                asyncio.run(
+                    _project_enrichment_for_tailoring(
+                        ctx=context,
+                        config=config,
+                        store=ErgaStore(root / "state.sqlite3"),
+                        resume_path=root / "resume.tex",
+                        job_description="Python API role",
+                        evidence=[evidence],
+                    )
+                )
+
+        self.assertEqual(captured.exception.request.method, "sampling/createMessage")
+        self.assertTrue(captured.exception.request_state.startswith("resume-projects:"))
 
     def test_layout_fallback_rejects_a_wrapped_project_and_selects_the_next_candidate(
         self,
@@ -1006,8 +1144,8 @@ Bottom of the approved master template.
     def test_modern_streamable_http_discovery_is_stateless_and_origin_guarded(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
-            app = build_streamable_http_app(build_server(config_path))
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
+            app = build_streamable_http_app(build_server(config_path), _http_settings())
             request = {
                 "jsonrpc": "2.0",
                 "id": "discover-1",
@@ -1024,6 +1162,7 @@ Bottom of the approved master template.
                 },
             }
             headers = {
+                "Authorization": f"Bearer {_HTTP_TOKEN}",
                 "MCP-Protocol-Version": "2026-07-28",
                 "Mcp-Method": "server/discover",
                 "Mcp-Name": "",
@@ -1094,8 +1233,8 @@ Bottom of the approved master template.
     def test_legacy_streamable_http_is_stateless_and_host_guarded(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
-            app = build_streamable_http_app(build_server(config_path))
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
+            app = build_streamable_http_app(build_server(config_path), _http_settings())
             initialize_request = {
                 "jsonrpc": "2.0",
                 "id": "legacy-initialize",
@@ -1116,17 +1255,29 @@ Bottom of the approved master template.
                 initialized = client.post(
                     "/mcp",
                     json=initialize_request,
-                    headers={"Mcp-Method": "initialize", "Host": "127.0.0.1"},
+                    headers={
+                        "Authorization": f"Bearer {_HTTP_TOKEN}",
+                        "Mcp-Method": "initialize",
+                        "Host": "127.0.0.1",
+                    },
                 )
                 listed = client.post(
                     "/mcp",
                     json=list_request,
-                    headers={"Mcp-Method": "tools/list", "Host": "127.0.0.1"},
+                    headers={
+                        "Authorization": f"Bearer {_HTTP_TOKEN}",
+                        "Mcp-Method": "tools/list",
+                        "Host": "127.0.0.1",
+                    },
                 )
                 hostile = client.post(
                     "/mcp",
                     json=list_request,
-                    headers={"Mcp-Method": "tools/list", "Host": "evil.test"},
+                    headers={
+                        "Authorization": f"Bearer {_HTTP_TOKEN}",
+                        "Mcp-Method": "tools/list",
+                        "Host": "evil.test",
+                    },
                 )
 
         self.assertEqual(initialized.status_code, 200)
@@ -1140,14 +1291,15 @@ Bottom of the approved master template.
     def test_modern_review_prompt_requires_explicit_save_before_changing_a_draft(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
             store = ErgaStore(Path(directory) / "state" / "erga.sqlite3")
             draft = store.add_manual_git_research_draft(
                 title="Offline planner",
                 description="Built a local-first planning tool.",
             )
-            app = build_streamable_http_app(build_server(config_path))
+            app = build_streamable_http_app(build_server(config_path), _http_settings())
             headers = {
+                "Authorization": f"Bearer {_HTTP_TOKEN}",
                 "MCP-Protocol-Version": "2026-07-28",
                 "Mcp-Method": "tools/call",
                 "Mcp-Name": "review_git_draft_prompt",
@@ -1245,7 +1397,7 @@ Bottom of the approved master template.
     def test_review_tool_adds_and_saves_manual_draft_without_approving_evidence(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
             server = build_server(config_path)
 
             added_result: Any = asyncio.run(
@@ -1283,9 +1435,14 @@ Bottom of the approved master template.
             config_path = root / "config.toml"
             config_path.write_text(
                 DEFAULT_CONFIG.replace(
+                    'tool_profile = "career"',
+                    'tool_profile = "career-private"',
+                )
+                .replace(
                     'master_path = ""',
                     'master_path = "master.tex"',
-                ).replace(
+                )
+                .replace(
                     'reference_path = ""',
                     'reference_path = "style.tex"',
                 ),
@@ -1309,7 +1466,7 @@ Bottom of the approved master template.
         with TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
             repo = root / "projects" / "sample-repo"
             repo.mkdir(parents=True)
             for arguments in (
@@ -1364,7 +1521,7 @@ Bottom of the approved master template.
         with TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
             repo = root / "project"
             repo.mkdir()
             for arguments in (
@@ -1400,7 +1557,7 @@ Bottom of the approved master template.
     ) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
             server = build_server(config_path)
 
             setup_result: Any = asyncio.run(
@@ -1418,53 +1575,10 @@ Bottom of the approved master template.
                     )
                 )
 
-    def test_opaque_ats_ids_produce_stable_distinct_package_slugs(self) -> None:
-        first = _metadata_from_url(
-            "https://jobs.ashbyhq.com/example/00000000-0000-0000-0000-000000000001",
-            cycle="fall-2026",
-            application_slug="",
-        )
-        second = _metadata_from_url(
-            "https://jobs.ashbyhq.com/example/00000000-0000-0000-0000-000000000002",
-            cycle="fall-2026",
-            application_slug="",
-        )
-
-        self.assertEqual(first[0], "fall-2026")
-        self.assertEqual(second[0], "fall-2026")
-        self.assertNotEqual(first[1], second[1])
-        self.assertRegex(first[1], r"example-job-opportunity-[0-9a-f]{16}$")
-        self.assertRegex(second[1], r"example-job-opportunity-[0-9a-f]{16}$")
-
-    def test_query_posting_ids_and_long_roles_keep_distinct_slug_suffixes(self) -> None:
-        first = _metadata_from_url(
-            "https://www.indeed.com/viewjob?jk=posting-one&utm_source=chat",
-            cycle="",
-            application_slug="",
-        )
-        second = _metadata_from_url(
-            "https://www.indeed.com/viewjob?jk=posting-two&utm_source=chat",
-            cycle="",
-            application_slug="",
-        )
-        long_role = _metadata_from_url(
-            "https://careers.example.test/jobs/"
-            + "principal-software-engineer-for-real-time-distributed-audio-systems-" * 3,
-            cycle="",
-            application_slug="",
-        )
-
-        self.assertEqual(first[0], "unsorted")
-        self.assertNotEqual(first[1], second[1])
-        self.assertRegex(first[1], r"indeed-job-opportunity-[0-9a-f]{16}$")
-        self.assertRegex(second[1], r"indeed-job-opportunity-[0-9a-f]{16}$")
-        self.assertLessEqual(len(long_role[1]), 80)
-        self.assertRegex(long_role[1], r"-[0-9a-f]{16}$")
-
     def test_rejects_coerced_boolean_token_counts_at_the_mcp_boundary(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
             server = build_server(config_path)
             store = ErgaStore(Path(directory) / "state" / "erga.sqlite3")
             application = store.create_application(
@@ -1490,7 +1604,7 @@ Bottom of the approved master template.
     def test_exposes_read_and_explicit_local_workspace_tools(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
 
             server = build_server(config_path)
             tools = asyncio.run(server.list_tools())
@@ -1587,7 +1701,7 @@ Bottom of the approved master template.
         with TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
             external = root / "external.tex"
             external.write_text("\\\\begin{document}outside\\\\end{document}\n", encoding="utf-8")
 
@@ -1681,7 +1795,7 @@ Bottom of the approved master template.
 
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
             server = build_server(config_path)
             scraped = ScrapedPage(
                 url="https://example.com/report",
@@ -1729,7 +1843,7 @@ Bottom of the approved master template.
                 encoding="utf-8",
             )
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
             server = build_server(config_path)
             result_json = json.dumps(
                 {
@@ -1777,7 +1891,7 @@ Bottom of the approved master template.
     def test_exposes_one_job_url_tool_for_end_to_end_intake(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
 
             tools = asyncio.run(build_server(config_path).list_tools())
 
@@ -1812,7 +1926,7 @@ Bottom of the approved master template.
         with TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
             candidates = tuple(
                 ProjectCandidate(
                     id=f"project-{index}",
@@ -1965,7 +2079,7 @@ Bottom of the approved master template.
 
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
             factory = RecordingStoreFactory()
             server = build_server(config_path, store_factory=factory)
             asyncio.run(server.call_tool("pipeline_status", {}))
@@ -1977,7 +2091,7 @@ Bottom of the approved master template.
         with TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
             store = ErgaStore(root / "state" / "erga.sqlite3")
             application = store.create_application(
                 company="Example",
@@ -2020,7 +2134,7 @@ Bottom of the approved master template.
     def test_hermes_monitor_tool_prepares_scripts_without_creating_delivery_jobs(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
             hermes_home = Path(directory) / "hermes-profile"
             server = build_server(config_path)
             prepared = {
@@ -2051,7 +2165,7 @@ Bottom of the approved master template.
     def test_export_tool_creates_a_private_attachable_zip(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
-            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
             result: Any = asyncio.run(build_server(config_path).call_tool("export_data", {}))
 
             exported = cast(dict[str, object], result.structured_content)
@@ -2544,7 +2658,7 @@ Bottom of the approved master template.
             )
             server = build_server(config_path)
             job_url = "https://jobs.ashbyhq.com/example/00000000-0000-0000-0000-000000000000"
-            _, slug = _metadata_from_url(job_url, cycle="", application_slug="")
+            _, slug = metadata_from_url(job_url, cycle="", application_slug="")
             final_dir = root / "output" / "unsorted" / slug
 
             with (
@@ -2590,7 +2704,7 @@ Bottom of the approved master template.
             )
             server = build_server(config_path)
             job_url = "https://boards.greenhouse.io/example/jobs/123456"
-            cycle, slug = _metadata_from_url(job_url, cycle="", application_slug="")
+            cycle, slug = metadata_from_url(job_url, cycle="", application_slug="")
             package_dir = root / "output" / cycle / slug
             package_dir.mkdir(parents=True)
             (package_dir / "package.json").write_text("[]\n", encoding="utf-8")

@@ -80,6 +80,15 @@ class ConfigTests(unittest.TestCase):
 
             self.assertEqual(config.mcp.tool_profile, "career")
 
+    def test_legacy_config_without_mcp_table_keeps_compatible_default_profile(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text('[paths]\ndata_dir = "state"\n', encoding="utf-8")
+
+            config = load_config(config_path)
+
+            self.assertEqual(config.mcp.tool_profile, "default")
+
     def test_loads_explicit_private_career_tool_profile(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"

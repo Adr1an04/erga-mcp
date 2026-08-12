@@ -6,12 +6,12 @@ import hashlib
 import json
 import os
 import tempfile
-import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
+from defusedxml import ElementTree as ET
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 

@@ -4,19 +4,59 @@ import json
 import os
 import stat
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
+from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from erga_mcp.cli import main
+from erga_mcp.cli import _package_for_application, _run_console, main
 from erga_mcp.config import load_config
 from erga_mcp.job_discovery import DiscoveryResearchResult
+from erga_mcp.models import Application
 from erga_mcp.store import ErgaStore
 
 
 class CliTests(unittest.TestCase):
+    def test_package_lookup_preserves_query_posting_ids_but_ignores_tracking(self) -> None:
+        with TemporaryDirectory() as directory:
+            output_root = Path(directory)
+            first = output_root / "summer-2027" / "first"
+            second = output_root / "summer-2027" / "second"
+            first.mkdir(parents=True)
+            second.mkdir(parents=True)
+            (first / "package.json").write_text(
+                json.dumps({"job_url": "https://jobs.example.test/view?jk=one"}),
+                encoding="utf-8",
+            )
+            (second / "package.json").write_text(
+                json.dumps({"job_url": "https://jobs.example.test/view?jk=two"}),
+                encoding="utf-8",
+            )
+            application = Application(
+                id="app_test",
+                company="Example",
+                role="Engineer",
+                source_url="https://jobs.example.test/view?utm_source=discord&jk=two",
+                status="draft",
+                evidence_ids=[],
+                created_at=datetime.now(UTC),
+            )
+
+            self.assertEqual(_package_for_application(output_root, application), second)
+
+    def test_console_boundary_reports_expected_errors_without_a_traceback(self) -> None:
+        with TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing.toml"
+            stderr = StringIO()
+            with redirect_stderr(stderr):
+                exit_code = _run_console(["status", "--config", str(missing)])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Erga could not complete the command", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
     def test_resume_template_ensure_reports_generated_or_reused_path(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"

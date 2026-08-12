@@ -47,8 +47,9 @@ The `mcp` Python runtime dependency is included with the `erga-mcp` package, alo
 
 ## Least-privilege tool profiles
 
-The default profile remains `default` for backward compatibility and exposes the complete legacy
-tool surface. For a narrower client integration, set the non-secret `[mcp].tool_profile` value in
+New configurations default to the least-privilege `career` profile. The explicit `default` profile
+remains available for backward compatibility and exposes the complete legacy tool surface. Set the
+non-secret `[mcp].tool_profile` value in
 the local Erga configuration, or override it per process with `ERGA_MCP_TOOL_PROFILE`. The
 environment value takes precedence; neither setting is a credential.
 
@@ -163,12 +164,17 @@ Stdio remains the default and is recommended for desktop/CLI clients. For an MCP
 ERGA_MCP_TRANSPORT=streamable-http \
 ERGA_MCP_HTTP_HOST=127.0.0.1 \
 ERGA_MCP_HTTP_PORT=8765 \
+ERGA_MCP_HTTP_TOKEN='replace-with-a-random-32-plus-character-secret' \
 ERGA_MCP_CONFIG=/absolute/path/to/erga-mcp-config.toml \
 ERGA_MCP_TOOL_PROFILE=career \
 uv --directory /absolute/path/to/erga-mcp run erga-mcp
 ```
 
-The endpoint is `http://127.0.0.1:8765/mcp`. The server rejects non-loopback bindings and rejects every request carrying an `Origin` header. It is designed for native desktop/CLI MCP clients, which do not send browser Origins. Browser-hosted clients and CORS are deliberately unsupported.
+The endpoint is `http://127.0.0.1:8765/mcp`. Clients must send the token as
+`Authorization: Bearer <token>`. The server rejects missing/incorrect tokens, non-loopback bindings,
+unexpected Host values, and every request carrying an `Origin` header. Generate a fresh token per
+launch, pass it directly to the same-machine native client, and never put it in Git or shell history.
+Browser-hosted clients and CORS are deliberately unsupported.
 
 This mode is deliberately **not a remote deployment feature**. Do not bind it to a LAN or public interface. Remote/multi-user deployment requires authenticated identities, tenant-specific storage/configuration, artifact redaction, authorization policies, TLS, and a reviewed process model.
 

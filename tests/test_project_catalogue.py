@@ -286,7 +286,9 @@ class ProjectCatalogueTests(unittest.TestCase):
                 )
                 return projects
 
-            with patch("erga_mcp.mcp_server.discover_github_projects", side_effect=discover):
+            with patch(
+                "erga_mcp.mcp.workspace_tools.discover_github_projects", side_effect=discover
+            ):
                 result = asyncio.run(
                     build_server(config_path).call_tool(
                         "refresh_project_catalogue",

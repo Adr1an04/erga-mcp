@@ -25,15 +25,15 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
 
@@ -45,6 +45,9 @@ jobs:
 
       - name: Verify lock file
         run: uv lock --check
+
+      - name: Audit locked runtime dependencies
+        run: uv export --frozen --no-dev --no-emit-project --format requirements-txt | uv run pip-audit -r /dev/stdin
 
       - name: Check formatting
         run: uv run ruff format --check .
@@ -93,15 +96,15 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -118,33 +121,65 @@ jobs:
       - name: Smoke-test MCP over stdio
         run: uv run python -m unittest tests.test_mcp_stdio -v
 
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Enforce coverage floor
+        run: |
+          uv run coverage run -m unittest discover -s tests
+          uv run coverage report
+
   package:
     name: Package
     needs:
       - quality
       - test
+      - coverage
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
 
+      - name: Install locked build tools
+        run: uv sync --frozen --extra dev
+
       - name: Build wheel and source archive
-        run: uv build
+        run: uv build --no-build-isolation
 
       - name: Check package metadata
-        run: uvx twine check dist/*
+        run: uv run twine check dist/*
 
       - name: Test the built wheel
         run: |
@@ -158,7 +193,7 @@ jobs:
           ERGA_MCP_CONFIG="$config_dir/config.toml" .package-test/bin/erga-mcp </dev/null
 
       - name: Upload package artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: erga-mcp-dist
           path: dist/*

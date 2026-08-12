@@ -9,9 +9,9 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 from typing import cast
-from urllib.parse import urlsplit, urlunsplit
 
-from .config import DEFAULT_CONFIG, load_config
+from .application_lookup import select_tracked_application
+from .config import DEFAULT_CONFIG, DEFAULT_CONFIG_PATH, load_config
 from .contact_projection import project_recruiter_contacts
 from .cover_letter import create_cover_letter_proposal, load_style_context
 from .cover_letter_settings import as_json as cover_letter_settings_as_json
@@ -63,6 +63,7 @@ from .integrations.zoho_live import (
     sync_metadata,
 )
 from .job_discovery import discover_job_research
+from .job_identity import job_identity
 from .keryx import (
     collect_optional_keryx,
     disable_keryx,
@@ -116,8 +117,6 @@ from .zoho_oauth import (
     refresh_access_token,
     store_client_secret,
 )
-
-DEFAULT_CONFIG_PATH = Path.home() / ".config" / "erga-mcp" / "config.toml"
 
 
 def _config_argument(parser: argparse.ArgumentParser) -> None:
@@ -679,41 +678,22 @@ def _print_json(value: object) -> None:
     print(json.dumps(value, default=str, sort_keys=True))
 
 
-def _job_url_identity(url: str) -> str:
-    parsed = urlsplit(url)
-    return urlunsplit(
-        (parsed.scheme.casefold(), (parsed.hostname or "").casefold(), parsed.path, "", "")
-    )
-
-
 def _notes_application(query: str, applications: list[Application]) -> Application:
-    terms = [term.casefold() for term in query.split() if term.strip()]
-    if not terms:
-        raise ValueError("notes query must include a company or role word")
-    matches = [
-        application
-        for application in applications
-        if all(term in f"{application.company} {application.role}".casefold() for term in terms)
-    ]
-    if len(matches) == 1:
-        return matches[0]
-    if not matches:
-        raise ValueError(f"no tracked application matches: {query}")
-    choices = ", ".join(f"{item.company} - {item.role}" for item in matches)
-    raise ValueError(f"multiple tracked applications match {query!r}: {choices}")
+    """Compatibility wrapper for the application-layer selector."""
+    return select_tracked_application(query, applications)
 
 
 def _package_for_application(output_root: Path, application: Application) -> Path | None:
     if not output_root.is_dir():
         return None
-    identity = _job_url_identity(application.source_url)
+    identity = job_identity(application.source_url)
     for manifest_path in output_root.glob("*/*/package.json"):
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
         job_url = manifest.get("job_url") if isinstance(manifest, dict) else None
-        if isinstance(job_url, str) and _job_url_identity(job_url) == identity:
+        if isinstance(job_url, str) and job_identity(job_url) == identity:
             return manifest_path.parent
     return None
 
@@ -1600,10 +1580,30 @@ def main(arguments: Sequence[str] | None = None) -> int:
     raise AssertionError(f"unhandled command: {args.command}")
 
 
+def _run_console(arguments: Sequence[str] | None = None) -> int:
+    """Render expected operator errors without exposing an internal traceback."""
+    try:
+        return main(arguments)
+    except (
+        FileNotFoundError,
+        NotADirectoryError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        print(f"Erga could not complete the command: {error}", file=sys.stderr)
+        return 1
+
+
+def console_main() -> int:
+    """Installed ``erga`` entry point."""
+    return _run_console()
+
+
 def tokens_main() -> int:
     """Entry point for the ergonomic `erga-tokens` token-report command."""
-    return main(["tokens", *sys.argv[1:]])
+    return _run_console(["tokens", *sys.argv[1:]])
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(console_main())

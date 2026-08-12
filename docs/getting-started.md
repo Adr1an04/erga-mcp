@@ -502,7 +502,7 @@ For a personal Hermes installation, tap this repository with `hermes skills tap 
 ```bash
 uv run erga status --config ~/.config/erga-mcp/config.toml
 uv run ruff check .
-uv run python -m unittest discover -v
+uv run python -m unittest discover -s tests -v
 ```
 
 ## Remove Erga

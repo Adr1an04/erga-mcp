@@ -64,7 +64,7 @@ class OnboardingMcpTests(unittest.TestCase):
             )
 
             with patch(
-                "erga_mcp.mcp_server.detected_portfolio_root",
+                "erga_mcp.mcp.read_tools.detected_portfolio_root",
                 return_value=detected_projects,
             ):
                 card = self._call(
@@ -106,7 +106,7 @@ class OnboardingMcpTests(unittest.TestCase):
                 {"operation": "import_approved"},
             )
             with patch(
-                "erga_mcp.mcp_server.detected_portfolio_root",
+                "erga_mcp.mcp.workspace_tools.detected_portfolio_root",
                 return_value=projects,
             ):
                 detected = self._call(

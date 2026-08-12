@@ -8,10 +8,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from mcp.types import CreateMessageResultWithTools, ToolUseContent
-
 from erga_mcp.ai_resume_tailoring import (
     _FORBIDDEN_GIT_PROSE,
+    TailoringDraftRequest,
+    TailoringDraftResponse,
     _latex_text,
     _normalized_number,
     _resume_quality_numbers,
@@ -29,18 +29,19 @@ class _SamplingSession:
         self.calls: list[dict[str, Any]] = []
         self.messages: list[object] = []
 
-    async def create_message(self, *args: Any, **kwargs: Any) -> object:
-        self.calls.append(kwargs)
-        self.messages.append(args[0])
-        return CreateMessageResultWithTools(
-            role="assistant",
-            content=ToolUseContent(
-                name="submit_evidence_backed_projects",
-                id="call_1",
-                input=self.submission,
-            ),
+    async def draft(self, request: TailoringDraftRequest) -> TailoringDraftResponse:
+        self.calls.append(
+            {
+                "tools": request.tools,
+                "tool_choice": "required",
+                "include_context": "none",
+                "system_prompt": request.system_prompt,
+            }
+        )
+        self.messages.append(list(request.messages))
+        return TailoringDraftResponse(
+            submission=self.submission,
             model="synthetic-tailor",
-            stopReason="toolUse",
         )
 
 
@@ -288,7 +289,7 @@ class AIResumeTailoringTests(unittest.TestCase):
                 "Validated 20 API routes across request validation and failure handling.",
             ),
         )
-        self.assertEqual(session.calls[0]["tool_choice"].mode, "required")
+        self.assertEqual(session.calls[0]["tool_choice"], "required")
         self.assertEqual(session.calls[0]["include_context"], "none")
         bullet_schema = session.calls[0]["tools"][0].input_schema["properties"]["projects"][
             "items"
@@ -296,7 +297,7 @@ class AIResumeTailoringTests(unittest.TestCase):
         self.assertEqual(bullet_schema["maxLength"], 116)
         messages = session.messages[0]
         assert isinstance(messages, list)
-        prompt = json.loads(messages[0].content.text)
+        prompt = json.loads(messages[0].text)
         self.assertIn("Engineered", prompt["allowed_lead_verbs"])
         self.assertIn("Validated", prompt["allowed_lead_verbs"])
         self.assertEqual(prompt["projects"][0]["relevance_rank"], 1)
@@ -339,7 +340,7 @@ class AIResumeTailoringTests(unittest.TestCase):
         )
 
         self.assertEqual(result.candidates[0].id, "api-platform")
-        prompt = json.loads(session.messages[0][0].content.text)
+        prompt = json.loads(session.messages[0][0].text)
         self.assertEqual(prompt["required_project_ids"], ["api-platform"])
         self.assertIn("Do not substitute another project", session.calls[0]["system_prompt"])
 
@@ -511,9 +512,9 @@ class AIResumeTailoringTests(unittest.TestCase):
         messages = session.messages[0]
         assert isinstance(messages, list)
         self.assertEqual(len(messages), 2)
-        prompt = json.loads(messages[0].content.text)
+        prompt = json.loads(messages[0].text)
         self.assertEqual(prompt["forbidden_numeric_tokens_from_prior_attempt"], ["2026"])
-        self.assertIn("CORRECTION REQUIRED", messages[1].content.text)
+        self.assertIn("CORRECTION REQUIRED", messages[1].text)
 
     def test_rejects_duplicate_lead_verbs_across_ai_authored_projects(self) -> None:
         with self.assertRaisesRegex(ValueError, "reuses the lead verb 'Engineered'"):

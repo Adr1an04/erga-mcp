@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+DEFAULT_CONFIG_PATH = Path.home() / ".config" / "erga-mcp" / "config.toml"
+
 DEFAULT_CONFIG = """# Erga MCP stores private state outside this repository.
 
 [paths]
@@ -81,9 +83,9 @@ retain_message_bodies = false
 retain_attachments = false
 
 [mcp]
-# Tool profiles are capability boundaries, not credentials. The default preserves every legacy tool.
-# Choose career, career-private, read, research, write, or hermes for a narrower MCP client surface.
-tool_profile = "default"
+# Tool profiles are capability boundaries, not credentials. Career omits bulk-private exports and
+# raw source context. Choose career-private or default only for a fully trusted local client.
+tool_profile = "career"
 """
 
 
@@ -327,6 +329,8 @@ def load_config(config_path: Path) -> ErgaConfig:
     mail_accounts_url = str(mail.get("accounts_url", "https://accounts.zoho.com")).strip()
     if not mail_accounts_url.startswith("https://"):
         raise ValueError("mail accounts_url must use HTTPS")
+    # New configurations explicitly choose the least-privilege career profile. Configurations
+    # created before the [mcp] table existed keep the historical broad surface until migrated.
     mcp_tool_profile = str(mcp.get("tool_profile", "default")).strip().casefold()
     if mcp_tool_profile not in {
         "career",

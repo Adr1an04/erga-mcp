@@ -2,6 +2,10 @@
 
 Erga is early and small. Issues, bug fixes, and focused improvements are welcome.
 
+Start with the [documentation index](docs/README.md), [architecture](docs/architecture/README.md),
+and [development/test map](docs/development.md). `AGENTS.md` contains the same repository navigation
+and safety boundaries for coding agents.
+
 ## Set up the project
 
 ```bash
@@ -12,16 +16,9 @@ uv sync --extra dev
 
 ## Before opening a pull request
 
-```bash
-uv lock --check
-uv run ruff format --check .
-uv run ruff check .
-uv run mypy src
-uv run python -m unittest discover -s tests -v
-uv run python -m unittest tests.test_mcp_stdio tests.test_mcp_interoperability -v
-uv build
-git diff --check
-```
+Run the single canonical verification gate in
+[`docs/development.md`](docs/development.md#canonical-full-gate). That page owns the commands so
+local instructions and CI do not drift independently.
 
 Please add a test when fixing a bug or adding behavior. Keep pull requests focused and explain what
 changed.

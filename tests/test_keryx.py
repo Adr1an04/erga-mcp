@@ -97,10 +97,10 @@ def _payload() -> bytes:
 
 
 class KeryxTests(unittest.TestCase):
-    def _config(self, root: Path, *, profile: str = "default") -> Path:
+    def _config(self, root: Path, *, profile: str = "career") -> Path:
         config_path = root / "config.toml"
         config_path.write_text(
-            DEFAULT_CONFIG.replace('tool_profile = "default"', f'tool_profile = "{profile}"'),
+            DEFAULT_CONFIG.replace('tool_profile = "career"', f'tool_profile = "{profile}"'),
             encoding="utf-8",
         )
         return config_path

@@ -12,7 +12,7 @@ from erga_mcp.mcp_server import build_server
 
 class McpCapabilitiesTests(unittest.TestCase):
     def test_capabilities_are_compact_versioned_and_safe_in_read_profile(self) -> None:
-        config = DEFAULT_CONFIG.replace('tool_profile = "default"', 'tool_profile = "read"')
+        config = DEFAULT_CONFIG.replace('tool_profile = "career"', 'tool_profile = "read"')
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
             config_path.write_text(config, encoding="utf-8")
