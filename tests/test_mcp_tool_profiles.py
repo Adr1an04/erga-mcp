@@ -27,6 +27,7 @@ _READ_TOOLS = {
     "list_evidence",
     "list_mail_events",
     "token_usage",
+    "search_keryx_jobs",
 }
 _CAREER_TOOLS = {
     "erga_capabilities",
@@ -59,6 +60,7 @@ _CAREER_TOOLS = {
     "create_tailoring_plan",
     "update_tailoring_plan",
     "execute_tailoring_plan",
+    "search_keryx_jobs",
 }
 
 

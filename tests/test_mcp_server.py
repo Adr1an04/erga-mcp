@@ -1521,6 +1521,7 @@ Bottom of the approved master template.
                     "list_mail_events",
                     "token_usage",
                     "propose_project_metrics",
+                    "search_keryx_jobs",
                     "record_token_usage",
                     "sync_recruiting_mail",
                     "intake_job_url",
@@ -1554,6 +1555,7 @@ Bottom of the approved master template.
                 "list_evidence",
                 "resume_source_context",
                 "list_mail_events",
+                "search_keryx_jobs",
             }:
                 annotations = by_name[name].annotations
                 self.assertIsNotNone(annotations)

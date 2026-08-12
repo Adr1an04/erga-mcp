@@ -81,6 +81,8 @@ from .job_research import (
 )
 from .job_source import require_job_source
 from .job_workspace import create_job_workspace
+from .keryx import keryx_status
+from .keryx import search_keryx_jobs as search_cached_keryx_jobs
 from .models import Evidence
 from .onboarding_view import build_onboarding_card
 from .portfolio_roots import detected_portfolio_root, update_portfolio_roots
@@ -172,6 +174,7 @@ _READ_TOOL_NAMES = frozenset(
         "list_evidence",
         "list_mail_events",
         "token_usage",
+        "search_keryx_jobs",
     }
 )
 _LOCAL_ANALYSIS_TOOL_NAMES = frozenset({"propose_project_metrics"})
@@ -256,6 +259,7 @@ _CAREER_TOOL_NAMES = frozenset(
         "create_tailoring_plan",
         "update_tailoring_plan",
         "execute_tailoring_plan",
+        "search_keryx_jobs",
     }
 )
 _CAREER_PRIVATE_TOOL_NAMES = _CAREER_TOOL_NAMES | frozenset(
@@ -2599,6 +2603,10 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             capability_classes=capability_classes,
         )
         result.update({"model_api_required": False, "reasoning_host": "mcp-client"})
+        keryx = keryx_status(config)
+        result["optional_integrations"] = {
+            "keryx": {"enabled": keryx.enabled, "cache_ready": keryx.cache_ready}
+        }
         return result
 
     @profile_tool("pipeline_status", annotations=_READ_ONLY)
@@ -2618,6 +2626,34 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             cast(dict[str, object], _json_value(asdict(application)))
             for application in store.list_applications()
         ]
+
+    @profile_tool(
+        "search_keryx_jobs",
+        title="Search the optional local Keryx opportunity cache",
+        description=(
+            "Search a user-enabled local cache of Keryx's public US internships and new-graduate "
+            "roles. This tool performs no network request, sends no query or Erga private data, "
+            "and creates no application record. To act on one returned posting, the user must "
+            "separately request the ordinary intake_job_url workflow with its URL."
+        ),
+        annotations=_READ_ONLY,
+    )
+    def search_keryx_jobs(
+        query: str = "",
+        program: str = "",
+        cycle: str = "",
+        location: str = "",
+        limit: int = 20,
+    ) -> dict[str, object]:
+        """Return bounded public listings from the explicitly enabled local Keryx cache."""
+        return search_cached_keryx_jobs(
+            config,
+            query=query,
+            program=program,
+            cycle=cycle,
+            location=location,
+            limit=limit,
+        )
 
     @profile_tool(
         "update_application_status",

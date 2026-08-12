@@ -43,7 +43,7 @@ class OnboardingViewTests(unittest.TestCase):
             self.assertEqual(card.title, "Erga onboarding")
             self.assertIn("master.tex", payload["fields"][0]["value"])
             self.assertIn("3 configured", str(payload))
-            self.assertIn(str(repositories.resolve()), str(payload))
+            self.assertEqual(payload["fields"][3]["value"], str(repositories.resolve()))
             self.assertEqual(
                 [action.action_id for action in card.actions],
                 [
