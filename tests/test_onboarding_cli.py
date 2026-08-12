@@ -111,7 +111,7 @@ class OnboardingCliTests(unittest.TestCase):
 
             self.assertEqual(roots, [str(repository_root.resolve())])
             self.assertEqual(status["title"], "Erga onboarding")
-            self.assertIn(str(repository_root.resolve()), json.dumps(status))
+            self.assertEqual(status["fields"][3]["value"], str(repository_root.resolve()))
 
             removed = self._run_json(
                 [
