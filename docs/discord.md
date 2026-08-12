@@ -92,8 +92,9 @@ server or `update` in a direct message. The command bypasses the reasoning backe
 branches, tracked local changes, divergent history, detached checkouts, and remotes that do not
 match the official repository. A safe update uses a Git fast-forward, runs
 `uv sync --extra discord --frozen`, and restarts the bridge into the updated code. Discord keeps
-the interaction compact: it changes a temporary check-in into either “Erga updated successfully,”
-“Erga is up to date,” or a short retry message. Technical details remain in the private bridge log.
+the interaction compact: one small status card reports “Erga updated,” “Erga is current,” or
+“Try again,” with a semantic color and no technical detail. Technical details remain in the private
+bridge log.
 A clean local `main` checkout that is already ahead of GitHub is also treated as current rather than
 being overwritten.
 

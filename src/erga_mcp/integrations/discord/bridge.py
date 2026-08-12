@@ -830,8 +830,38 @@ def _progress_card(content: str, *, elapsed_seconds: float = 0) -> DiscordCard:
     )
 
 
-def _update_result_message(result: ErgaUpdateResult) -> str:
-    return "Erga updated successfully. Restarting…" if result.updated else "Erga is up to date."
+def _update_progress_card() -> DiscordCard:
+    return DiscordCard(
+        title="✦ Checking for updates",
+        description="One moment.",
+        color=ERGA_ORBIT_VIOLET,
+        footer="",
+    )
+
+
+def _update_result_card(result: ErgaUpdateResult) -> DiscordCard:
+    if result.updated:
+        return DiscordCard(
+            title="✓ Erga updated",
+            description="Restarting with the latest version.",
+            color=ERGA_LEAF,
+            footer="",
+        )
+    return DiscordCard(
+        title="✓ Erga is current",
+        description="No update available.",
+        color=ERGA_LEAF,
+        footer="",
+    )
+
+
+def _update_failure_card() -> DiscordCard:
+    return DiscordCard(
+        title="↻ Try again",
+        description="Erga couldn’t check for an update.",
+        color=ERGA_SUN,
+        footer="",
+    )
 
 
 def _response_state(response: str) -> Literal["success", "warning", "neutral"]:
@@ -930,7 +960,8 @@ def _discord_embed(discord: Any, card: DiscordCard) -> Any:
     )
     for field in card.fields:
         embed.add_field(name=field.name, value=field.value, inline=field.inline)
-    embed.set_footer(text=card.footer)
+    if card.footer:
+        embed.set_footer(text=card.footer)
     if card.image_filename is not None:
         embed.set_image(url=f"attachment://{card.image_filename}")
     return embed
@@ -1097,19 +1128,31 @@ def _create_discord_client(
             self._orbit_refresh_task: asyncio.Task[None] | None = None
 
         async def _handle_update_command(self, message: Any) -> None:
-            status_message = await message.reply("Checking for updates…", mention_author=False)
+            status_message = await message.reply(
+                embed=_discord_embed(discord, _update_progress_card()),
+                mention_author=False,
+            )
             try:
                 async with self._backend_lock:
                     result = await asyncio.to_thread(update_erga_checkout)
             except ErgaUpdateError as error:
                 print(f"Discord bridge update refused: {error}", file=sys.stderr, flush=True)
-                await status_message.edit(content="Couldn’t check for an update. Please try again.")
+                await status_message.edit(
+                    content=None,
+                    embed=_discord_embed(discord, _update_failure_card()),
+                )
                 return
             except Exception as error:
                 print(f"Discord bridge update failed: {error}", file=sys.stderr, flush=True)
-                await status_message.edit(content="Couldn’t check for an update. Please try again.")
+                await status_message.edit(
+                    content=None,
+                    embed=_discord_embed(discord, _update_failure_card()),
+                )
                 return
-            await status_message.edit(content=_update_result_message(result))
+            await status_message.edit(
+                content=None,
+                embed=_discord_embed(discord, _update_result_card(result)),
+            )
             if not result.updated:
                 return
             if config_path is None or runtime_nonce is None:

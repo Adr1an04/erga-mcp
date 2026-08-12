@@ -31,6 +31,8 @@ from erga_mcp.integrations.discord.bridge import (
     _render_resume_preview,
     _response_state,
     _result_cards,
+    _update_failure_card,
+    _update_result_card,
     build_backend_command,
     discord_status,
     is_authorized_discord_user,
@@ -84,6 +86,26 @@ class DiscordBridgeTests(unittest.TestCase):
         self.assertEqual(card.fields[0].value, "Working through the one-page pipeline")
         self.assertEqual(card.fields[1].value, "42s")
         self.assertIn("no submission", card.fields[2].value)
+
+    def test_update_outcome_cards_are_small_and_semantic(self) -> None:
+        current = _update_result_card(
+            ErgaUpdateResult(
+                updated=False,
+                previous_revision="a" * 40,
+                current_revision="a" * 40,
+            )
+        )
+        failure = _update_failure_card()
+
+        self.assertEqual(current.title, "✓ Erga is current")
+        self.assertEqual(current.description, "No update available.")
+        self.assertEqual(current.color, ERGA_LEAF)
+        self.assertEqual(current.fields, ())
+        self.assertEqual(current.footer, "")
+        self.assertEqual(failure.title, "↻ Try again")
+        self.assertEqual(failure.color, ERGA_SUN)
+        self.assertEqual(failure.fields, ())
+        self.assertEqual(failure.footer, "")
 
     def test_result_cards_use_semantic_orbit_colors(self) -> None:
         success = _result_cards(
@@ -379,12 +401,13 @@ class DiscordBridgeTests(unittest.TestCase):
                 self.description = kwargs["description"]
                 self.color = kwargs["color"]
                 self.fields: list[dict[str, object]] = []
+                self.footer = ""
 
             def add_field(self, **kwargs: object) -> None:
                 self.fields.append(kwargs)
 
-            def set_footer(self, **_kwargs: object) -> None:
-                return None
+            def set_footer(self, **kwargs: object) -> None:
+                self.footer = kwargs.get("text", "")
 
             def set_image(self, **_kwargs: object) -> None:
                 return None
@@ -432,12 +455,18 @@ class DiscordBridgeTests(unittest.TestCase):
                 asyncio.run(client.on_message(message))
 
         self.assertEqual(message.reply.await_count, 1)
-        self.assertEqual(message.reply.await_args.args[0], "Checking for updates…")
+        initial_embed = message.reply.await_args.kwargs["embed"]
+        self.assertEqual(initial_embed.title, "✦ Checking for updates")
+        self.assertEqual(initial_embed.description, "One moment.")
+        self.assertEqual(initial_embed.fields, [])
+        self.assertEqual(initial_embed.footer, "")
         self.assertEqual(status_message.edit.await_count, 1)
-        self.assertEqual(
-            status_message.edit.await_args.kwargs["content"],
-            "Erga updated successfully. Restarting…",
-        )
+        final_embed = status_message.edit.await_args.kwargs["embed"]
+        self.assertIsNone(status_message.edit.await_args.kwargs["content"])
+        self.assertEqual(final_embed.title, "✓ Erga updated")
+        self.assertEqual(final_embed.description, "Restarting with the latest version.")
+        self.assertEqual(final_embed.fields, [])
+        self.assertEqual(final_embed.footer, "")
         self.assertTrue(client.closed)
         restart.assert_called_once_with(root / "config.toml", "private-nonce")
 
