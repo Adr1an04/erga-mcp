@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,6 +58,8 @@ _ALLOWED_ARGUMENT_FIELDS = ("{prompt}", "{project_dir}", "{output_path}")
 _RESUME_PREVIEW_ATTACHMENT_NAME = "erga-resume-preview.png"
 _MAX_RESUME_PREVIEW_BYTES = 8 * 1024 * 1024
 _URL_PATTERN = re.compile(r"https?://[^\s<>`]+", re.IGNORECASE)
+_OFFICIAL_REPOSITORY = "https://github.com/Adr1an04/erga-mcp"
+_UPDATE_BRANCH = "main"
 _BRIDGE_MODULE_PATHS = (
     "erga_mcp.integrations.discord.bridge",
     "erga_mcp.discord_bridge",
@@ -138,6 +141,19 @@ class DiscordCard:
     fields: tuple[DiscordCardField, ...] = ()
     footer: str = "Private by default • Erga never submits applications"
     image_filename: str | None = None
+
+
+@dataclass(frozen=True)
+class ErgaUpdateResult:
+    """The safe outcome of checking the official Erga checkout for an update."""
+
+    updated: bool
+    previous_revision: str
+    current_revision: str
+
+
+class ErgaUpdateError(RuntimeError):
+    """A public, non-sensitive reason a Discord-requested update was not applied."""
 
 
 def _token_account(config_path: Path) -> str:
@@ -520,6 +536,252 @@ def _split_discord_text(value: str, *, limit: int) -> list[str]:
     return chunks
 
 
+def _is_update_command(content: str) -> bool:
+    """Recognize the small, explicit maintenance command without capturing normal requests."""
+    normalized = " ".join(content.casefold().strip().split())
+    return normalized.removeprefix("!").removeprefix("/").strip() in {
+        "update",
+        "update erga",
+        "erga update",
+    }
+
+
+def _erga_checkout_root(module_path: Path | None = None) -> Path:
+    """Locate the source checkout that owns the running bridge, if there is one."""
+    source_path = (module_path or Path(__file__)).resolve()
+    for candidate in source_path.parents:
+        if (candidate / "pyproject.toml").is_file() and (candidate / ".git").exists():
+            return candidate
+    raise ErgaUpdateError(
+        "This Erga installation is not a Git checkout, so Discord cannot safely update it. "
+        "Reinstall from the official repository, then try again."
+    )
+
+
+def _checked_update_command(
+    command: list[str],
+    *,
+    checkout_root: Path,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+    timeout: float,
+    failure_message: str,
+) -> str:
+    try:
+        completed = runner(
+            command,
+            cwd=checkout_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ErgaUpdateError(failure_message) from error
+    if completed.returncode != 0:
+        raise ErgaUpdateError(failure_message)
+    return completed.stdout.strip()
+
+
+def _is_official_repository(remote_url: str) -> bool:
+    normalized = remote_url.strip().casefold().rstrip("/")
+    if normalized.endswith(".git"):
+        normalized = normalized[:-4]
+    normalized = normalized.replace("git@github.com:", "https://github.com/")
+    normalized = normalized.replace("ssh://git@github.com/", "https://github.com/")
+    return normalized == _OFFICIAL_REPOSITORY.casefold()
+
+
+def update_erga_checkout(
+    *,
+    checkout_root: Path | None = None,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    uv_command: str | None = None,
+) -> ErgaUpdateResult:
+    """Fast-forward the official checkout and synchronize its Discord runtime.
+
+    This intentionally avoids ``git pull``: tracked local edits, feature branches, divergent
+    history, and non-official remotes are all refused before the checkout can change.
+    """
+    root = (checkout_root or _erga_checkout_root()).expanduser().resolve()
+    if not (root / "pyproject.toml").is_file() or not (root / ".git").exists():
+        raise ErgaUpdateError("Erga's source checkout is incomplete, so no update was applied.")
+
+    is_worktree = _checked_update_command(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        checkout_root=root,
+        runner=runner,
+        timeout=15,
+        failure_message="Erga could not inspect its Git checkout, so no update was applied.",
+    )
+    if is_worktree != "true":
+        raise ErgaUpdateError(
+            "Erga's source directory is not a Git worktree, so no update was applied."
+        )
+    branch = _checked_update_command(
+        ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+        checkout_root=root,
+        runner=runner,
+        timeout=15,
+        failure_message="Erga's checkout is detached; switch it to main before updating.",
+    )
+    if branch != _UPDATE_BRANCH:
+        raise ErgaUpdateError(
+            "Erga only updates a clean main checkout from Discord. "
+            f"This checkout is on {branch!r}; switch to main and retry."
+        )
+    tracked_changes = _checked_update_command(
+        ["git", "status", "--porcelain", "--untracked-files=no"],
+        checkout_root=root,
+        runner=runner,
+        timeout=15,
+        failure_message="Erga could not inspect local changes, so no update was applied.",
+    )
+    if tracked_changes:
+        raise ErgaUpdateError(
+            "Erga has tracked local changes, so it will not overwrite them. "
+            "Commit, stash, or discard those changes before retrying."
+        )
+    remote_url = _checked_update_command(
+        ["git", "remote", "get-url", "origin"],
+        checkout_root=root,
+        runner=runner,
+        timeout=15,
+        failure_message="Erga could not verify its GitHub remote, so no update was applied.",
+    )
+    if not _is_official_repository(remote_url):
+        raise ErgaUpdateError(
+            "Erga only updates from its official GitHub repository; this checkout's origin "
+            "does not match it."
+        )
+    previous_revision = _checked_update_command(
+        ["git", "rev-parse", "HEAD"],
+        checkout_root=root,
+        runner=runner,
+        timeout=15,
+        failure_message="Erga could not identify its current revision, so no update was applied.",
+    )
+    _checked_update_command(
+        [
+            "git",
+            "fetch",
+            "--quiet",
+            "origin",
+            f"refs/heads/{_UPDATE_BRANCH}:refs/remotes/origin/{_UPDATE_BRANCH}",
+        ],
+        checkout_root=root,
+        runner=runner,
+        timeout=120,
+        failure_message=(
+            "Erga could not check GitHub for updates. Your installed version is unchanged."
+        ),
+    )
+    upstream_revision = _checked_update_command(
+        ["git", "rev-parse", f"refs/remotes/origin/{_UPDATE_BRANCH}"],
+        checkout_root=root,
+        runner=runner,
+        timeout=15,
+        failure_message="GitHub did not provide Erga's main revision, so no update was applied.",
+    )
+    if upstream_revision == previous_revision:
+        return ErgaUpdateResult(
+            updated=False,
+            previous_revision=previous_revision,
+            current_revision=previous_revision,
+        )
+
+    try:
+        ancestry = runner(
+            [
+                "git",
+                "merge-base",
+                "--is-ancestor",
+                "HEAD",
+                f"refs/remotes/origin/{_UPDATE_BRANCH}",
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ErgaUpdateError(
+            "Erga could not verify update history, so no update was applied."
+        ) from error
+    if ancestry.returncode not in (0, 1):
+        raise ErgaUpdateError("Erga could not verify update history, so no update was applied.")
+    if ancestry.returncode != 0:
+        try:
+            local_ahead = runner(
+                [
+                    "git",
+                    "merge-base",
+                    "--is-ancestor",
+                    f"refs/remotes/origin/{_UPDATE_BRANCH}",
+                    "HEAD",
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise ErgaUpdateError(
+                "Erga could not verify update history, so no update was applied."
+            ) from error
+        if local_ahead.returncode not in (0, 1):
+            raise ErgaUpdateError("Erga could not verify update history, so no update was applied.")
+        if local_ahead.returncode == 0:
+            return ErgaUpdateResult(
+                updated=False,
+                previous_revision=previous_revision,
+                current_revision=previous_revision,
+            )
+        raise ErgaUpdateError(
+            "This Erga checkout has local commits or divergent history, so Discord will not "
+            "overwrite it. Update it manually before retrying."
+        )
+
+    _checked_update_command(
+        ["git", "merge", "--ff-only", f"refs/remotes/origin/{_UPDATE_BRANCH}"],
+        checkout_root=root,
+        runner=runner,
+        timeout=120,
+        failure_message=(
+            "Erga could not apply GitHub's fast-forward update. Your bridge was not restarted."
+        ),
+    )
+    current_revision = _checked_update_command(
+        ["git", "rev-parse", "HEAD"],
+        checkout_root=root,
+        runner=runner,
+        timeout=15,
+        failure_message=(
+            "Erga updated its files but could not verify the new revision. Restart it manually."
+        ),
+    )
+    resolved_uv_command = uv_command or shutil.which("uv")
+    if resolved_uv_command is None:
+        raise ErgaUpdateError(
+            "Erga updated its files but could not find uv to synchronize the Discord runtime. "
+            "Run `uv sync --extra discord --frozen` in the Erga checkout, then reconnect "
+            "the bridge."
+        )
+    _checked_update_command(
+        [resolved_uv_command, "sync", "--extra", "discord", "--frozen"],
+        checkout_root=root,
+        runner=runner,
+        timeout=300,
+        failure_message=(
+            "Erga updated its files but could not synchronize the Discord runtime. Run "
+            "`uv sync --extra discord --frozen` in the Erga checkout, then reconnect the bridge."
+        ),
+    )
+    return ErgaUpdateResult(
+        updated=True,
+        previous_revision=previous_revision,
+        current_revision=current_revision,
+    )
+
+
 def _is_resume_request(content: str) -> bool:
     normalized = content.casefold()
     return "resume" in normalized or "résumé" in normalized
@@ -565,6 +827,40 @@ def _progress_card(content: str, *, elapsed_seconds: float = 0) -> DiscordCard:
             DiscordCardField("Boundary", "Review only • no submission"),
         ),
         footer="Erga Orbit • Private, evidence-backed, reviewable",
+    )
+
+
+def _update_progress_card() -> DiscordCard:
+    return DiscordCard(
+        title="✦ Checking for updates",
+        description="One moment.",
+        color=ERGA_ORBIT_VIOLET,
+        footer="",
+    )
+
+
+def _update_result_card(result: ErgaUpdateResult) -> DiscordCard:
+    if result.updated:
+        return DiscordCard(
+            title="✓ Erga updated",
+            description="Restarting with the latest version.",
+            color=ERGA_LEAF,
+            footer="",
+        )
+    return DiscordCard(
+        title="✓ Erga is current",
+        description="No update available.",
+        color=ERGA_LEAF,
+        footer="",
+    )
+
+
+def _update_failure_card() -> DiscordCard:
+    return DiscordCard(
+        title="↻ Try again",
+        description="Erga couldn’t check for an update.",
+        color=ERGA_SUN,
+        footer="",
     )
 
 
@@ -664,7 +960,8 @@ def _discord_embed(discord: Any, card: DiscordCard) -> Any:
     )
     for field in card.fields:
         embed.add_field(name=field.name, value=field.value, inline=field.inline)
-    embed.set_footer(text=card.footer)
+    if card.footer:
+        embed.set_footer(text=card.footer)
     if card.image_filename is not None:
         embed.set_image(url=f"attachment://{card.image_filename}")
     return embed
@@ -795,12 +1092,30 @@ def _discord_module() -> Any:
         ) from error
 
 
+def _restart_discord_bridge(config_path: Path, runtime_nonce: str) -> None:
+    """Replace this process so the bridge imports the code it has just fast-forwarded to."""
+    os.execv(
+        sys.executable,
+        [
+            sys.executable,
+            "-m",
+            "erga_mcp.integrations.discord.bridge",
+            "--config",
+            str(config_path.expanduser().absolute()),
+            "--runtime-nonce",
+            runtime_nonce,
+        ],
+    )
+
+
 def _create_discord_client(
     settings: DiscordBridgeSettings,
     *,
     ready_path: Path | None = None,
     attachment_roots: tuple[Path, ...] = (),
     config_path: Path | None = None,
+    runtime_nonce: str | None = None,
+    restart_bridge: Callable[[Path, str], None] = _restart_discord_bridge,
 ) -> Any:
     discord = _discord_module()
     intents = discord.Intents.default()
@@ -811,6 +1126,45 @@ def _create_discord_client(
             super().__init__(intents=intents)
             self._backend_lock = asyncio.Lock()
             self._orbit_refresh_task: asyncio.Task[None] | None = None
+
+        async def _handle_update_command(self, message: Any) -> None:
+            status_message = await message.reply(
+                embed=_discord_embed(discord, _update_progress_card()),
+                mention_author=False,
+            )
+            try:
+                async with self._backend_lock:
+                    result = await asyncio.to_thread(update_erga_checkout)
+            except ErgaUpdateError as error:
+                print(f"Discord bridge update refused: {error}", file=sys.stderr, flush=True)
+                await status_message.edit(
+                    content=None,
+                    embed=_discord_embed(discord, _update_failure_card()),
+                )
+                return
+            except Exception as error:
+                print(f"Discord bridge update failed: {error}", file=sys.stderr, flush=True)
+                await status_message.edit(
+                    content=None,
+                    embed=_discord_embed(discord, _update_failure_card()),
+                )
+                return
+            await status_message.edit(
+                content=None,
+                embed=_discord_embed(discord, _update_result_card(result)),
+            )
+            if not result.updated:
+                return
+            if config_path is None or runtime_nonce is None:
+                print(
+                    "Discord bridge updated Erga but cannot restart because runtime metadata is "
+                    "missing.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return
+            await self.close()
+            restart_bridge(config_path, runtime_nonce)
 
         async def _refresh_orbit_loop(self) -> None:
             assert config_path is not None
@@ -868,8 +1222,11 @@ def _create_discord_client(
                 return
             content = message.content
             if self.user is not None:
-                content = content.replace(f"<@{self.user.id}>", "").strip()
+                content = re.sub(rf"<@!?{self.user.id}>", "", content).strip()
             if not content:
+                return
+            if _is_update_command(content):
+                await self._handle_update_command(message)
                 return
             if config_path is not None and is_orbit_stop_request(content):
                 stopped = stop_orbit_dashboard(
@@ -990,7 +1347,7 @@ def _create_discord_client(
     return ErgaDiscordClient()
 
 
-def run_discord_bridge(config_path: Path) -> int:
+def run_discord_bridge(config_path: Path, *, runtime_nonce: str | None = None) -> int:
     config = load_config(config_path)
     settings = load_discord_settings(config_path)
     _, _, ready_path = _runtime_paths(config_path)
@@ -1000,6 +1357,7 @@ def run_discord_bridge(config_path: Path) -> int:
         ready_path=ready_path,
         attachment_roots=(config.data_dir, config.resume.output_root),
         config_path=config_path,
+        runtime_nonce=runtime_nonce or secrets.token_urlsafe(24),
     )
     client.run(read_discord_token(config_path), log_handler=None)
     return 0
@@ -1263,7 +1621,8 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    return run_discord_bridge(_parser().parse_args().config)
+    args = _parser().parse_args()
+    return run_discord_bridge(args.config, runtime_nonce=args.runtime_nonce)
 
 
 if __name__ == "__main__":
