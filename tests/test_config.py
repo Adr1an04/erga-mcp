@@ -64,6 +64,13 @@ class ConfigTests(unittest.TestCase):
     def test_default_config_does_not_ask_users_for_a_project_bullet_count(self) -> None:
         self.assertNotIn("project_min_bullets", DEFAULT_CONFIG)
 
+    def test_keryx_is_disabled_by_default_and_requires_explicit_opt_in(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+
+            self.assertFalse(load_config(config_path).keryx.enabled)
+
     def test_loads_client_neutral_career_tool_profile(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"

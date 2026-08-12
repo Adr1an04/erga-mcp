@@ -606,7 +606,7 @@ def render_core_setup_review(selections: CoreSetupSelections) -> str:
                 else "not configured"
             ),
             "",
-            "Not being connected: coding AI, Discord, mail, or any model API key.",
+            "Not being connected: coding AI, Discord, Keryx, mail, or any model API key.",
             "You can change these settings later. You can cancel now with no changes.",
         ]
     )

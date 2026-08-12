@@ -272,6 +272,20 @@ semantic-accent system.
 Keep the bot private and the Discord allowlist minimal; the bridge can access everything available
 to its OS account. See the [Discord bridge guide](docs/discord.md).
 
+Keryx is an optional public job-discovery source. Enabling it downloads the fixed, public US
+internship and new-graduate index into Erga's local state; searches never send a query, résumé,
+profile, or application data anywhere:
+
+```bash
+uv run erga keryx enable
+uv run erga keryx search 'software engineer' --program internship --cycle summer-2027
+```
+
+Search results remain untrusted public leads. Erga does not create an application or run résumé
+intake until the user separately chooses an individual posting URL. Disable the extension at any
+time with `uv run erga keryx disable`. The harmless public cache remains available for a later
+re-enable and is removed with the rest of Erga-owned state by `erga uninstall`.
+
 ### Add evidence and a draft application
 
 ```bash
@@ -338,6 +352,7 @@ The recommended `career` MCP profile includes:
 | `manage_portfolio_roots` | Explicitly set/add/list/remove existing local roots; never performs an implicit home crawl |
 | `review_git_skill_group` | Inspect, skip, restore, or explicitly approve a Git-corroborated group |
 | `list_evidence` | Read local evidence records |
+| `search_keryx_jobs` | Search an explicitly enabled local cache of public Keryx roles without network access or application creation |
 | `intake_job_url` | Research one job and build local review artifacts end to end |
 | `prepare_job_workspace` | Create a bounded local job package from a supplied URL |
 | `create_tailored_resume` | Create a proposal, diff, and evidence report |
