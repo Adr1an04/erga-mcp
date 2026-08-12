@@ -11,9 +11,70 @@ from unittest.mock import patch
 from erga_mcp.config import DEFAULT_CONFIG
 from erga_mcp.integrations.mail.zoho import MailMessageMetadata
 from erga_mcp.mcp.server import build_server
+from erga_mcp.store import ErgaStore
 
 
 class MailSyncMcpTests(unittest.TestCase):
+    def test_mail_status_transition_is_mirrored_to_the_exact_tracker_row(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            tracker = root / "tracker"
+            tracker.mkdir()
+            job_url = "https://jobs.uber.com/en/jobs/300697"
+            tracker_path = tracker / "Fall 2026 Application Tracker.md"
+            tracker_path.write_text(
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                f"| Uber | Software Engineer Intern | Remote | [Posting]({job_url}) | "
+                "Applied | 2026-07-20 | Await acknowledgement or recruiting update. | Note |\n",
+                encoding="utf-8",
+            )
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace('tool_profile = "career"', 'tool_profile = "hermes"')
+                .replace('client_id = ""', 'client_id = "test-client"')
+                .replace('folder = "Job Applications"', 'folder = "Inbox"')
+                .replace(
+                    'enabled = false\ntracker_dir = ""',
+                    'enabled = true\ntracker_dir = "tracker"',
+                ),
+                encoding="utf-8",
+            )
+            store = ErgaStore(root / "state" / "erga.sqlite3")
+            application = store.create_application(
+                company="Uber",
+                role="Software Engineer Intern",
+                source_url=job_url,
+                evidence_ids=[],
+            )
+            store.update_application_status(application.id, status="applied")
+            denial = MailMessageMetadata(
+                message_id="uber-denial",
+                received_at=datetime(2026, 8, 12, tzinfo=UTC),
+                sender="talent@uber.com",
+                subject="Thanks for your interest in Uber",
+                preview="Unfortunately, we will not be moving forward.",
+            )
+
+            with (
+                patch(
+                    "erga_mcp.integrations.mail.provider.refresh_access_token",
+                    return_value="test-token",
+                ),
+                patch(
+                    "erga_mcp.integrations.mail.provider.fetch_all_inbox_metadata",
+                    return_value=[denial],
+                ),
+            ):
+                result: Any = asyncio.run(
+                    build_server(config_path).call_tool("sync_recruiting_mail", {})
+                )
+            payload = cast(dict[str, Any], result.structured_content)
+
+            self.assertEqual(payload["tracker_updates"], 1)
+            self.assertIn("| Rejected |", tracker_path.read_text(encoding="utf-8"))
+
     def test_syncs_configured_zoho_folder_and_returns_a_safe_compact_message(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

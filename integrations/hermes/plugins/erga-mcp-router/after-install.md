@@ -20,15 +20,19 @@ In Discord, `/intake-job <job-posting-url>` opens a persisted, mobile-friendly p
 generation. Emoji-labeled buttons collect one project-portfolio decision and one copy-strategy
 decision, then show a review screen. Planning fetches and saves the official posting but creates no
 application, résumé, package, or tracker entry. Only the explicit **🚀 Generate résumé** button runs
-the validated intake; completion and its PDF are delivered back to the channel where it was
-approved. A successful completion requires a validated PDF inside the package, sends it as a native
-document, and retries the complete message-plus-attachment delivery three times before surfacing a
-delivery failure. Button state is opaque, single-use, owner-bound after the first click, and expires after
-15 minutes. A plain job URL sent outside the slash command keeps the existing direct-intake route.
+the validated intake. The completed message replaces the review with the native validated PDF and
+asks **Did you submit this application?** The owner-bound ✅ **Yes, applied** and ❌ **Still
+drafting** controls update the exact local application ID and synchronize its configured Obsidian
+tracker row; they never submit anything remotely. Button state is opaque, single-use, owner-bound
+to the requesting Discord user, and expires after 24 hours. A plain job URL sent outside the slash
+command keeps the direct-intake route and receives the same confirmation controls when its validated
+PDF is delivered.
 
 Custom MCP server names may also override the planning tools with
 `ERGA_MCP_TAILORING_PLAN_CREATE_TOOL`, `ERGA_MCP_TAILORING_PLAN_UPDATE_TOOL`, and
-`ERGA_MCP_TAILORING_PLAN_EXECUTE_TOOL` using their complete Hermes-prefixed names.
+`ERGA_MCP_TAILORING_PLAN_EXECUTE_TOOL` using their complete Hermes-prefixed names. Override the
+status tool with `ERGA_MCP_APPLICATION_STATUS_TOOL` only when the MCP server uses a nonstandard
+name.
 
 `/erga-tracker` adds a **Research · Company** control for roles at OA, interview, or offer. The
 private navigator opens the official posting and deduplicated saved web links, inventories local
@@ -38,12 +42,13 @@ sources** explicitly reruns bounded public research; **Create OA/interview/offer
 concise local stage checklist. Neither action submits an application or contacts anyone.
 
 `/erga-orbit [recruiting cycle]` renders the same deterministic aggregate application funnel used
-by Erga's local core and attaches it as an inline PNG. `/erga-tracker` also includes an **Orbit**
-control. The snapshot uses no model tokens, includes no employer names, begins at **Applied**, and
-shows only OA, recorded interview rounds, offer, and recruiting outcomes. Pre-application setup
-states are excluded, and tracker-only later stages do not receive invented intermediate rounds. The
-native Erga Discord bridge can refresh one message in place; Hermes provides the on-demand
-snapshot because its plugin response API does not currently expose message edits.
+by Erga's local core and attaches the PNG without exposing its host path. `/erga-tracker` also
+includes an **Orbit** control. Generated PNGs are temporary by default and are removed from the
+Erga host after Discord confirms the upload. Use the ✅/❌ controls on the preview or **Orbit
+images** in `/erga-settings` to change the preset for future renders. The snapshot uses no model
+tokens, includes no employer names, begins at **Applied**, and shows only OA, recorded interview
+rounds, offer, and recruiting outcomes. Pre-application setup states are excluded, and tracker-only
+later stages do not receive invented intermediate rounds.
 
 At gateway startup, MCP discovery can finish just after the first user message. The router retries
 only Hermes' exact `Unknown tool` and `MCP server ... is not connected` readiness errors for up to

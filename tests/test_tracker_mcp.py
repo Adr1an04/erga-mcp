@@ -13,6 +13,51 @@ from erga_mcp.store import ErgaStore
 
 
 class TrackerMcpTests(unittest.TestCase):
+    def test_explicit_status_update_synchronizes_the_exact_obsidian_tracker_row(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            tracker = root / "tracker"
+            tracker.mkdir()
+            job_url = "https://jobs.example.test/role-123"
+            tracker_path = tracker / "Fall 2026 Application Tracker.md"
+            tracker_path.write_text(
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                f"| Example | Engineer | Remote | [Posting]({job_url}) | Draft |  | "
+                "Prepare and submit application. | Note |\n",
+                encoding="utf-8",
+            )
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace(
+                    'enabled = false\ntracker_dir = ""',
+                    'enabled = true\ntracker_dir = "tracker"',
+                ),
+                encoding="utf-8",
+            )
+            store = ErgaStore(load_config(config_path).data_dir / "erga.sqlite3")
+            application = store.create_application(
+                company="Example",
+                role="Engineer",
+                source_url=job_url,
+                evidence_ids=[],
+            )
+
+            result: Any = asyncio.run(
+                build_server(config_path).call_tool(
+                    "update_application_status",
+                    {"application_id": application.id, "status": "applied"},
+                )
+            )
+            payload = cast(dict[str, Any], result.structured_content)
+
+            self.assertEqual(payload["status"], "applied")
+            self.assertEqual(payload["tracker_updates"], 1)
+            rendered = tracker_path.read_text(encoding="utf-8")
+            self.assertIn("| Applied |", rendered)
+            self.assertIn("Await acknowledgement or recruiting update.", rendered)
+
     def test_renders_a_token_free_orbit_artifact_from_local_tracking_data(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -34,8 +79,19 @@ class TrackerMcpTests(unittest.TestCase):
             self.assertTrue(image_path.is_file())
             self.assertEqual(image_path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             self.assertFalse(payload["model_api_used"])
+            self.assertFalse(payload["retain_generated_images"])
             self.assertEqual(payload["snapshot"]["tracked_count"], 1)
             self.assertEqual(payload["message"], "**Orbit**")
+
+            updated: Any = asyncio.run(
+                build_server(config_path).call_tool(
+                    "update_orbit_preferences",
+                    {"retain_generated_images": True},
+                )
+            )
+            updated_payload = cast(dict[str, Any], updated.structured_content)
+            self.assertTrue(updated_payload["retain_generated_images"])
+            self.assertTrue(load_config(config_path).orbit.retain_generated_images)
 
     def test_returns_a_rendered_obsidian_tracker_without_writing_the_vault(self) -> None:
         with TemporaryDirectory() as directory:

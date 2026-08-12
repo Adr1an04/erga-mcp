@@ -82,6 +82,23 @@ def build_settings_card(
                 "Show the exact host command for importing a master resume.",
             )
         )
+    if config.orbit.retain_generated_images:
+        actions.append(
+            CardAction(
+                "orbit.retention.temporary",
+                "❌ Make Orbit images temporary",
+                "Delete each local PNG after Discord has uploaded its attachment.",
+            )
+        )
+    else:
+        actions.append(
+            CardAction(
+                "orbit.retention.save",
+                "✅ Save Orbit images locally",
+                "Keep generated Orbit PNGs in Erga's private local state.",
+                style="success",
+            )
+        )
     actions.append(CardAction("onboarding.status", "Full setup", "Review every setup stage."))
     if config.portfolio_roots:
         actions.append(CardAction("git.review", "Git review", "Scan or review Git projects."))
@@ -112,6 +129,14 @@ def build_settings_card(
                 ),
             ),
             CardField("Obsidian tracker", tracker),
+            CardField(
+                "Orbit images",
+                (
+                    "Saved locally after Discord upload"
+                    if config.orbit.retain_generated_images
+                    else "Temporary - deleted locally after Discord upload"
+                ),
+            ),
             CardField("Discord", discord),
             CardField("Mail", mail),
             CardField("MCP profile", config.mcp.tool_profile),

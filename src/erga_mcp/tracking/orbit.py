@@ -22,9 +22,13 @@ from erga_mcp.tracking.tracker import TrackerEntry, read_application_tracker
 
 _STATUS_ALIASES = {
     "assessment": "oa",
+    "awaiting response": "awaiting-response",
     "online assessment": "oa",
     "final round": "final-interview",
     "final interview": "final-interview",
+    "no reply": "awaiting-response",
+    "no response": "awaiting-response",
+    "pending": "awaiting-response",
     "ready to apply": "ready",
     "researching": "researching",
     "second interview": "interview-2",
@@ -33,7 +37,7 @@ _STATUS_ALIASES = {
 _STATUS_LABELS = {
     "accepted": "Accepted",
     "applied": "Applied",
-    "awaiting-response": "Awaiting response",
+    "awaiting-response": "No response",
     "declined": "Declined",
     "draft": "Draft",
     "expired": "Expired",
@@ -54,7 +58,7 @@ _STATUS_LABELS = {
 _STATUS_COLORS = {
     "accepted": "#18A63B",
     "applied": "#18A63B",
-    "awaiting-response": "#9ACFFC",
+    "awaiting-response": "#A8ACB8",
     "declined": "#BF3036",
     "draft": "#A8ACB8",
     "expired": "#BF3036",
@@ -77,6 +81,7 @@ _OUTCOME_RIBBON = "#D78383"
 _NEGATIVE_OUTCOMES = frozenset({"declined", "expired", "rejected", "withdrawn"})
 _STATUS_COLUMNS = {
     "applied": 0,
+    "awaiting-response": 1,
     "oa": 1,
     "interview": 2,
     "interview-2": 3,
@@ -92,20 +97,21 @@ _STATUS_PROGRESS = {
     "draft": 0,
     "ready": 1,
     "applied": 2,
-    "oa": 3,
-    "interview": 4,
-    "interview-2": 5,
-    "interview-3": 6,
-    "final-interview": 7,
-    "offer": 8,
-    "accepted": 9,
+    "awaiting-response": 3,
+    "oa": 4,
+    "interview": 5,
+    "interview-2": 6,
+    "interview-3": 7,
+    "final-interview": 8,
+    "offer": 9,
+    "accepted": 10,
 }
 _TERMINAL_STATUSES = frozenset({"accepted", "declined", "expired", "rejected", "withdrawn"})
 _PRE_APPLICATION_STATUSES = frozenset({"draft", "ready", "researching", "unknown"})
 _STATUS_AUDIT_ACTIONS = frozenset(
     {"application.status_updated", "application.status_updated_from_mail"}
 )
-_ORBIT_RENDER_VERSION = 3
+_ORBIT_RENDER_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -263,6 +269,14 @@ def _pipeline_statuses(statuses: Sequence[str]) -> tuple[list[str], bool]:
     return ["applied", *pipeline], False
 
 
+def _with_current_outcome(statuses: Sequence[str]) -> list[str]:
+    """Give a submitted role with no later event an explicit visible branch."""
+    pipeline = list(statuses)
+    if pipeline == ["applied"]:
+        pipeline.append("awaiting-response")
+    return pipeline
+
+
 def _tracker_by_identity(entries: Sequence[TrackerEntry], *, cycle: str) -> dict[str, TrackerEntry]:
     selected: dict[str, TrackerEntry] = {}
     normalized_cycle = cycle.strip().casefold()
@@ -342,6 +356,7 @@ def build_orbit_snapshot(
         pipeline, applied_was_recorded = _pipeline_statuses(statuses)
         if not pipeline:
             continue
+        pipeline = _with_current_outcome(pipeline)
         corrected_transition_count += corrected
         local_application_count += 1
         path_is_recorded = recorded and applied_was_recorded
@@ -356,6 +371,7 @@ def build_orbit_snapshot(
         pipeline, _ = _pipeline_statuses([_canonical_status(entry.status)])
         if not pipeline:
             continue
+        pipeline = _with_current_outcome(pipeline)
         tracker_only_count += 1
         snapshot_only_count += 1
         add_path(
@@ -796,8 +812,16 @@ def render_orbit_png(
         ):
             source_x, source_y0, source_y1 = geometry[link.source]
             target_x, target_y0, target_y1 = geometry[link.target]
-            source_unit = (source_y1 - source_y0) / max(outgoing[link.source], 1)
-            target_unit = (target_y1 - target_y0) / max(incoming[link.target], 1)
+            source_unit = (source_y1 - source_y0) / max(
+                node_by_id[link.source].count,
+                outgoing[link.source],
+                1,
+            )
+            target_unit = (target_y1 - target_y0) / max(
+                node_by_id[link.target].count,
+                incoming[link.target],
+                1,
+            )
             source_top = source_y0 + source_offsets[link.source]
             target_top = target_y0 + target_offsets[link.target]
             source_bottom = source_top + source_unit * link.count

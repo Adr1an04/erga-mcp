@@ -67,10 +67,12 @@ class SettingsViewTests(unittest.TestCase):
             self.assertIn("Tap a setup action", card.summary)
             self.assertIn("Needs setup - import approved skills", rendered)
             self.assertIn("Connected through Hermes", rendered)
+            self.assertIn("Temporary - deleted locally after Discord upload", rendered)
             self.assertIn("onboarding.skills.import", action_ids)
             self.assertIn("onboarding.skills.help", action_ids)
             self.assertIn("onboarding.roots.use_detected", action_ids)
             self.assertIn("onboarding.roots.help", action_ids)
+            self.assertIn("orbit.retention.save", action_ids)
             self.assertNotIn("/private/detected/projects", rendered)
 
 

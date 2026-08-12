@@ -15,6 +15,53 @@ from erga_mcp.models import Application, MailEvent
 
 
 class ObsidianTrackerTests(unittest.TestCase):
+    def test_status_reconciliation_uses_job_url_when_one_company_has_multiple_roles(self) -> None:
+        with TemporaryDirectory() as directory:
+            tracker = Path(directory)
+            path = tracker / "Summer 2027 Application Tracker.md"
+            first_url = "https://jobs.example.test/company/first"
+            second_url = "https://jobs.example.test/company/second"
+            path.write_text(
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                f"| Example | First role | Remote | [Posting]({first_url}) | Draft |  | "
+                "Prepare and submit application. | Note |\n"
+                f"| Example | Second role | Remote | [Posting]({second_url}) | Draft |  | "
+                "Prepare and submit application. | Note |\n",
+                encoding="utf-8",
+            )
+            applications = [
+                Application(
+                    id="app_first",
+                    company="Example",
+                    role="First role",
+                    source_url=first_url,
+                    status="applied",
+                    evidence_ids=[],
+                    created_at=datetime(2026, 8, 12, tzinfo=UTC),
+                ),
+                Application(
+                    id="app_second",
+                    company="Example",
+                    role="Second role",
+                    source_url=second_url,
+                    status="oa",
+                    evidence_ids=[],
+                    created_at=datetime(2026, 8, 12, tzinfo=UTC),
+                ),
+            ]
+
+            updates = reconcile_application_status_tracker_rows(
+                tracker_dir=tracker,
+                applications=applications,
+            )
+
+            rendered = path.read_text(encoding="utf-8")
+            self.assertEqual(updates, 2)
+            self.assertIn(f"[Posting]({first_url}) | Applied |", rendered)
+            self.assertIn(f"[Posting]({second_url}) | OA |", rendered)
+
     def test_mirrors_an_unambiguous_canonical_rejection(self) -> None:
         with TemporaryDirectory() as directory:
             tracker = Path(directory)

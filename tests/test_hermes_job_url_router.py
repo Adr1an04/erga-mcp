@@ -95,7 +95,7 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "expired"):
             tokens.consume(expired, user_id="42")
 
-    def test_discord_intake_plan_uses_emoji_questions_review_and_background_generation(
+    def test_discord_intake_plan_attaches_resume_and_asks_for_exact_application_status(
         self,
     ) -> None:
         class Button:
@@ -103,9 +103,20 @@ class HermesJobUrlRouterTests(unittest.TestCase):
                 self.__dict__.update(kwargs)
 
         class Response:
-            def __init__(self, *, text: str, buttons: tuple[Any, ...]) -> None:
+            def __init__(
+                self,
+                *,
+                text: str,
+                buttons: tuple[Any, ...],
+                attachments: tuple[Any, ...] = (),
+            ) -> None:
                 self.text = text
                 self.buttons = buttons
+                self.attachments = attachments
+
+        class Attachment:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
 
         def plan_payload(
             *,
@@ -245,24 +256,25 @@ class HermesJobUrlRouterTests(unittest.TestCase):
                         },
                     }
                 ),
+                json.dumps(
+                    {
+                        "id": "app_synthetic",
+                        "status": "applied",
+                        "tracker_updates": 1,
+                    }
+                ),
             ]
         )
-        delivered: list[tuple[str, str, str | None]] = []
         plugins = ModuleType("hermes_cli.plugins")
         plugins.DiscordButton = Button
         plugins.DiscordCommandResponse = Response
+        plugins.DiscordAttachment = Attachment
         hermes_cli = ModuleType("hermes_cli")
         hermes_cli.__version__ = "0.18.2"
         hermes_cli.plugins = plugins
 
         with patch.dict(sys.modules, {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins}):
-            self.router.register(
-                context,
-                background_runner=lambda callback: callback(),
-                plan_delivery=lambda channel_id, message, pdf: delivered.append(
-                    (channel_id, message, pdf)
-                ),
-            )
+            self.router.register(context)
             first = context.commands["intake-job"]("https://jobs.example.test/engineer")
             first_click = type(
                 "Interaction",
@@ -288,6 +300,17 @@ class HermesJobUrlRouterTests(unittest.TestCase):
                 {"payload": generate.payload, "user_id": "42", "channel_id": "123"},
             )()
             generating = context.discord_button_handlers["erga.plan.action"](generate_click)
+            applied = context.discord_button_handlers["erga.application.status"](
+                type(
+                    "Interaction",
+                    (),
+                    {
+                        "payload": generating.buttons[0].payload,
+                        "user_id": "42",
+                        "channel_id": "123",
+                    },
+                )()
+            )
 
         self.assertEqual(
             [button.label for button in first.buttons[:2]], ["⚖️ Balanced", "🎯 Closest match"]
@@ -296,10 +319,14 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertIn("Question 2 of 2", second.text)
         self.assertIn("Review before generation", review.text)
         self.assertIn("Robotics, Platform, Tooling", review.text)
-        self.assertIn("Generation started", generating.text)
-        self.assertEqual(delivered[0][0], "123")
-        self.assertIn("app_synthetic", delivered[0][1])
-        self.assertEqual(delivered[0][2], str(pdf_path.resolve()))
+        self.assertIn("Did you submit this application?", generating.text)
+        self.assertEqual(generating.attachments[0].path, str(pdf_path.resolve()))
+        self.assertEqual(
+            [button.label for button in generating.buttons],
+            ["✅ Yes, applied", "❌ Still drafting"],
+        )
+        self.assertIn("marked Applied", applied.text)
+        self.assertEqual(applied.buttons, ())
         self.assertEqual(
             context.calls[0],
             (
@@ -308,8 +335,14 @@ class HermesJobUrlRouterTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            context.calls[-1],
-            ("mcp__erga_mcp__execute_tailoring_plan", {"plan_id": "plan_example"}),
+            context.calls[-2:],
+            [
+                ("mcp__erga_mcp__execute_tailoring_plan", {"plan_id": "plan_example"}),
+                (
+                    "mcp__erga_mcp__update_application_status",
+                    {"application_id": "app_synthetic", "status": "applied"},
+                ),
+            ],
         )
 
     def test_onboarding_and_settings_commands_render_shared_cards_without_components(self) -> None:
@@ -1136,6 +1169,78 @@ class HermesJobUrlRouterTests(unittest.TestCase):
             self.assertIn("[[as_document]]", transformed)
             self.assertIsNone(repeated)
 
+    def test_pasted_job_link_resume_gets_exact_user_bound_status_controls(self) -> None:
+        class Button:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        class Response:
+            def __init__(self, *, text: str, buttons: tuple[Any, ...]) -> None:
+                self.text = text
+                self.buttons = buttons
+
+        captured: list[tuple[Any, ...]] = []
+
+        def register_message_buttons(buttons: tuple[Any, ...]) -> str:
+            captured.append(buttons)
+            return "opaque-control-token-123456"
+
+        with TemporaryDirectory() as directory:
+            package_dir = Path(directory) / "application"
+            artifacts_dir = package_dir / "artifacts"
+            artifacts_dir.mkdir(parents=True)
+            pdf_path = artifacts_dir / "Candidate_Resume.pdf"
+            pdf_path.write_bytes(b"%PDF-1.7\nsynthetic\n")
+            context = _FakePluginContext(
+                result=json.dumps(
+                    {
+                        "application_id": "app_exact",
+                        "package_dir": str(package_dir),
+                        "validation": {"returncode": 0, "pdf": str(pdf_path)},
+                    }
+                )
+            )
+            plugins = ModuleType("hermes_cli.plugins")
+            plugins.DiscordButton = Button
+            plugins.DiscordCommandResponse = Response
+            plugins.register_discord_message_buttons = register_message_buttons
+            hermes_cli = ModuleType("hermes_cli")
+            hermes_cli.__version__ = "0.18.2"
+            hermes_cli.plugins = plugins
+
+            with patch.dict(
+                sys.modules,
+                {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins},
+            ):
+                self.router.register(context)
+                context.hooks["pre_llm_call"](
+                    user_message="https://boards.greenhouse.io/example/jobs/12345",
+                    session_id="discord-session",
+                    turn_id="direct-turn",
+                    platform="discord",
+                    sender_id="42",
+                )
+                transformed = context.hooks["transform_llm_output"](
+                    response_text="Resume ready.",
+                    session_id="discord-session",
+                    platform="discord",
+                )
+
+        assert transformed is not None
+        self.assertIn("Did you submit this application?", transformed)
+        self.assertIn(
+            "[[discord_plugin_buttons:opaque-control-token-123456]]",
+            transformed,
+        )
+        self.assertEqual(
+            [button.label for button in captured[0]],
+            ["✅ Yes, applied", "❌ Still drafting"],
+        )
+        self.assertEqual(
+            [button.action_id for button in captured[0]],
+            ["erga.application.status", "erga.application.status"],
+        )
+
     def test_attachment_unwraps_the_live_hermes_mcp_result_envelope(self) -> None:
         with TemporaryDirectory() as directory:
             package_dir = Path(directory) / "application"
@@ -1318,32 +1423,98 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertIn('MEDIA:"/tmp/Candidate Resume.pdf"', body)
 
     def test_erga_orbit_dispatches_token_free_renderer_and_attaches_valid_png(self) -> None:
+        class Attachment:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        class Button:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        class Response:
+            def __init__(
+                self,
+                *,
+                text: str,
+                buttons: tuple[Any, ...] = (),
+                attachments: tuple[Any, ...] = (),
+            ) -> None:
+                self.text = text
+                self.buttons = buttons
+                self.attachments = attachments
+
         with TemporaryDirectory() as directory:
             orbit_dir = Path(directory) / "orbit"
             orbit_dir.mkdir()
             image_path = orbit_dir / "erga-orbit-summer-2027.png"
             image_path.write_bytes(b"\x89PNG\r\n\x1a\nsynthetic")
             context = _FakePluginContext(
-                result=json.dumps(
-                    {
-                        "image_path": str(image_path),
-                        "mime_type": "image/png",
-                        "message": "**Erga Orbit · Summer 2027**\n12 tracked roles",
-                        "model_api_used": False,
-                    }
-                )
+                results=[
+                    json.dumps(
+                        {
+                            "image_path": str(image_path),
+                            "mime_type": "image/png",
+                            "message": "**Erga Orbit · Summer 2027**\n12 tracked roles",
+                            "model_api_used": False,
+                            "retain_generated_images": False,
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "retain_generated_images": True,
+                            "message": "Orbit images will be saved locally after Discord upload.",
+                        }
+                    ),
+                ]
             )
-            self.router.register(context)
+            plugins = ModuleType("hermes_cli.plugins")
+            plugins.DiscordAttachment = Attachment
+            plugins.DiscordButton = Button
+            plugins.DiscordCommandResponse = Response
+            hermes_cli = ModuleType("hermes_cli")
+            hermes_cli.__version__ = "0.18.2"
+            hermes_cli.plugins = plugins
 
-            response = context.commands["erga-orbit"]("Summer 2027")
+            with (
+                patch.dict(
+                    sys.modules,
+                    {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins},
+                ),
+                patch.dict(os.environ, {"HERMES_HOME": str(Path(directory) / "hermes")}),
+            ):
+                self.router.register(context)
+                response = context.commands["erga-orbit"]("Summer 2027")
+                saved = context.discord_button_handlers["erga.orbit.retention"](
+                    type("Interaction", (), {"payload": "save", "user_id": "42"})()
+                )
+                staged_path = Path(response.attachments[0].path)
+                staged_existed = staged_path.is_file()
+                original_existed = image_path.exists()
 
         self.assertEqual(
-            context.calls,
-            [("mcp__erga_mcp__application_orbit", {"cycle": "Summer 2027"})],
+            context.calls[0],
+            ("mcp__erga_mcp__application_orbit", {"cycle": "Summer 2027"}),
         )
-        self.assertIn("12 tracked roles", response)
-        self.assertIn(f'MEDIA:"{image_path.resolve()}"', response)
-        self.assertNotIn("[[as_document]]", response)
+        self.assertEqual(
+            context.calls[1],
+            (
+                "mcp__erga_mcp__update_orbit_preferences",
+                {"retain_generated_images": True},
+            ),
+        )
+        self.assertIn("12 tracked roles", response.text)
+        self.assertNotIn(str(image_path.resolve()), response.text)
+        self.assertNotIn("MEDIA:", response.text)
+        self.assertEqual(staged_path.parent.name, "images")
+        self.assertTrue(staged_existed)
+        self.assertNotEqual(staged_path, image_path.resolve())
+        self.assertFalse(original_existed)
+        self.assertTrue(response.attachments[0].delete_after_send)
+        self.assertEqual(
+            [button.label for button in response.buttons],
+            ["✅ Save future Orbits", "❌ Keep temporary"],
+        )
+        self.assertIn("saved locally", saved.text)
 
     def test_plan_delivery_retries_transient_attachment_failures(self) -> None:
         attempts: list[tuple[str, str, str | None]] = []
@@ -1546,7 +1717,9 @@ class HermesJobUrlRouterTests(unittest.TestCase):
             {
                 "erga.card.action",
                 "erga.tracker.page",
+                "erga.orbit.retention",
                 "erga.plan.action",
+                "erga.application.status",
                 "erga.review.back",
                 "erga.review.skip",
                 "erga.review.save",

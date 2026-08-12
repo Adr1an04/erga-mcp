@@ -24,6 +24,7 @@ _DEFAULT_MONITOR_TOOL_NAME = "mcp__erga_mcp__install_mail_monitor_scripts"
 _DEFAULT_EXPORT_TOOL_NAME = "mcp__erga_mcp__export_data"
 _DEFAULT_TRACKER_TOOL_NAME = "mcp__erga_mcp__application_tracker"
 _DEFAULT_ORBIT_TOOL_NAME = "mcp__erga_mcp__application_orbit"
+_DEFAULT_ORBIT_PREFERENCES_TOOL_NAME = "mcp__erga_mcp__update_orbit_preferences"
 _DEFAULT_RESEARCH_NAVIGATOR_TOOL_NAME = "mcp__erga_mcp__research_navigator"
 _DEFAULT_DISCOVERY_RESEARCH_TOOL_NAME = "mcp__erga_mcp__discover_job_research"
 _DEFAULT_RESEARCH_BRIEF_TOOL_NAME = "mcp__erga_mcp__create_research_brief"
@@ -41,6 +42,7 @@ _DEFAULT_PROJECT_CATALOGUE_REFRESH_TOOL_NAME = "mcp__erga_mcp__refresh_project_c
 _DEFAULT_TAILORING_PLAN_CREATE_TOOL_NAME = "mcp__erga_mcp__create_tailoring_plan"
 _DEFAULT_TAILORING_PLAN_UPDATE_TOOL_NAME = "mcp__erga_mcp__update_tailoring_plan"
 _DEFAULT_TAILORING_PLAN_EXECUTE_TOOL_NAME = "mcp__erga_mcp__execute_tailoring_plan"
+_DEFAULT_APPLICATION_STATUS_TOOL_NAME = "mcp__erga_mcp__update_application_status"
 _DEFAULT_CRON_TOOL_NAME = "cronjob"
 _DEFAULT_TOKEN_TOOL_NAME = "mcp__erga_mcp__record_token_usage"
 _DISCORD_CONTENT_LIMIT = 2_000
@@ -135,7 +137,7 @@ _NON_PAGE_SUFFIXES = (
 _MAX_REMEMBERED_TURNS = 1024
 _ROUTED_TURNS: OrderedDict[tuple[str, str, str], str | None] = OrderedDict()
 _ROUTED_TURNS_LOCK = threading.Lock()
-_PENDING_ATTACHMENTS: OrderedDict[str, str] = OrderedDict()
+_PENDING_ATTACHMENTS: OrderedDict[str, tuple[str, str | None, str | None]] = OrderedDict()
 _PENDING_ATTACHMENTS_LOCK = threading.Lock()
 _PENDING_TOKEN_APPLICATIONS: OrderedDict[tuple[str, str], str] = OrderedDict()
 _PENDING_TOKEN_APPLICATIONS_LOCK = threading.Lock()
@@ -150,7 +152,7 @@ class _ComponentTokenStore:
     def __init__(
         self,
         *,
-        ttl_seconds: float = 900,
+        ttl_seconds: float = 86_400,
         monotonic: Callable[[], float] = time.monotonic,
         maximum: int = 1_024,
     ) -> None:
@@ -595,7 +597,7 @@ def _validated_export_from_result(result: object) -> str | None:
     return str(archive)
 
 
-def _validated_orbit_from_result(result: object) -> tuple[str, str] | None:
+def _validated_orbit_from_result(result: object) -> tuple[str, str, bool] | None:
     """Return only Erga's generated PNG and its aggregate, non-secret caption."""
     payload = next(
         (
@@ -605,6 +607,7 @@ def _validated_orbit_from_result(result: object) -> tuple[str, str] | None:
             and item.get("mime_type") == "image/png"
             and isinstance(item.get("message"), str)
             and item.get("model_api_used") is False
+            and isinstance(item.get("retain_generated_images"), bool)
         ),
         None,
     )
@@ -626,7 +629,35 @@ def _validated_orbit_from_result(result: object) -> tuple[str, str] | None:
         or signature != b"\x89PNG\r\n\x1a\n"
     ):
         return None
-    return str(payload["message"]), str(image_path)
+    return (
+        str(payload["message"]),
+        str(image_path),
+        bool(payload["retain_generated_images"]),
+    )
+
+
+def _stage_orbit_attachment(image_path: str, *, retain_original: bool) -> str:
+    """Move or copy one validated Orbit PNG into Hermes' attachment-safe cache."""
+    source = Path(image_path).expanduser().resolve(strict=True)
+    hermes_home = Path(os.getenv("HERMES_HOME", Path.home() / ".hermes")).expanduser()
+    cache_dir = hermes_home / "cache" / "images"
+    if cache_dir.is_symlink():
+        raise ValueError("Hermes image cache must not be a symlink")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(cache_dir, 0o700)
+    staged = cache_dir / f"erga-orbit-{secrets.token_hex(8)}.png"
+    try:
+        if retain_original:
+            shutil.copy2(source, staged)
+        else:
+            shutil.move(source, staged)
+        os.chmod(staged, 0o600)
+        if staged.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
+            raise ValueError("staged Orbit attachment is not a PNG")
+    except Exception:
+        staged.unlink(missing_ok=True)
+        raise
+    return str(staged.resolve(strict=True))
 
 
 def _intake_payload(result: object) -> dict[str, Any] | None:
@@ -695,17 +726,29 @@ def _clear_pending_attachment(session_id: str) -> None:
         _PENDING_ATTACHMENTS.pop(session_id, None)
 
 
-def _set_pending_attachment(session_id: str, pdf_path: str | None) -> None:
+def _set_pending_attachment(
+    session_id: str,
+    pdf_path: str | None,
+    *,
+    application_id: str | None = None,
+    owner_user_id: str | None = None,
+) -> None:
     if not session_id or pdf_path is None:
         return
     with _PENDING_ATTACHMENTS_LOCK:
-        _PENDING_ATTACHMENTS[session_id] = pdf_path
+        _PENDING_ATTACHMENTS[session_id] = (
+            pdf_path,
+            application_id,
+            owner_user_id,
+        )
         _PENDING_ATTACHMENTS.move_to_end(session_id)
         while len(_PENDING_ATTACHMENTS) > _MAX_REMEMBERED_TURNS:
             _PENDING_ATTACHMENTS.popitem(last=False)
 
 
-def _pop_pending_attachment(session_id: str) -> str | None:
+def _pop_pending_attachment(
+    session_id: str,
+) -> tuple[str, str | None, str | None] | None:
     if not session_id:
         return None
     with _PENDING_ATTACHMENTS_LOCK:
@@ -714,23 +757,14 @@ def _pop_pending_attachment(session_id: str) -> str | None:
 
 def _application_id_from_result(result: object) -> str | None:
     """Extract the local application ID from a direct or envelope-wrapped MCP result."""
-    if isinstance(result, str):
-        try:
-            result = json.loads(result)
-        except json.JSONDecodeError:
-            return None
-    if not isinstance(result, dict):
-        return None
-    application_id = result.get("application_id")
-    if isinstance(application_id, str) and application_id:
-        return application_id
-    for key in ("data", "result"):
-        nested = result.get(key)
-        if isinstance(nested, dict):
-            application_id = _application_id_from_result(nested)
-            if application_id:
-                return application_id
-    return None
+    return next(
+        (
+            application_id
+            for item in _nested_objects(result)
+            if isinstance((application_id := item.get("application_id")), str) and application_id
+        ),
+        None,
+    )
 
 
 def _remember_token_application(session_id: str, turn_id: str, application_id: str | None) -> None:
@@ -867,11 +901,21 @@ def register(
     except (ImportError, AttributeError):
         DiscordButton = None
         DiscordCommandResponse = None
+    try:
+        from hermes_cli.plugins import register_discord_message_buttons
+    except (ImportError, AttributeError):
+        register_discord_message_buttons = None
+    try:
+        from hermes_cli.plugins import DiscordAttachment
+    except (ImportError, AttributeError):
+        DiscordAttachment = None
     supports_discord_buttons = (
         DiscordButton is not None
         and DiscordCommandResponse is not None
         and callable(getattr(ctx, "register_discord_button_handler", None))
     )
+    supports_discord_attachments = supports_discord_buttons and DiscordAttachment is not None
+    register_message_buttons = register_discord_message_buttons
     monotonic_clock = monotonic or time.monotonic
     sleep_for = sleep or time.sleep
     run_background = background_runner or _run_in_background
@@ -881,6 +925,10 @@ def register(
     export_tool = os.getenv("ERGA_MCP_EXPORT_TOOL", _DEFAULT_EXPORT_TOOL_NAME).strip()
     tracker_tool = os.getenv("ERGA_MCP_TRACKER_TOOL", _DEFAULT_TRACKER_TOOL_NAME).strip()
     orbit_tool = os.getenv("ERGA_MCP_ORBIT_TOOL", _DEFAULT_ORBIT_TOOL_NAME).strip()
+    orbit_preferences_tool = os.getenv(
+        "ERGA_MCP_ORBIT_PREFERENCES_TOOL",
+        _DEFAULT_ORBIT_PREFERENCES_TOOL_NAME,
+    ).strip()
     research_navigator_tool = os.getenv(
         "ERGA_MCP_RESEARCH_NAVIGATOR_TOOL", _DEFAULT_RESEARCH_NAVIGATOR_TOOL_NAME
     ).strip()
@@ -929,6 +977,10 @@ def register(
     tailoring_plan_execute_tool = os.getenv(
         "ERGA_MCP_TAILORING_PLAN_EXECUTE_TOOL",
         _DEFAULT_TAILORING_PLAN_EXECUTE_TOOL_NAME,
+    ).strip()
+    application_status_tool = os.getenv(
+        "ERGA_MCP_APPLICATION_STATUS_TOOL",
+        _DEFAULT_APPLICATION_STATUS_TOOL_NAME,
     ).strip()
     cron_tool = os.getenv("ERGA_MCP_CRON_TOOL", _DEFAULT_CRON_TOOL_NAME).strip()
     token_tool = os.getenv("ERGA_MCP_TOKEN_TOOL", _DEFAULT_TOKEN_TOOL_NAME).strip()
@@ -1007,6 +1059,7 @@ def register(
         task_id: str = "",
         turn_id: str = "",
         platform: str = "",
+        sender_id: str = "",
         **_: Any,
     ) -> dict[str, str] | None:
         # Clear an interrupted turn's undelivered file before evaluating the next message.
@@ -1049,8 +1102,14 @@ def register(
                 with _ROUTED_TURNS_LOCK:
                     _ROUTED_TURNS[route_key] = result
                     _ROUTED_TURNS.move_to_end(route_key)
-        _remember_token_application(session_id, turn_id, _application_id_from_result(result))
-        _set_pending_attachment(session_id, _validated_pdf_from_result(result))
+        application_id = _application_id_from_result(result)
+        _remember_token_application(session_id, turn_id, application_id)
+        _set_pending_attachment(
+            session_id,
+            _validated_pdf_from_result(result),
+            application_id=application_id,
+            owner_user_id=sender_id or None,
+        )
         return {
             "context": (
                 "Trusted Erga MCP router result: the user supplied a job link, so "
@@ -1079,10 +1138,34 @@ def register(
         platform: str = "",
         **_: Any,
     ) -> str | None:
-        pdf_path = _pop_pending_attachment(session_id)
-        if pdf_path is None or platform.strip().casefold() in _NON_MESSAGING_PLATFORMS:
+        pending = _pop_pending_attachment(session_id)
+        if pending is None or platform.strip().casefold() in _NON_MESSAGING_PLATFORMS:
             return None
-        return f'{response_text.rstrip()}\n\n[[as_document]]\nMEDIA:"{pdf_path}"'
+        pdf_path, application_id, owner_user_id = pending
+        status_prompt = ""
+        button_directive = ""
+        if (
+            platform.strip().casefold() == "discord"
+            and application_id is not None
+            and owner_user_id is not None
+            and register_message_buttons is not None
+            and supports_discord_buttons
+        ):
+            button_token = register_message_buttons(
+                application_status_buttons(
+                    application_id,
+                    owner_user_id=owner_user_id,
+                )
+            )
+            status_prompt = (
+                "\n\n**Did you submit this application?**\n"
+                "Confirm it here so Tracker and Orbit use the real stage."
+            )
+            button_directive = f"\n[[discord_plugin_buttons:{button_token}]]"
+        return (
+            f'{response_text.rstrip()}{status_prompt}\n\n[[as_document]]\nMEDIA:"{pdf_path}"'
+            f"{button_directive}"
+        )
 
     def tailoring_plan_payload(result: object) -> dict[str, Any] | None:
         return next(
@@ -1147,6 +1230,33 @@ def register(
             payload=token,
             style=style,
         )
+
+    def application_status_buttons(
+        application_id: str,
+        *,
+        owner_user_id: str,
+    ) -> tuple[Any, Any]:
+        """Bind submission confirmation to the exact generated application record."""
+        assert DiscordButton is not None
+        buttons = []
+        for label, status, style in (
+            ("✅ Yes, applied", "applied", "success"),
+            ("❌ Still drafting", "draft", "secondary"),
+        ):
+            token = component_tokens.issue(
+                "application.status",
+                {"application_id": application_id, "status": status},
+                owner_user_id=owner_user_id,
+            )
+            buttons.append(
+                DiscordButton(
+                    label=label,
+                    action_id="erga.application.status",
+                    payload=token,
+                    style=style,
+                )
+            )
+        return buttons[0], buttons[1]
 
     def tailoring_plan_response(result: object, *, owner_user_id: str | None = None) -> object:
         error_text = _dispatch_error_text(result)
@@ -1508,7 +1618,28 @@ def register(
             return message
         return DiscordCommandResponse(text=_fit_discord_content(message), buttons=tuple(buttons))
 
-    def orbit_response(cycle: str) -> str:
+    def orbit_retention_buttons(retain_generated_images: bool) -> tuple[Any, ...]:
+        if not supports_discord_buttons:
+            return ()
+        assert DiscordButton is not None
+        return (
+            DiscordButton(
+                label="✅ Save future Orbits",
+                action_id="erga.orbit.retention",
+                payload="save",
+                style="success",
+                disabled=retain_generated_images,
+            ),
+            DiscordButton(
+                label="❌ Keep temporary",
+                action_id="erga.orbit.retention",
+                payload="temporary",
+                style="secondary",
+                disabled=not retain_generated_images,
+            ),
+        )
+
+    def orbit_response(cycle: str) -> object:
         normalized_cycle = "" if cycle.strip().casefold() in {"", "all", "*"} else cycle.strip()
         if len(normalized_cycle) > 80:
             return "Usage: /erga-orbit [recruiting cycle]"
@@ -1522,11 +1653,69 @@ def register(
         artifact = _validated_orbit_from_result(rendered)
         if artifact is None:
             return "Erga Orbit failed: the renderer returned no validated PNG."
-        message, image_path = artifact
-        return f'{message}\n\nMEDIA:"{image_path}"'
+        message, image_path, retain_generated_images = artifact
+        if not supports_discord_attachments:
+            return (
+                f"{message}\n\nThe Orbit PNG was rendered, but this Hermes version cannot "
+                "attach plugin-owned files. Update Hermes and run `/erga-orbit` again."
+            )
+        assert DiscordAttachment is not None
+        assert DiscordCommandResponse is not None
+        try:
+            staged_path = _stage_orbit_attachment(
+                image_path,
+                retain_original=retain_generated_images,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            return f"Erga Orbit failed while preparing the Discord attachment: {exc}"
+        return DiscordCommandResponse(
+            text=_fit_discord_content(message),
+            buttons=orbit_retention_buttons(retain_generated_images),
+            attachments=(
+                DiscordAttachment(
+                    path=staged_path,
+                    filename=Path(image_path).name,
+                    delete_after_send=True,
+                ),
+            ),
+        )
 
-    def orbit_command(raw_args: str) -> str:
+    def orbit_command(raw_args: str) -> object:
         return orbit_response(raw_args)
+
+    def orbit_retention_button(interaction: Any) -> object:
+        value = str(getattr(interaction, "payload", "")).strip().casefold()
+        if value not in {"save", "temporary"}:
+            return "Orbit preference failed: invalid choice. Run /erga-orbit again."
+        retain_generated_images = value == "save"
+        try:
+            result = ctx.dispatch_tool(
+                orbit_preferences_tool,
+                {"retain_generated_images": retain_generated_images},
+            )
+        except Exception as exc:
+            return f"Orbit preference failed: {exc}"
+        error_text = _dispatch_error_text(result)
+        if error_text:
+            return f"Orbit preference failed: {error_text}"
+        payload = next(
+            (
+                item
+                for item in _nested_objects(result)
+                if isinstance(item.get("retain_generated_images"), bool)
+                and isinstance(item.get("message"), str)
+            ),
+            None,
+        )
+        if payload is None:
+            return "Orbit preference failed: Erga returned no validated setting."
+        if not supports_discord_buttons:
+            return str(payload["message"])
+        assert DiscordCommandResponse is not None
+        return DiscordCommandResponse(
+            text=str(payload["message"]),
+            buttons=orbit_retention_buttons(bool(payload["retain_generated_images"])),
+        )
 
     def tracker_command(raw_args: str) -> object:
         arguments = raw_args.strip()
@@ -1639,6 +1828,8 @@ def register(
                 "project.catalogue.previous",
                 "tracker.show",
                 "orbit.show",
+                "orbit.retention.save",
+                "orbit.retention.temporary",
                 "research.refresh",
                 "research.brief",
                 "research.back",
@@ -1891,6 +2082,19 @@ def register(
         user_id = str(interaction.user_id)
         if action == "settings.show":
             return settings_status_response(owner_user_id=user_id)
+        if action in {"orbit.retention.save", "orbit.retention.temporary"}:
+            retain_generated_images = action == "orbit.retention.save"
+            try:
+                updated = ctx.dispatch_tool(
+                    orbit_preferences_tool,
+                    {"retain_generated_images": retain_generated_images},
+                )
+            except Exception as exc:
+                return f"Orbit preference failed: {exc}"
+            error_text = _dispatch_error_text(updated)
+            if error_text:
+                return f"Orbit preference failed: {error_text}"
+            return settings_status_response(owner_user_id=user_id)
         if action == "onboarding.status":
             return onboarding_status_response(owner_user_id=user_id)
         if action == "onboarding.skills.help":
@@ -2106,6 +2310,53 @@ def register(
             return "Erga résumé planning failed: invalid control state."
         user_id = str(interaction.user_id)
         if operation == "generate":
+            if supports_discord_attachments:
+                assert DiscordAttachment is not None
+                assert DiscordCommandResponse is not None
+                try:
+                    result = ctx.dispatch_tool(
+                        tailoring_plan_execute_tool,
+                        {"plan_id": plan_id},
+                    )
+                except Exception as exc:
+                    return DiscordCommandResponse(
+                        text=f"❌ Erga résumé generation failed: {exc}",
+                        buttons=(),
+                    )
+                error_text = _dispatch_error_text(result)
+                if error_text:
+                    return DiscordCommandResponse(
+                        text=f"❌ Erga résumé generation failed: {error_text}",
+                        buttons=(),
+                    )
+                message, pdf = _planned_resume_delivery(result)
+                application_id = _application_id_from_result(result)
+                if pdf is None:
+                    return DiscordCommandResponse(text=message, buttons=())
+                buttons = (
+                    application_status_buttons(
+                        application_id,
+                        owner_user_id=user_id,
+                    )
+                    if application_id is not None
+                    else ()
+                )
+                prompt = (
+                    "\n\n**Did you submit this application?**\n"
+                    "Confirm it here so Tracker and Orbit use the real stage."
+                    if buttons
+                    else ""
+                )
+                return DiscordCommandResponse(
+                    text=_fit_discord_content(f"{message}{prompt}"),
+                    buttons=buttons,
+                    attachments=(
+                        DiscordAttachment(
+                            path=pdf,
+                            filename=Path(pdf).name,
+                        ),
+                    ),
+                )
             channel_id = str(getattr(interaction, "channel_id", "") or "")
 
             def execute_and_deliver() -> None:
@@ -2154,6 +2405,55 @@ def register(
         except Exception as exc:
             return f"Erga résumé planning failed: {exc}"
         return tailoring_plan_response(result, owner_user_id=user_id)
+
+    def application_status_button(interaction: Any) -> object:
+        assert DiscordCommandResponse is not None
+        try:
+            action, payload = component_tokens.consume(
+                interaction.payload,
+                user_id=str(interaction.user_id),
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            return DiscordCommandResponse(text=str(exc), buttons=())
+        if action != "application.status":
+            return DiscordCommandResponse(
+                text="This application-status control is no longer supported.",
+                buttons=(),
+            )
+        application_id = payload.get("application_id")
+        status = payload.get("status")
+        if not isinstance(application_id, str) or status not in {"applied", "draft"}:
+            return DiscordCommandResponse(
+                text="Erga tracker update failed: invalid application state.",
+                buttons=(),
+            )
+        try:
+            updated = ctx.dispatch_tool(
+                application_status_tool,
+                {"application_id": application_id, "status": status},
+            )
+        except Exception as exc:
+            return DiscordCommandResponse(
+                text=f"Erga tracker update failed: {exc}",
+                buttons=(),
+            )
+        error_text = _dispatch_error_text(updated)
+        if error_text:
+            return DiscordCommandResponse(
+                text=f"Erga tracker update failed: {error_text}",
+                buttons=(),
+            )
+        if status == "applied":
+            text = (
+                "✅ **Tracker marked Applied**\n"
+                "This role now flows into No response until an OA, interview, or outcome arrives."
+            )
+        else:
+            text = (
+                "❌ **Kept as Draft**\n"
+                "The résumé is ready, but this role will not count as submitted in Orbit."
+            )
+        return DiscordCommandResponse(text=text, buttons=())
 
     def discovery_research_command(raw_args: str) -> str:
         query = raw_args.strip()
@@ -2369,8 +2669,13 @@ def register(
 
     if supports_discord_buttons:
         ctx.register_discord_button_handler("erga.tracker.page", tracker_page_button)
+        ctx.register_discord_button_handler("erga.orbit.retention", orbit_retention_button)
         ctx.register_discord_button_handler("erga.card.action", card_action_button)
         ctx.register_discord_button_handler("erga.plan.action", tailoring_plan_button)
+        ctx.register_discord_button_handler(
+            "erga.application.status",
+            application_status_button,
+        )
         for action in ("back", "skip", "save", "next"):
             ctx.register_discord_button_handler(
                 f"erga.review.{action}",

@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Protocol, cast
 
-from pydantic import Field, StrictInt
+from pydantic import Field, StrictBool, StrictInt
 
 from erga_mcp.applications.identity import job_identity
 from erga_mcp.applications.navigator import build_research_navigator, research_stage_for_status
@@ -29,6 +29,7 @@ from erga_mcp.portfolio.skills import build_git_skill_review_card
 from erga_mcp.store import ErgaStore
 from erga_mcp.tracking.onboarding import build_onboarding_card
 from erga_mcp.tracking.orbit import create_orbit_artifact
+from erga_mcp.tracking.orbit_preferences import update_orbit_preferences
 from erga_mcp.tracking.settings import build_settings_card
 from erga_mcp.tracking.tracker import (
     build_tracker_card,
@@ -214,7 +215,8 @@ def register_read_tools(
         cycle: Annotated[str, Field(max_length=80)] = "",
     ) -> dict[str, object]:
         """Render the aggregate Applied-to-outcome funnel without setup states or model calls."""
-        output_dir = config.data_dir / "orbit"
+        current_config = load_config(config_path)
+        output_dir = current_config.data_dir / "orbit"
         output_dir.mkdir(parents=True, exist_ok=True)
         restrict_private_directory(output_dir)
         artifact = create_orbit_artifact(
@@ -222,8 +224,8 @@ def register_read_tools(
             audit_events=store.audit_events(),
             output_dir=output_dir,
             tracker_dir=(
-                config.tracker.tracker_dir
-                if config.tracker.enabled and config.tracker.tracker_dir is not None
+                current_config.tracker.tracker_dir
+                if current_config.tracker.enabled and current_config.tracker.tracker_dir is not None
                 else None
             ),
             cycle=cycle,
@@ -235,6 +237,25 @@ def register_read_tools(
             "message": artifact.message,
             "snapshot": artifact.snapshot.as_dict(),
             "model_api_used": False,
+            "retain_generated_images": current_config.orbit.retain_generated_images,
+        }
+
+    @registry.tool("update_orbit_preferences", annotations=LOCAL_IDEMPOTENT_WRITE)
+    def update_orbit_preferences_tool(
+        retain_generated_images: StrictBool,
+    ) -> dict[str, object]:
+        """Choose whether uploaded Orbit PNGs remain in Erga's private local state."""
+        settings = update_orbit_preferences(
+            config_path,
+            retain_generated_images=retain_generated_images,
+        )
+        return {
+            "retain_generated_images": settings.retain_generated_images,
+            "message": (
+                "Orbit images will be saved locally after Discord upload."
+                if settings.retain_generated_images
+                else "Orbit images will be deleted locally after Discord upload."
+            ),
         }
 
     @registry.tool(

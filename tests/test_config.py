@@ -71,6 +71,19 @@ class ConfigTests(unittest.TestCase):
 
             self.assertFalse(load_config(config_path).keryx.enabled)
 
+    def test_orbit_images_are_temporary_by_default_and_require_a_boolean_preset(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            self.assertFalse(load_config(config_path).orbit.retain_generated_images)
+
+            config_path.write_text(
+                '[orbit]\nretain_generated_images = "yes"\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "retain_generated_images"):
+                load_config(config_path)
+
     def test_loads_client_neutral_career_tool_profile(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"

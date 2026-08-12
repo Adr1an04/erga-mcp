@@ -24,6 +24,7 @@ _EXPECTED_TOP_LEVEL_MODULES = {
     "__init__.py",
     "cli.py",
     "config.py",
+    "job_urls.py",
     "models.py",
     "store.py",
     "versioning.py",

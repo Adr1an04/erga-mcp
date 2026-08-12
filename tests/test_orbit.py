@@ -88,7 +88,29 @@ class OrbitTests(unittest.TestCase):
         self.assertEqual(links[("applied", "oa")], 1)
         self.assertEqual(links[("oa", "rejected-stage-2")], 1)
         self.assertEqual(links[("applied", "interview")], 1)
+        self.assertEqual(links[("applied", "awaiting-response")], 1)
         self.assertNotIn("draft", {node.id for node in snapshot.nodes})
+
+    def test_every_applied_role_flows_to_one_visible_current_branch(self) -> None:
+        applications = [
+            _application("pending-one", status="applied"),
+            _application("pending-two", status="applied"),
+            _application("assessment", status="oa"),
+            _application("rejected", status="rejected"),
+        ]
+
+        snapshot = build_orbit_snapshot(applications, [])
+        nodes = {node.id: node for node in snapshot.nodes}
+        outgoing_from_applied = sum(
+            link.count for link in snapshot.links if link.source == "applied"
+        )
+
+        self.assertEqual(snapshot.tracked_count, 4)
+        self.assertEqual(nodes["awaiting-response"].label, "No response")
+        self.assertEqual(nodes["awaiting-response"].count, 2)
+        self.assertEqual(nodes["oa"].count, 1)
+        self.assertEqual(nodes["rejected-stage-1"].count, 1)
+        self.assertEqual(outgoing_from_applied, snapshot.tracked_count)
 
     def test_tracker_only_rows_are_labeled_as_snapshot_only_not_fake_history(self) -> None:
         tracker = TrackerEntry(

@@ -5,25 +5,13 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 from erga_mcp.applications.research import JobResearch
+from erga_mcp.job_urls import job_identity
 from erga_mcp.resumes.artifacts import normalize_cycle
 
 _SAFE_PACKAGE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
-_TRACKING_QUERY_KEYS = frozenset(
-    {
-        "gh_src",
-        "fbclid",
-        "lever-source",
-        "ref",
-        "referrer",
-        "source",
-        "sourceid",
-        "trk",
-        "tracking",
-    }
-)
 
 
 def safe_slug(value: str) -> str:
@@ -38,26 +26,6 @@ def slug_with_identifier(label: str, identifier: str) -> str:
     label_limit = 80 - len(safe_identifier) - 1
     prefix = safe_label[:label_limit].rstrip("-") or "job"
     return f"{prefix}-{safe_identifier}"
-
-
-def job_identity(job_url: str) -> str:
-    """Return a stable listing identity while discarding common tracking parameters."""
-    parsed = urlsplit(job_url)
-    scheme = parsed.scheme.casefold()
-    hostname = (parsed.hostname or "").rstrip(".").casefold()
-    try:
-        port = parsed.port
-    except ValueError:
-        port = None
-    default_port = (scheme == "https" and port == 443) or (scheme == "http" and port == 80)
-    netloc = hostname if port is None or default_port else f"{hostname}:{port}"
-    query = [
-        (key, value)
-        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
-        if not key.casefold().startswith("utm_") and key.casefold() not in _TRACKING_QUERY_KEYS
-    ]
-    query.sort(key=lambda item: (item[0].casefold(), item[1]))
-    return urlunsplit((scheme, netloc, parsed.path or "/", urlencode(query, doseq=True), ""))
 
 
 def posting_identifier(job_url: str) -> str:

@@ -128,11 +128,12 @@ The server declares tool annotations so MCP clients can distinguish its capabili
 | `pipeline_status`, `list_applications`, `list_evidence`, `list_mail_events` | read-only | Reads local SQLite state only. |
 | `search_keryx_jobs` | read-only | Searches an explicitly enabled local cache of public Keryx listings; performs no network request and creates no application. |
 | `resume_source_context` | read-only | Reads approved master knowledge and derived non-factual style metadata from managed local snapshots. |
-| `update_application_status` | local-write | Sets one existing application's canonical status and records a local audit event; it has no remote side effect. |
+| `update_application_status` | local-write | Sets one existing application's canonical status, records a local audit event, and synchronizes an unambiguous configured Obsidian tracker row; it has no remote side effect. |
 | `intake_job_url` | network-read + local-write + local-exec + optional client sampling | Fetches one validated public job URL; creates or upgrades a local package; ranks approved projects; collects attributable Git evidence; optionally asks the already-connected MCP client's model for structured, evidence-cited project bullets; validates and compiles the proposal; and writes cited research, an application record, and a configured Obsidian tracker note. |
 | `record_secondary_research` | local-write | Stores bounded host-provided search results for an existing job package; results are labeled unverified and separated from official-posting facts. |
 | `prepare_job_workspace` | network-read + local-write | Fetches a job URL and creates configured local package/tracker artifacts. |
 | `application_orbit` | local idempotent write | Projects aggregate local application history into a private PNG. It uses no model, includes no employer names, and marks missing history instead of inventing transitions. |
+| `update_orbit_preferences` | local idempotent write | Changes only whether Discord-uploaded Orbit PNGs remain in private local state; temporary is the default. |
 | `create_tailored_resume` | local-write | Writes a reviewable proposal, diff, and claim report inside a configured package. |
 | `validate_tailored_resume` | local-exec | Runs the configured local LaTeX validator on an explicit proposal. |
 | `install_mail_monitor_scripts` | local-write | Writes deterministic, credential-free runner scripts for an explicitly configured Hermes profile. |

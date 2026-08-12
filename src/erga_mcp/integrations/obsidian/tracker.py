@@ -4,6 +4,7 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 
+from erga_mcp.job_urls import job_identity
 from erga_mcp.models import Application, MailEvent
 
 _TABLE_HEADER = (
@@ -29,6 +30,7 @@ _ACKNOWLEDGEMENT_COMPANY_PATTERN = re.compile(
     r"(?:(?:applying|application)\s+(?:to|at)|interest\s+in)\s+(.+?)(?:[!.,:]|$)",
     re.IGNORECASE,
 )
+_SOURCE_URL_PATTERN = re.compile(r"https?://[^)\s|]+", re.IGNORECASE)
 
 
 def _safe_name(value: str) -> str:
@@ -130,8 +132,16 @@ def reconcile_application_status_tracker_rows(
 ) -> int:
     """Reflect unambiguous canonical application statuses in existing tracker rows."""
     applications_by_company: dict[str, list[Application]] = {}
+    applications_by_company_role: dict[tuple[str, str], list[Application]] = {}
+    applications_by_identity: dict[str, list[Application]] = {}
     for application in applications:
-        applications_by_company.setdefault(application.company.casefold(), []).append(application)
+        company = application.company.casefold()
+        role = application.role.casefold()
+        applications_by_company.setdefault(company, []).append(application)
+        applications_by_company_role.setdefault((company, role), []).append(application)
+        identity = job_identity(application.source_url)
+        if identity:
+            applications_by_identity.setdefault(identity, []).append(application)
     updates = 0
     for tracker_path in sorted(tracker_dir.expanduser().resolve().glob("*.md")):
         text = tracker_path.read_text(encoding="utf-8")
@@ -144,7 +154,17 @@ def reconcile_application_status_tracker_rows(
             cells = _table_cells(lines[index])
             if len(cells) != len(_EXPECTED_TABLE_COLUMNS):
                 continue
-            matches = applications_by_company.get(cells[0].casefold(), [])
+            source_match = _SOURCE_URL_PATTERN.search(cells[3])
+            source_identity = job_identity(source_match.group(0)) if source_match else ""
+            if source_identity:
+                matches = applications_by_identity.get(source_identity, [])
+            else:
+                matches = applications_by_company_role.get(
+                    (cells[0].casefold(), cells[1].casefold()),
+                    [],
+                )
+                if len(matches) != 1:
+                    matches = applications_by_company.get(cells[0].casefold(), [])
             if len(matches) != 1:
                 continue
             status = _STATUS_LABELS.get(matches[0].status)

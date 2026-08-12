@@ -69,6 +69,10 @@ tracker_dir = ""
 # Explicit recruiting cycles eligible for acknowledgement-based tracker imports.
 active_cycles = []
 
+[orbit]
+# Discord previews are attached, then removed from the Erga host unless explicitly retained.
+retain_generated_images = false
+
 [keryx]
 # Optional public US internship/new-grad index. Enabling it never sends private Erga data.
 enabled = false
@@ -123,6 +127,11 @@ class TrackerSettings:
 
 
 @dataclass(frozen=True)
+class OrbitSettings:
+    retain_generated_images: bool
+
+
+@dataclass(frozen=True)
 class ContactOutputSettings:
     kind: str
     directory: Path
@@ -147,6 +156,7 @@ class ErgaConfig:
     resume: ResumeSettings
     cover_letter: CoverLetterSettings
     tracker: TrackerSettings
+    orbit: OrbitSettings
     contact_outputs: tuple[ContactOutputSettings, ...]
     mail_provider: str
     gws_command: str
@@ -268,6 +278,7 @@ def load_config(config_path: Path) -> ErgaConfig:
     mail = _section(document, "mail")
     cover_letter = _section(document, "cover_letter")
     tracking = _section(document, "tracking")
+    orbit = _section(document, "orbit")
     contacts = _section(document, "contacts")
     privacy = _section(document, "privacy")
     mcp = _section(document, "mcp")
@@ -296,6 +307,9 @@ def load_config(config_path: Path) -> ErgaConfig:
     tracker_value = str(tracking.get("tracker_dir", "")).strip()
     tracker_dir = _path(tracker_value, config_path.parent) if tracker_value else None
     tracker_enabled = bool(tracking.get("enabled", False))
+    retain_generated_images = orbit.get("retain_generated_images", False)
+    if not isinstance(retain_generated_images, bool):
+        raise ValueError("orbit retain_generated_images must be true or false")
     active_cycles_value = tracking.get("active_cycles", [])
     if not isinstance(active_cycles_value, list) or any(
         not isinstance(cycle, str)
@@ -365,6 +379,7 @@ def load_config(config_path: Path) -> ErgaConfig:
         tracker=TrackerSettings(
             enabled=tracker_enabled, tracker_dir=tracker_dir, active_cycles=active_cycles
         ),
+        orbit=OrbitSettings(retain_generated_images=retain_generated_images),
         contact_outputs=tuple(contact_outputs),
         mail_provider=mail_provider,
         gws_command=str(mail.get("gws_command", "gws")).strip() or "gws",

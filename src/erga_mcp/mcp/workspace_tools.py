@@ -14,6 +14,7 @@ from erga_mcp.integrations.mail.provider import build_mail_provider
 from erga_mcp.integrations.mail.zoho_live import sync_metadata
 from erga_mcp.integrations.obsidian.tracker import (
     import_confirmed_application_tracker_rows,
+    reconcile_application_status_tracker_rows,
     reconcile_confirmed_application_tracker_rows,
 )
 from erga_mcp.mcp.profiles import (
@@ -69,10 +70,16 @@ def register_workspace_tools(
     )
     def update_application_status(application_id: str, status: str) -> dict[str, object]:
         """Set an existing application's canonical local workflow status."""
-        return cast(
-            dict[str, object],
-            json_value(asdict(store.update_application_status(application_id, status=status))),
-        )
+        application = store.update_application_status(application_id, status=status)
+        tracker_updates = 0
+        if config.tracker.enabled and config.tracker.tracker_dir is not None:
+            tracker_updates = reconcile_application_status_tracker_rows(
+                tracker_dir=config.tracker.tracker_dir,
+                applications=store.list_applications(),
+            )
+        payload = cast(dict[str, object], json_value(asdict(application)))
+        payload["tracker_updates"] = tracker_updates
+        return payload
 
     @registry.tool(
         "refresh_project_catalogue",
@@ -466,7 +473,11 @@ def register_workspace_tools(
         tracker_updates = 0
         tracker_imports = 0
         if config.tracker.enabled and config.tracker.tracker_dir is not None:
-            tracker_updates = reconcile_confirmed_application_tracker_rows(
+            tracker_updates = reconcile_application_status_tracker_rows(
+                tracker_dir=config.tracker.tracker_dir,
+                applications=store.list_applications(),
+            )
+            tracker_updates += reconcile_confirmed_application_tracker_rows(
                 tracker_dir=config.tracker.tracker_dir,
                 events=store.list_mail_events(),
             )

@@ -99,8 +99,17 @@ flow; an Obsidian-only later stage connects directly from Applied without invent
 rounds. The image contains aggregate counts, not employer names. It is also available
 locally with `erga tracker orbit` and through the `application_orbit` MCP tool. A Hermes-managed
 Discord connection can use `/erga-orbit [cycle]` or the **Orbit** control in `/erga-tracker` for an
-on-demand snapshot; editing an existing message continuously requires the native bridge because
-Hermes' current command response API does not expose message edits.
+on-demand snapshot. Hermes attaches the PNG natively and never prints its local path. Preview files
+are deleted from the Erga host after Discord confirms upload by default; the ✅/❌ controls on the
+preview and the **Orbit images** action in `/erga-settings` change that preset for future renders.
+
+After `/intake-job` or a pasted job link generates and attaches a validated résumé, the same Discord
+message asks whether the application was actually submitted. ✅ **Yes, applied** moves that exact
+application record to Applied; ❌ **Still drafting** keeps it out of the submitted funnel. Either
+choice also synchronizes an unambiguous configured Obsidian tracker row. Later high-confidence
+recruiting mail can advance the canonical record and is mirrored back into the tracker, while
+ambiguous mail stays unchanged for review. These controls update private tracking state only and
+never submit an application.
 
 ## Live request experience and color system
 

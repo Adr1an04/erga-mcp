@@ -1619,6 +1619,7 @@ Bottom of the approved master template.
                     "update_application_status",
                     "application_tracker",
                     "application_orbit",
+                    "update_orbit_preferences",
                     "research_navigator",
                     "onboarding_status",
                     "git_skill_review_card",

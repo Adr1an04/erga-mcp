@@ -57,6 +57,7 @@ NETWORK_WRITE_TOOL_NAMES = frozenset(
 LOCAL_WRITE_TOOL_NAMES = frozenset(
     {
         "application_orbit",
+        "update_orbit_preferences",
         "record_token_usage",
         "update_application_status",
         "export_data",
@@ -79,6 +80,7 @@ LOCAL_WRITE_TOOL_NAMES = frozenset(
 HERMES_TOOL_NAMES = frozenset(
     {
         "application_orbit",
+        "update_orbit_preferences",
         "sync_recruiting_mail",
         "install_mail_monitor_scripts",
         "discover_job_research",
@@ -100,6 +102,7 @@ CAREER_TOOL_NAMES = frozenset(
         "list_applications",
         "application_tracker",
         "application_orbit",
+        "update_orbit_preferences",
         "research_navigator",
         "onboarding_status",
         "git_skill_review_card",
