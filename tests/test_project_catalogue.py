@@ -47,10 +47,11 @@ class ProjectCatalogueTests(unittest.TestCase):
             inventory_path = root / "projects.json"
             config_path.write_text(
                 DEFAULT_CONFIG.replace(
-                    "portfolio_roots = []", f'portfolio_roots = ["{projects}"]'
+                    "portfolio_roots = []",
+                    f"portfolio_roots = [{json.dumps(str(projects))}]",
                 ).replace(
                     'project_inventory_path = ""',
-                    f'project_inventory_path = "{inventory_path}"',
+                    f"project_inventory_path = {json.dumps(str(inventory_path))}",
                 ),
                 encoding="utf-8",
             )
