@@ -23,6 +23,7 @@ _DEFAULT_TOOL_NAME = "mcp__erga_mcp__intake_job_url"
 _DEFAULT_MONITOR_TOOL_NAME = "mcp__erga_mcp__install_mail_monitor_scripts"
 _DEFAULT_EXPORT_TOOL_NAME = "mcp__erga_mcp__export_data"
 _DEFAULT_TRACKER_TOOL_NAME = "mcp__erga_mcp__application_tracker"
+_DEFAULT_ORBIT_TOOL_NAME = "mcp__erga_mcp__application_orbit"
 _DEFAULT_RESEARCH_NAVIGATOR_TOOL_NAME = "mcp__erga_mcp__research_navigator"
 _DEFAULT_DISCOVERY_RESEARCH_TOOL_NAME = "mcp__erga_mcp__discover_job_research"
 _DEFAULT_RESEARCH_BRIEF_TOOL_NAME = "mcp__erga_mcp__create_research_brief"
@@ -594,6 +595,40 @@ def _validated_export_from_result(result: object) -> str | None:
     return str(archive)
 
 
+def _validated_orbit_from_result(result: object) -> tuple[str, str] | None:
+    """Return only Erga's generated PNG and its aggregate, non-secret caption."""
+    payload = next(
+        (
+            item
+            for item in _nested_objects(result)
+            if isinstance(item.get("image_path"), str)
+            and item.get("mime_type") == "image/png"
+            and isinstance(item.get("message"), str)
+            and item.get("model_api_used") is False
+        ),
+        None,
+    )
+    if payload is None:
+        return None
+    try:
+        candidate = Path(payload["image_path"]).expanduser()
+        if candidate.is_symlink():
+            return None
+        image_path = candidate.resolve(strict=True)
+        signature = image_path.read_bytes()[:8]
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
+    if (
+        not image_path.is_file()
+        or image_path.parent.name != "orbit"
+        or not image_path.name.startswith("erga-orbit-")
+        or image_path.suffix.casefold() != ".png"
+        or signature != b"\x89PNG\r\n\x1a\n"
+    ):
+        return None
+    return str(payload["message"]), str(image_path)
+
+
 def _intake_payload(result: object) -> dict[str, Any] | None:
     return next(
         (
@@ -845,6 +880,7 @@ def register(
     monitor_tool = os.getenv("ERGA_MCP_MONITOR_TOOL", _DEFAULT_MONITOR_TOOL_NAME).strip()
     export_tool = os.getenv("ERGA_MCP_EXPORT_TOOL", _DEFAULT_EXPORT_TOOL_NAME).strip()
     tracker_tool = os.getenv("ERGA_MCP_TRACKER_TOOL", _DEFAULT_TRACKER_TOOL_NAME).strip()
+    orbit_tool = os.getenv("ERGA_MCP_ORBIT_TOOL", _DEFAULT_ORBIT_TOOL_NAME).strip()
     research_navigator_tool = os.getenv(
         "ERGA_MCP_RESEARCH_NAVIGATOR_TOOL", _DEFAULT_RESEARCH_NAVIGATOR_TOOL_NAME
     ).strip()
@@ -1454,9 +1490,43 @@ def register(
                 )
                 if len(buttons) == 25:
                     break
+        if len(buttons) < 25:
+            token = component_tokens.issue(
+                "orbit.show",
+                {"cycle": ""},
+                owner_user_id=owner_user_id,
+            )
+            buttons.append(
+                DiscordButton(
+                    label="Orbit",
+                    action_id="erga.card.action",
+                    payload=token,
+                    style="primary",
+                )
+            )
         if not buttons:
             return message
         return DiscordCommandResponse(text=_fit_discord_content(message), buttons=tuple(buttons))
+
+    def orbit_response(cycle: str) -> str:
+        normalized_cycle = "" if cycle.strip().casefold() in {"", "all", "*"} else cycle.strip()
+        if len(normalized_cycle) > 80:
+            return "Usage: /erga-orbit [recruiting cycle]"
+        try:
+            rendered = ctx.dispatch_tool(orbit_tool, {"cycle": normalized_cycle})
+        except Exception as exc:
+            return f"Erga Orbit failed: {exc}"
+        error_text = _dispatch_error_text(rendered)
+        if error_text:
+            return f"Erga Orbit failed: {error_text}"
+        artifact = _validated_orbit_from_result(rendered)
+        if artifact is None:
+            return "Erga Orbit failed: the renderer returned no validated PNG."
+        message, image_path = artifact
+        return f'{message}\n\nMEDIA:"{image_path}"'
+
+    def orbit_command(raw_args: str) -> str:
+        return orbit_response(raw_args)
 
     def tracker_command(raw_args: str) -> object:
         arguments = raw_args.strip()
@@ -1568,6 +1638,7 @@ def register(
                 "project.catalogue.next",
                 "project.catalogue.previous",
                 "tracker.show",
+                "orbit.show",
                 "research.refresh",
                 "research.brief",
                 "research.back",
@@ -1875,6 +1946,8 @@ def register(
             return settings_status_response(owner_user_id=user_id)
         if action == "tracker.show":
             return tracker_response("", 1, owner_user_id=user_id)
+        if action == "orbit.show":
+            return orbit_response(str(payload.get("cycle", "")))
         if action == "research.open":
             job_url = payload.get("job_url")
             if not isinstance(job_url, str) or not job_url:
@@ -2344,6 +2417,12 @@ def register(
             "Browse or search every local application tracker cycle with Discord pagination."
         ),
         args_hint="[all|company|role|status|cycle] [page N]",
+    )
+    ctx.register_command(
+        "erga-orbit",
+        handler=orbit_command,
+        description="Render Erga's aggregate application-flow dashboard for Discord.",
+        args_hint="[recruiting cycle]",
     )
     ctx.register_command(
         "erga-onboard",

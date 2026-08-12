@@ -11,6 +11,37 @@ from erga_mcp.tracking.contacts import record_recruiter_contact_from_mail
 
 
 class StoreTests(unittest.TestCase):
+    def test_persists_one_live_orbit_dashboard_per_discord_channel(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = ErgaStore(Path(directory) / "erga.sqlite3")
+
+            created = store.upsert_orbit_dashboard(
+                channel_id="channel-1",
+                message_id="message-1",
+                owner_user_id="user-1",
+                cycle="Summer 2027",
+                content_hash="first",
+            )
+            replaced = store.upsert_orbit_dashboard(
+                channel_id="channel-1",
+                message_id="message-2",
+                owner_user_id="user-1",
+                cycle="Fall 2027",
+                content_hash="second",
+            )
+
+            self.assertEqual(replaced.id, created.id)
+            self.assertEqual(replaced.message_id, "message-2")
+            self.assertEqual(replaced.cycle, "Fall 2027")
+            self.assertEqual(store.list_orbit_dashboards(), [replaced])
+
+            refreshed = store.update_orbit_dashboard_hash(replaced.id, "third")
+            self.assertEqual(refreshed.content_hash, "third")
+            disabled = store.disable_orbit_dashboard(replaced.id)
+            self.assertFalse(disabled.active)
+            self.assertEqual(store.list_orbit_dashboards(), [])
+            self.assertEqual(store.list_orbit_dashboards(active_only=False), [disabled])
+
     def test_skill_seeds_are_normalized_review_state_not_resume_evidence(self) -> None:
         with TemporaryDirectory() as directory:
             store = ErgaStore(Path(directory) / "erga.sqlite3")
@@ -99,6 +130,12 @@ class StoreTests(unittest.TestCase):
             status_audit = store.audit_events()[0]
             self.assertEqual(status_audit.action, "application.status_updated")
             self.assertEqual(status_audit.payload, {"from": "draft", "to": "interview"})
+
+            final_round = store.update_application_status(application.id, status="final-interview")
+            self.assertEqual(final_round.status, "final-interview")
+
+            accepted = store.update_application_status(application.id, status="accepted")
+            self.assertEqual(accepted.status, "accepted")
 
             with self.assertRaisesRegex(ValueError, "status must be one of"):
                 store.update_application_status(application.id, status="submitted magically")

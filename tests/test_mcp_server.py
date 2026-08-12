@@ -1618,6 +1618,7 @@ Bottom of the approved master template.
                     "list_applications",
                     "update_application_status",
                     "application_tracker",
+                    "application_orbit",
                     "research_navigator",
                     "onboarding_status",
                     "git_skill_review_card",
@@ -1677,9 +1678,15 @@ Bottom of the approved master template.
                 self.assertTrue(annotations.read_only_hint)
                 self.assertFalse(annotations.open_world_hint)
             workspace_annotations = by_name["prepare_job_workspace"].annotations
+            orbit_annotations = by_name["application_orbit"].annotations
             status_annotations = by_name["update_application_status"].annotations
+            self.assertIsNotNone(orbit_annotations)
             self.assertIsNotNone(status_annotations)
+            assert orbit_annotations is not None
             assert status_annotations is not None
+            self.assertFalse(orbit_annotations.read_only_hint)
+            self.assertTrue(orbit_annotations.idempotent_hint)
+            self.assertFalse(orbit_annotations.open_world_hint)
             self.assertFalse(status_annotations.read_only_hint)
             self.assertTrue(status_annotations.idempotent_hint)
             self.assertFalse(status_annotations.open_world_hint)

@@ -60,8 +60,9 @@ def register_workspace_tools(
         title="Update one local application status",
         description=(
             "Set the status of one existing application in Erga's private local database. "
-            "Allowed statuses are draft, applied, oa, assessment, interview, offer, rejected, "
-            "and withdrawn. This records a local audit event when the value changes; it never "
+            "Allowed statuses are draft, applied, oa, assessment, interview, interview-2, "
+            "interview-3, final-interview, offer, accepted, rejected, and withdrawn. This "
+            "records a local audit event when the value changes; it never "
             "contacts an employer, submits an application, or mutates a remote service."
         ),
         annotations=LOCAL_IDEMPOTENT_WRITE,

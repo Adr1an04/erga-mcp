@@ -29,8 +29,18 @@ from erga_mcp.integrations.discord.backends import (
     DiscordBackendName,
     discord_backend,
 )
+from erga_mcp.integrations.discord.orbit import (
+    publish_orbit_dashboard,
+    refresh_orbit_dashboards,
+    stop_orbit_dashboard,
+)
 from erga_mcp.integrations.discord.settings import settings_path
 from erga_mcp.operations.private_files import restrict_private_directory, restrict_private_file
+from erga_mcp.tracking.orbit import (
+    is_orbit_request,
+    is_orbit_stop_request,
+    orbit_cycle_from_request,
+)
 
 _TOKEN_SERVICE = "erga-mcp.discord"
 _PID_NAME = "discord-bridge-process.json"
@@ -42,6 +52,7 @@ _MAX_INCOMING_MESSAGE = 16_000
 _STARTUP_TIMEOUT_SECONDS = 20.0
 _STARTUP_POLL_SECONDS = 0.1
 _PROGRESS_REFRESH_SECONDS = 12.0
+_ORBIT_REFRESH_SECONDS = 60.0
 _ALLOWED_ARGUMENT_FIELDS = ("{prompt}", "{project_dir}", "{output_path}")
 _RESUME_PREVIEW_ATTACHMENT_NAME = "erga-resume-preview.png"
 _MAX_RESUME_PREVIEW_BYTES = 8 * 1024 * 1024
@@ -789,6 +800,7 @@ def _create_discord_client(
     *,
     ready_path: Path | None = None,
     attachment_roots: tuple[Path, ...] = (),
+    config_path: Path | None = None,
 ) -> Any:
     discord = _discord_module()
     intents = discord.Intents.default()
@@ -798,6 +810,24 @@ def _create_discord_client(
         def __init__(self) -> None:
             super().__init__(intents=intents)
             self._backend_lock = asyncio.Lock()
+            self._orbit_refresh_task: asyncio.Task[None] | None = None
+
+        async def _refresh_orbit_loop(self) -> None:
+            assert config_path is not None
+            while not self.is_closed():
+                try:
+                    await refresh_orbit_dashboards(
+                        discord=discord,
+                        client=self,
+                        config_path=config_path,
+                    )
+                except Exception as error:
+                    print(
+                        f"Discord Orbit refresh failed: {error}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                await asyncio.sleep(_ORBIT_REFRESH_SECONDS)
 
         async def on_ready(self) -> None:
             if ready_path is not None:
@@ -809,6 +839,10 @@ def _create_discord_client(
                     )
                     + "\n",
                 )
+            if config_path is not None and (
+                self._orbit_refresh_task is None or self._orbit_refresh_task.done()
+            ):
+                self._orbit_refresh_task = asyncio.create_task(self._refresh_orbit_loop())
             print(f"Erga Discord connected as {self.user}", flush=True)
 
         async def on_disconnect(self) -> None:
@@ -836,6 +870,38 @@ def _create_discord_client(
             if self.user is not None:
                 content = content.replace(f"<@{self.user.id}>", "").strip()
             if not content:
+                return
+            if config_path is not None and is_orbit_stop_request(content):
+                stopped = stop_orbit_dashboard(
+                    config_path=config_path,
+                    channel_id=message.channel.id,
+                )
+                detail = (
+                    "Live Orbit updates are stopped for this channel."
+                    if stopped
+                    else "This channel has no active Orbit dashboard."
+                )
+                await message.reply(detail, mention_author=False)
+                return
+            if config_path is not None and is_orbit_request(content):
+                try:
+                    await publish_orbit_dashboard(
+                        discord=discord,
+                        source_message=message,
+                        config_path=config_path,
+                        cycle=orbit_cycle_from_request(content),
+                    )
+                except Exception as error:
+                    print(
+                        f"Discord Orbit publish failed: {error}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    await message.reply(
+                        "Erga could not render Orbit from the local tracker. "
+                        "Run `erga tracker orbit` on the Erga computer for a diagnostic.",
+                        mention_author=False,
+                    )
                 return
             started = time.monotonic()
             completed = asyncio.Event()
@@ -933,6 +999,7 @@ def run_discord_bridge(config_path: Path) -> int:
         settings,
         ready_path=ready_path,
         attachment_roots=(config.data_dir, config.resume.output_root),
+        config_path=config_path,
     )
     client.run(read_discord_token(config_path), log_handler=None)
     return 0

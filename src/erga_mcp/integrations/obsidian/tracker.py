@@ -115,7 +115,11 @@ _STATUS_LABELS = {
     "oa": ("OA", "Complete assessment and review its deadline."),
     "assessment": ("OA", "Complete assessment and review its deadline."),
     "interview": ("Interview", "Prepare for interview and confirm details."),
+    "interview-2": ("Interview 2", "Prepare for the second interview and confirm details."),
+    "interview-3": ("Interview 3", "Prepare for the third interview and confirm details."),
+    "final-interview": ("Final Interview", "Prepare for the final interview."),
     "offer": ("Offer", "Review offer terms and deadline."),
+    "accepted": ("Accepted", "Complete authorized onboarding steps."),
     "rejected": ("Rejected", "No action - application closed."),
     "withdrawn": ("Withdrawn", "No action - application withdrawn."),
 }

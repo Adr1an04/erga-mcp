@@ -62,7 +62,7 @@ from erga_mcp.integrations.obsidian.tracker import reconcile_application_status_
 from erga_mcp.models import Application
 from erga_mcp.operations.doctor import check_installation
 from erga_mcp.operations.exporting import export_bundle
-from erga_mcp.operations.private_files import restrict_private_file
+from erga_mcp.operations.private_files import restrict_private_directory, restrict_private_file
 from erga_mcp.operations.setup_wizard import (
     WizardCancelled,
     apply_core_setup,
@@ -115,6 +115,7 @@ from erga_mcp.resumes.template import ensure_resume_template, reset_resume_templ
 from erga_mcp.store import ErgaStore
 from erga_mcp.tracking.contact_projection import project_recruiter_contacts
 from erga_mcp.tracking.onboarding import build_onboarding_card
+from erga_mcp.tracking.orbit import create_orbit_artifact, render_orbit_png
 from erga_mcp.tracking.reporting import render_history_digest
 from erga_mcp.tracking.settings import build_settings_card
 
@@ -219,6 +220,14 @@ def _parser() -> argparse.ArgumentParser:
 
     status = subcommands.add_parser("status", help="show local pipeline counts")
     _config_argument(status)
+    tracker = subcommands.add_parser("tracker", help="inspect local application tracking")
+    tracker_commands = tracker.add_subparsers(dest="tracker_command", required=True)
+    tracker_orbit = tracker_commands.add_parser(
+        "orbit", help="render the aggregate Erga Orbit application-flow image"
+    )
+    _config_argument(tracker_orbit)
+    tracker_orbit.add_argument("--cycle", default="")
+    tracker_orbit.add_argument("--output", type=Path)
     doctor = subcommands.add_parser("doctor", help="check core and optional local capabilities")
     _config_argument(doctor)
 
@@ -1005,6 +1014,35 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 "audit_events": len(store.audit_events()),
                 "evidence": len(store.list_evidence()),
                 "mail_events": len(store.list_mail_events()),
+            }
+        )
+        return 0
+    if args.command == "tracker" and args.tracker_command == "orbit":
+        config = load_config(args.config)
+        output_dir = config.data_dir / "orbit"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        restrict_private_directory(output_dir)
+        artifact = create_orbit_artifact(
+            applications=store.list_applications(),
+            audit_events=store.audit_events(),
+            output_dir=output_dir,
+            tracker_dir=(
+                config.tracker.tracker_dir
+                if config.tracker.enabled and config.tracker.tracker_dir is not None
+                else None
+            ),
+            cycle=args.cycle,
+        )
+        image_path = artifact.image_path
+        if args.output is not None:
+            image_path = render_orbit_png(artifact.snapshot, args.output)
+        restrict_private_file(image_path)
+        _print_json(
+            {
+                "image_path": str(image_path),
+                "message": artifact.message,
+                "model_api_used": False,
+                "snapshot": artifact.snapshot.as_dict(),
             }
         )
         return 0

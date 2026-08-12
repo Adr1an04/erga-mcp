@@ -37,6 +37,14 @@ preparation guidance. Community and secondary sources are always labeled unverif
 sources** explicitly reruns bounded public research; **Create OA/interview/offer brief** writes the
 concise local stage checklist. Neither action submits an application or contacts anyone.
 
+`/erga-orbit [recruiting cycle]` renders the same deterministic aggregate application funnel used
+by Erga's local core and attaches it as an inline PNG. `/erga-tracker` also includes an **Orbit**
+control. The snapshot uses no model tokens, includes no employer names, begins at **Applied**, and
+shows only OA, recorded interview rounds, offer, and recruiting outcomes. Pre-application setup
+states are excluded, and tracker-only later stages do not receive invented intermediate rounds. The
+native Erga Discord bridge can refresh one message in place; Hermes provides the on-demand
+snapshot because its plugin response API does not currently expose message edits.
+
 At gateway startup, MCP discovery can finish just after the first user message. The router retries
 only Hermes' exact `Unknown tool` and `MCP server ... is not connected` readiness errors for up to
 30 seconds. Set `ERGA_MCP_READY_TIMEOUT_SECONDS` to a value from 0 through 30 to

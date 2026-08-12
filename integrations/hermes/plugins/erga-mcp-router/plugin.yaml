@@ -1,7 +1,7 @@
 manifest_version: 1
 name: erga-mcp-router
-version: "0.15.4"
-description: Route job links and render Discord résumé planning, guided onboarding, project catalogue, unified Git review, stage-aware research, tracker, settings, mail, alert, and export workflows.
+version: "0.16.0"
+description: Route job links and render Discord résumé planning, guided onboarding, project catalogue, unified Git review, stage-aware research, live application-flow visuals, tracker, settings, mail, alert, and export workflows.
 author: Erga MCP contributors
 hermes_requires: ">=0.18.2"
 provides_hooks:

@@ -17,6 +17,7 @@ from erga_mcp.models import (
     GitResearchBullet,
     GitResearchDraft,
     MailEvent,
+    OrbitDashboardBinding,
     RecruiterContact,
     SkillSeedRecord,
     TokenUsage,
@@ -36,7 +37,11 @@ APPLICATION_STATUSES = frozenset(
         "oa",
         "assessment",  # Backward-compatible alias for existing local records.
         "interview",
+        "interview-2",
+        "interview-3",
+        "final-interview",
         "offer",
+        "accepted",
         "rejected",
         "withdrawn",
     }
@@ -167,6 +172,17 @@ CREATE TABLE IF NOT EXISTS audit_events (
     subject_id TEXT NOT NULL,
     payload_json TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS orbit_dashboards (
+    id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL UNIQUE,
+    message_id TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL,
+    cycle TEXT NOT NULL DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    content_hash TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 """
 
@@ -1088,6 +1104,156 @@ class ErgaStore:
             )
             for row in rows
         ]
+
+    def upsert_orbit_dashboard(
+        self,
+        *,
+        channel_id: str,
+        message_id: str,
+        owner_user_id: str,
+        cycle: str = "",
+        content_hash: str = "",
+    ) -> OrbitDashboardBinding:
+        """Bind one explicitly created live Orbit message to a Discord channel."""
+        normalized_channel = channel_id.strip()
+        normalized_message = message_id.strip()
+        normalized_owner = owner_user_id.strip()
+        normalized_cycle = " ".join(cycle.split())
+        if not normalized_channel or not normalized_message or not normalized_owner:
+            raise ValueError("Orbit channel, message, and owner IDs must not be empty")
+        self.initialize()
+        observed_at = _now()
+        with closing(self._connection()) as connection:
+            row = connection.execute(
+                "SELECT * FROM orbit_dashboards WHERE channel_id = ?", (normalized_channel,)
+            ).fetchone()
+            if row is None:
+                binding = OrbitDashboardBinding(
+                    id=f"orbit_{uuid4().hex}",
+                    channel_id=normalized_channel,
+                    message_id=normalized_message,
+                    owner_user_id=normalized_owner,
+                    cycle=normalized_cycle,
+                    active=True,
+                    content_hash=content_hash,
+                    created_at=observed_at,
+                    updated_at=observed_at,
+                )
+                connection.execute(
+                    "INSERT INTO orbit_dashboards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        binding.id,
+                        binding.channel_id,
+                        binding.message_id,
+                        binding.owner_user_id,
+                        binding.cycle,
+                        int(binding.active),
+                        binding.content_hash,
+                        _as_text(binding.created_at),
+                        _as_text(binding.updated_at),
+                    ),
+                )
+                action = "orbit_dashboard.created"
+            else:
+                binding = OrbitDashboardBinding(
+                    id=str(row["id"]),
+                    channel_id=normalized_channel,
+                    message_id=normalized_message,
+                    owner_user_id=normalized_owner,
+                    cycle=normalized_cycle,
+                    active=True,
+                    content_hash=content_hash,
+                    created_at=_as_datetime(str(row["created_at"])),
+                    updated_at=observed_at,
+                )
+                connection.execute(
+                    """
+                    UPDATE orbit_dashboards
+                    SET message_id = ?, owner_user_id = ?, cycle = ?, active = 1,
+                        content_hash = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        binding.message_id,
+                        binding.owner_user_id,
+                        binding.cycle,
+                        binding.content_hash,
+                        _as_text(binding.updated_at),
+                        binding.id,
+                    ),
+                )
+                action = "orbit_dashboard.rebound"
+            self._record_audit(
+                connection,
+                action,
+                binding.id,
+                {"cycle": binding.cycle, "active": True},
+            )
+            connection.commit()
+        return binding
+
+    def list_orbit_dashboards(self, *, active_only: bool = True) -> list[OrbitDashboardBinding]:
+        self.initialize()
+        query = "SELECT * FROM orbit_dashboards"
+        if active_only:
+            query += " WHERE active = 1"
+        query += " ORDER BY created_at"
+        with closing(self._connection()) as connection:
+            rows = connection.execute(query).fetchall()
+        return [
+            OrbitDashboardBinding(
+                id=str(row["id"]),
+                channel_id=str(row["channel_id"]),
+                message_id=str(row["message_id"]),
+                owner_user_id=str(row["owner_user_id"]),
+                cycle=str(row["cycle"]),
+                active=bool(row["active"]),
+                content_hash=str(row["content_hash"]),
+                created_at=_as_datetime(str(row["created_at"])),
+                updated_at=_as_datetime(str(row["updated_at"])),
+            )
+            for row in rows
+        ]
+
+    def update_orbit_dashboard_hash(
+        self, dashboard_id: str, content_hash: str
+    ) -> OrbitDashboardBinding:
+        self.initialize()
+        observed_at = _now()
+        with closing(self._connection()) as connection:
+            updated = connection.execute(
+                "UPDATE orbit_dashboards SET content_hash = ?, updated_at = ? WHERE id = ?",
+                (content_hash, _as_text(observed_at), dashboard_id),
+            ).rowcount
+            connection.commit()
+        if not updated:
+            raise ValueError("Orbit dashboard does not exist")
+        return next(
+            item
+            for item in self.list_orbit_dashboards(active_only=False)
+            if item.id == dashboard_id
+        )
+
+    def disable_orbit_dashboard(self, dashboard_id: str) -> OrbitDashboardBinding:
+        self.initialize()
+        observed_at = _now()
+        with closing(self._connection()) as connection:
+            updated = connection.execute(
+                "UPDATE orbit_dashboards SET active = 0, updated_at = ? WHERE id = ?",
+                (_as_text(observed_at), dashboard_id),
+            ).rowcount
+            if updated:
+                self._record_audit(
+                    connection, "orbit_dashboard.disabled", dashboard_id, {"active": False}
+                )
+            connection.commit()
+        if not updated:
+            raise ValueError("Orbit dashboard does not exist")
+        return next(
+            item
+            for item in self.list_orbit_dashboards(active_only=False)
+            if item.id == dashboard_id
+        )
 
     def record_token_usage(
         self,

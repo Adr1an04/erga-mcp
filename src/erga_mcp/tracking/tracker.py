@@ -30,7 +30,11 @@ _STATUS_ICONS = {
     "online assessment": "🧪",
     "assessment": "🧪",
     "interview": "🗣️",
+    "interview-2": "🗣️",
+    "interview-3": "🗣️",
+    "final-interview": "🗣️",
     "offer": "🎉",
+    "accepted": "✅",
     "rejected": "⛔",
     "withdrawn": "↩️",
     "researching": "🟡",
@@ -38,16 +42,20 @@ _STATUS_ICONS = {
 }
 _DISPLAY_PRIORITY = {
     "offer": 0,
-    "interview": 1,
-    "oa": 2,
-    "online assessment": 2,
-    "assessment": 2,
-    "applied": 3,
-    "ready to apply": 4,
-    "draft": 5,
-    "researching": 6,
-    "rejected": 7,
-    "withdrawn": 8,
+    "accepted": 0,
+    "final-interview": 1,
+    "interview-3": 2,
+    "interview-2": 3,
+    "interview": 4,
+    "oa": 5,
+    "online assessment": 5,
+    "assessment": 5,
+    "applied": 6,
+    "ready to apply": 7,
+    "draft": 8,
+    "researching": 9,
+    "rejected": 10,
+    "withdrawn": 11,
 }
 _SEASON_ORDER = {"winter": 0, "spring": 1, "summer": 2, "fall": 3}
 _STATUS_PROGRESS = {
@@ -59,9 +67,13 @@ _STATUS_PROGRESS = {
     "online assessment": 4,
     "assessment": 4,
     "interview": 5,
-    "offer": 6,
-    "rejected": 7,
-    "withdrawn": 7,
+    "interview-2": 6,
+    "interview-3": 7,
+    "final-interview": 8,
+    "offer": 9,
+    "accepted": 10,
+    "rejected": 10,
+    "withdrawn": 10,
 }
 
 
@@ -135,9 +147,19 @@ def _source_url(source: str) -> str:
 
 
 def _canonical_status(status: str) -> str:
-    normalized = " ".join(status.casefold().split())
+    normalized = " ".join(status.casefold().replace("_", " ").replace("-", " ").split())
     if normalized in {"oa", "online assessment", "assessment"}:
         return "assessment"
+    aliases = {
+        "final interview": "final-interview",
+        "final round": "final-interview",
+        "second interview": "interview-2",
+        "third interview": "interview-3",
+    }
+    normalized = aliases.get(normalized, normalized)
+    interview_round = re.fullmatch(r"(?:interview(?: round)?|round) ([2-9])", normalized)
+    if interview_round is not None:
+        return f"interview-{interview_round.group(1)}"
     return normalized or "unknown"
 
 
@@ -212,8 +234,8 @@ def _coalesce_email_confirmations(
             continue
         target_index = candidates[0]
         target = merged[target_index]
-        confirmation_progress = _STATUS_PROGRESS.get(confirmation.status.casefold(), -1)
-        target_progress = _STATUS_PROGRESS.get(target.status.casefold(), -1)
+        confirmation_progress = _STATUS_PROGRESS.get(_canonical_status(confirmation.status), -1)
+        target_progress = _STATUS_PROGRESS.get(_canonical_status(target.status), -1)
         use_confirmation = confirmation_progress > target_progress
         merged[target_index] = replace(
             target,
@@ -263,7 +285,7 @@ def _short(value: str, *, limit: int) -> str:
 
 
 def _status_label(status: str) -> str:
-    normalized = status.casefold()
+    normalized = _canonical_status(status)
     return f"{_STATUS_ICONS.get(normalized, '•')} {status}"
 
 
@@ -291,7 +313,7 @@ def _ordered_entries(snapshot: TrackerSnapshot) -> tuple[TrackerEntry, ...]:
             snapshot.entries,
             key=lambda entry: (
                 _cycle_sort_key(entry.cycle),
-                _DISPLAY_PRIORITY.get(entry.status.casefold(), 9),
+                _DISPLAY_PRIORITY.get(_canonical_status(entry.status), 9),
                 _natural_key(entry.company),
                 _natural_key(entry.role),
             ),
@@ -371,7 +393,7 @@ def render_tracker_message(
         if entry.source_url:
             company = f"[{company}]({entry.source_url})"
         lines.append(
-            f"{_STATUS_ICONS.get(entry.status.casefold(), '•')} "
+            f"{_STATUS_ICONS.get(_canonical_status(entry.status), '•')} "
             f"**{company}** - {_short(entry.role, limit=120)}"
         )
         lines.append(f"> {details}")
@@ -436,6 +458,14 @@ def build_tracker_card(
             "tracker.search",
             "Search",
             "Provide company, role, status, or recruiting cycle words.",
+        )
+    )
+    actions.append(
+        CardAction(
+            "orbit.show",
+            "Orbit",
+            "Render the aggregate application flow without a model call.",
+            style="primary",
         )
     )
     search = f" Search: {_short(query, limit=80)}." if query.strip() else ""

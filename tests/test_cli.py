@@ -193,6 +193,41 @@ class CliTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertEqual(json.loads(output.getvalue())["mail_events"], 0)
 
+    def test_tracker_orbit_renders_a_png_without_a_model_call(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            output_path = root / "orbit.png"
+            main(["init", "--config", str(config_path)])
+            config = load_config(config_path)
+            store = ErgaStore(config.data_dir / "erga.sqlite3")
+            application = store.create_application(
+                company="Example",
+                role="Engineer Intern",
+                source_url="https://jobs.example.test/role",
+                evidence_ids=[],
+            )
+            store.update_application_status(application.id, status="applied")
+            output = StringIO()
+
+            with redirect_stdout(output):
+                exit_code = main(
+                    [
+                        "tracker",
+                        "orbit",
+                        "--config",
+                        str(config_path),
+                        "--output",
+                        str(output_path),
+                    ]
+                )
+
+            payload = json.loads(output.getvalue())
+            self.assertEqual(exit_code, 0)
+            self.assertFalse(payload["model_api_used"])
+            self.assertEqual(payload["image_path"], str(output_path))
+            self.assertEqual(output_path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+
     def test_notes_command_renders_one_tracked_application_and_its_research(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"

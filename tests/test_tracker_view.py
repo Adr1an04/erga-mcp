@@ -51,6 +51,7 @@ class TrackerViewTests(unittest.TestCase):
         self.assertEqual(card.title, "Erga application tracker")
         self.assertEqual(len(card.fields), 2)
         self.assertTrue(any("Cloudflare" in field.name for field in card.fields))
+        self.assertIn("orbit.show", {action.action_id for action in card.actions})
 
     def test_uses_distinct_oa_interview_and_offer_icons(self) -> None:
         with TemporaryDirectory() as directory:

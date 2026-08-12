@@ -15,17 +15,20 @@ from erga_mcp.integrations.keryx import keryx_status
 from erga_mcp.integrations.keryx import search_keryx_jobs as search_cached_keryx_jobs
 from erga_mcp.mcp.profiles import (
     HERMES_TOOL_NAMES,
+    LOCAL_IDEMPOTENT_WRITE,
     LOCAL_WRITE_TOOL_NAMES,
     NETWORK_READ_TOOL_NAMES,
     READ_ONLY,
 )
 from erga_mcp.mcp.registry import ToolRegistry
+from erga_mcp.operations.private_files import restrict_private_directory, restrict_private_file
 from erga_mcp.portfolio.catalogue import build_project_catalogue
 from erga_mcp.portfolio.roots import detected_portfolio_root
 from erga_mcp.portfolio.skill_inventory import parse_skill_seed_csv
 from erga_mcp.portfolio.skills import build_git_skill_review_card
 from erga_mcp.store import ErgaStore
 from erga_mcp.tracking.onboarding import build_onboarding_card
+from erga_mcp.tracking.orbit import create_orbit_artifact
 from erga_mcp.tracking.settings import build_settings_card
 from erga_mcp.tracking.tracker import (
     build_tracker_card,
@@ -204,6 +207,34 @@ def register_read_tools(
                 page_size=pagination.page_size,
                 query=normalized_query,
             ).as_dict(),
+        }
+
+    @registry.tool("application_orbit", annotations=LOCAL_IDEMPOTENT_WRITE)
+    def application_orbit(
+        cycle: Annotated[str, Field(max_length=80)] = "",
+    ) -> dict[str, object]:
+        """Render the aggregate Applied-to-outcome funnel without setup states or model calls."""
+        output_dir = config.data_dir / "orbit"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        restrict_private_directory(output_dir)
+        artifact = create_orbit_artifact(
+            applications=store.list_applications(),
+            audit_events=store.audit_events(),
+            output_dir=output_dir,
+            tracker_dir=(
+                config.tracker.tracker_dir
+                if config.tracker.enabled and config.tracker.tracker_dir is not None
+                else None
+            ),
+            cycle=cycle,
+        )
+        restrict_private_file(artifact.image_path)
+        return {
+            "image_path": str(artifact.image_path),
+            "mime_type": "image/png",
+            "message": artifact.message,
+            "snapshot": artifact.snapshot.as_dict(),
+            "model_api_used": False,
         }
 
     @registry.tool(

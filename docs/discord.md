@@ -24,6 +24,7 @@ Message Content Intent, and invite it with only:
 - View Channels
 - Send Messages
 - Embed Links
+- Attach Files
 - Read Message History
 
 Then run:
@@ -82,6 +83,24 @@ Direct messages from trusted users are accepted. Server messages require an expl
 unless the owner knowingly disables that safeguard during configuration. Bot-authored messages
 are always ignored, only one backend turn runs at a time, incoming content is bounded, and long
 responses are split below Discord's message limit.
+
+## Erga Orbit
+
+Send `orbit` (or `erga orbit`) to create the live aggregate application-flow dashboard in the
+current channel. `orbit Summer 2027` limits it to one exact recruiting cycle. Erga keeps one Orbit
+message per channel: repeating the command edits that message instead of posting another, and the
+bridge checks every 60 seconds but uploads a replacement image only when the underlying tracker
+state changes. Send `orbit stop` to disable those updates.
+
+Orbit is deterministic and does not call an AI model. It begins at **Applied** and renders only
+actual recruiting stages: OA, interview rounds, final interview, offer, and recorded outcomes.
+Draft, researching, and ready-to-apply rows are excluded. Recorded local status events form the
+flow; an Obsidian-only later stage connects directly from Applied without inventing intermediate
+rounds. The image contains aggregate counts, not employer names. It is also available
+locally with `erga tracker orbit` and through the `application_orbit` MCP tool. A Hermes-managed
+Discord connection can use `/erga-orbit [cycle]` or the **Orbit** control in `/erga-tracker` for an
+on-demand snapshot; editing an existing message continuously requires the native bridge because
+Hermes' current command response API does not expose message edits.
 
 ## Live request experience and color system
 

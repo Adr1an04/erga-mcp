@@ -1317,6 +1317,34 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertIn("[[as_document]]", body)
         self.assertIn('MEDIA:"/tmp/Candidate Resume.pdf"', body)
 
+    def test_erga_orbit_dispatches_token_free_renderer_and_attaches_valid_png(self) -> None:
+        with TemporaryDirectory() as directory:
+            orbit_dir = Path(directory) / "orbit"
+            orbit_dir.mkdir()
+            image_path = orbit_dir / "erga-orbit-summer-2027.png"
+            image_path.write_bytes(b"\x89PNG\r\n\x1a\nsynthetic")
+            context = _FakePluginContext(
+                result=json.dumps(
+                    {
+                        "image_path": str(image_path),
+                        "mime_type": "image/png",
+                        "message": "**Erga Orbit · Summer 2027**\n12 tracked roles",
+                        "model_api_used": False,
+                    }
+                )
+            )
+            self.router.register(context)
+
+            response = context.commands["erga-orbit"]("Summer 2027")
+
+        self.assertEqual(
+            context.calls,
+            [("mcp__erga_mcp__application_orbit", {"cycle": "Summer 2027"})],
+        )
+        self.assertIn("12 tracked roles", response)
+        self.assertIn(f'MEDIA:"{image_path.resolve()}"', response)
+        self.assertNotIn("[[as_document]]", response)
+
     def test_plan_delivery_retries_transient_attachment_failures(self) -> None:
         attempts: list[tuple[str, str, str | None]] = []
 
@@ -2006,12 +2034,15 @@ class HermesJobUrlRouterTests(unittest.TestCase):
 
         self.assertIsInstance(first, Response)
         self.assertEqual(first.text, "Page 1 of 3")
-        self.assertEqual([button.label for button in first.buttons], ["Page 1/3", "Next"])
+        self.assertEqual(
+            [button.label for button in first.buttons],
+            ["Page 1/3", "Next", "Orbit"],
+        )
         self.assertIsInstance(second, Response)
         self.assertEqual(second.text, "Page 2 of 3")
         self.assertEqual(
             [button.label for button in second.buttons],
-            ["Previous", "Page 2/3", "Next"],
+            ["Previous", "Page 2/3", "Next", "Orbit"],
         )
         self.assertEqual(
             context.calls,
@@ -2178,7 +2209,10 @@ class HermesJobUrlRouterTests(unittest.TestCase):
             )
 
         self.assertIsInstance(tracker, Response)
-        self.assertEqual([button.label for button in tracker.buttons], ["Research · Example"])
+        self.assertEqual(
+            [button.label for button in tracker.buttons],
+            ["Research · Example", "Orbit"],
+        )
         self.assertEqual(tracker.buttons[0].action_id, "erga.card.action")
         self.assertIsInstance(opened, Response)
         self.assertIn("[Official posting](https://jobs.example.test/role)", opened.text)

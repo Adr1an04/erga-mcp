@@ -37,6 +37,7 @@ _CAREER_TOOLS = {
     "pipeline_status",
     "list_applications",
     "application_tracker",
+    "application_orbit",
     "research_navigator",
     "onboarding_status",
     "git_skill_review_card",
@@ -183,6 +184,7 @@ class McpToolProfileTests(unittest.TestCase):
             tool_names,
             _READ_TOOLS
             | {
+                "application_orbit",
                 "record_token_usage",
                 "update_application_status",
                 "export_data",
@@ -210,6 +212,7 @@ class McpToolProfileTests(unittest.TestCase):
             tool_names,
             _READ_TOOLS
             | {
+                "application_orbit",
                 "sync_recruiting_mail",
                 "install_mail_monitor_scripts",
                 "discover_job_research",

@@ -13,6 +13,30 @@ from erga_mcp.store import ErgaStore
 
 
 class TrackerMcpTests(unittest.TestCase):
+    def test_renders_a_token_free_orbit_artifact_from_local_tracking_data(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            store = ErgaStore(load_config(config_path).data_dir / "erga.sqlite3")
+            application = store.create_application(
+                company="Example",
+                role="Engineer Intern",
+                source_url="https://jobs.example.test/role",
+                evidence_ids=[],
+            )
+            store.update_application_status(application.id, status="applied")
+
+            result: Any = asyncio.run(build_server(config_path).call_tool("application_orbit", {}))
+            payload = cast(dict[str, Any], result.structured_content)
+            image_path = Path(payload["image_path"])
+
+            self.assertTrue(image_path.is_file())
+            self.assertEqual(image_path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertFalse(payload["model_api_used"])
+            self.assertEqual(payload["snapshot"]["tracked_count"], 1)
+            self.assertEqual(payload["message"], "**Orbit**")
+
     def test_returns_a_rendered_obsidian_tracker_without_writing_the_vault(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

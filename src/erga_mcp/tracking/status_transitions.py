@@ -14,6 +14,18 @@ _MAIL_STATUS = {
     "application.denial": "rejected",
 }
 _TERMINAL_STATUSES = frozenset({"offer", "rejected", "withdrawn"})
+_STATUS_PROGRESS = {
+    "draft": 0,
+    "applied": 1,
+    "oa": 2,
+    "assessment": 2,
+    "interview": 3,
+    "interview-2": 4,
+    "interview-3": 5,
+    "final-interview": 6,
+    "offer": 7,
+    "accepted": 8,
+}
 
 
 def _mail_event_is_stale(store: ErgaStore, application: Application, event: MailEvent) -> bool:
@@ -67,6 +79,14 @@ def apply_mail_status_transition(store: ErgaStore, event: MailEvent) -> Applicat
     if _mail_event_is_stale(store, application, event):
         return None
     if application.status == target:
+        return None
+    current_progress = _STATUS_PROGRESS.get(application.status)
+    target_progress = _STATUS_PROGRESS.get(target)
+    if (
+        current_progress is not None
+        and target_progress is not None
+        and target_progress < current_progress
+    ):
         return None
     if event.kind == "application.acknowledgement" and application.status != "draft":
         return None

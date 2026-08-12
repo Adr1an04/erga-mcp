@@ -91,6 +91,19 @@ class Application:
 
 
 @dataclass(frozen=True)
+class OrbitDashboardBinding:
+    id: str
+    channel_id: str
+    message_id: str
+    owner_user_id: str
+    cycle: str
+    active: bool
+    content_hash: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
 class TokenUsage:
     id: str
     application_id: str

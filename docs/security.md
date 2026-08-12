@@ -132,6 +132,7 @@ The server declares tool annotations so MCP clients can distinguish its capabili
 | `intake_job_url` | network-read + local-write + local-exec + optional client sampling | Fetches one validated public job URL; creates or upgrades a local package; ranks approved projects; collects attributable Git evidence; optionally asks the already-connected MCP client's model for structured, evidence-cited project bullets; validates and compiles the proposal; and writes cited research, an application record, and a configured Obsidian tracker note. |
 | `record_secondary_research` | local-write | Stores bounded host-provided search results for an existing job package; results are labeled unverified and separated from official-posting facts. |
 | `prepare_job_workspace` | network-read + local-write | Fetches a job URL and creates configured local package/tracker artifacts. |
+| `application_orbit` | local idempotent write | Projects aggregate local application history into a private PNG. It uses no model, includes no employer names, and marks missing history instead of inventing transitions. |
 | `create_tailored_resume` | local-write | Writes a reviewable proposal, diff, and claim report inside a configured package. |
 | `validate_tailored_resume` | local-exec | Runs the configured local LaTeX validator on an explicit proposal. |
 | `install_mail_monitor_scripts` | local-write | Writes deterministic, credential-free runner scripts for an explicitly configured Hermes profile. |

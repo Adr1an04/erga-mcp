@@ -121,6 +121,25 @@ class MailStatusTransitionTests(unittest.TestCase):
         self.assertEqual(replay["status_transitions"], 0)
         self.assertEqual(self.store.list_applications()[0].status, "oa")
 
+    def test_interview_mail_does_not_regress_a_numbered_interview_stage(self) -> None:
+        self.store.update_application_status(self.application.id, status="interview-2")
+
+        result = sync_metadata(
+            self.store,
+            [
+                MailMessageMetadata(
+                    message_id="generic-interview",
+                    received_at=datetime(2026, 8, 12, tzinfo=UTC),
+                    sender="Talent@uber.com",
+                    subject="Your Uber technical interview",
+                    preview="We invite you to interview.",
+                )
+            ],
+        )
+
+        self.assertEqual(result["status_transitions"], 0)
+        self.assertEqual(self.store.list_applications()[0].status, "interview-2")
+
 
 if __name__ == "__main__":
     unittest.main()
