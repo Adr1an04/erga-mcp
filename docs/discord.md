@@ -84,6 +84,19 @@ unless the owner knowingly disables that safeguard during configuration. Bot-aut
 are always ignored, only one backend turn runs at a time, incoming content is bounded, and long
 responses are split below Discord's message limit.
 
+### Update from Discord
+
+When Erga is running from the supported Git checkout, a trusted user can write `@Erga update` in a
+server or `update` in a direct message. The command bypasses the reasoning backend and checks only
+`origin/main` for the official `Adr1an04/erga-mcp` GitHub repository. It refuses non-`main`
+branches, tracked local changes, divergent history, detached checkouts, and remotes that do not
+match the official repository. A safe update uses a Git fast-forward, runs
+`uv sync --extra discord --frozen`, posts the old and new revisions, and restarts the bridge into
+the updated code. An already-current checkout stays online without restarting.
+
+Git-installed package copies do not expose a working checkout to the bridge, so they are reported
+as unsupported rather than being modified. Reinstall those copies from the official repository.
+
 ## Erga Orbit
 
 Send `orbit` (or `erga orbit`) to create the live aggregate application-flow dashboard in the

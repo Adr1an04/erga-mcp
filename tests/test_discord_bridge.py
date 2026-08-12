@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from erga_mcp.config import DEFAULT_CONFIG, load_config
 from erga_mcp.integrations.discord.backends import DiscordBackendName
@@ -20,6 +20,8 @@ from erga_mcp.integrations.discord.bridge import (
     ERGA_SUN,
     DiscordBridgeSettings,
     DiscordProcessRecord,
+    ErgaUpdateError,
+    ErgaUpdateResult,
     _backend_environment,
     _backend_prompt,
     _create_discord_client,
@@ -36,6 +38,7 @@ from erga_mcp.integrations.discord.bridge import (
     resolve_backend_command,
     run_backend,
     split_discord_message,
+    update_erga_checkout,
     verify_backend_login,
     write_discord_settings,
 )
@@ -242,6 +245,155 @@ class DiscordBridgeTests(unittest.TestCase):
         self.assertIn("do not hand-edit proposal files", prompt)
         self.assertIn("one-page fill check", prompt)
         self.assertIn("exact PDF artifact path returned by Erga", prompt)
+
+    def test_discord_update_fast_forwards_only_official_clean_main_checkout(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".git").mkdir()
+            (root / "pyproject.toml").write_text("[project]\nname = 'erga-mcp'\n")
+            old_revision = "a" * 40
+            new_revision = "b" * 40
+            calls: list[list[str]] = []
+            results = iter(
+                (
+                    subprocess.CompletedProcess([], 0, "true\n", ""),
+                    subprocess.CompletedProcess([], 0, "main\n", ""),
+                    subprocess.CompletedProcess([], 0, "", ""),
+                    subprocess.CompletedProcess(
+                        [], 0, "https://github.com/Adr1an04/erga-mcp.git\n", ""
+                    ),
+                    subprocess.CompletedProcess([], 0, f"{old_revision}\n", ""),
+                    subprocess.CompletedProcess([], 0, "", ""),
+                    subprocess.CompletedProcess([], 0, f"{new_revision}\n", ""),
+                    subprocess.CompletedProcess([], 0, "", ""),
+                    subprocess.CompletedProcess([], 0, "Fast-forward\n", ""),
+                    subprocess.CompletedProcess([], 0, f"{new_revision}\n", ""),
+                    subprocess.CompletedProcess([], 0, "Synced\n", ""),
+                )
+            )
+
+            def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                calls.append(command)
+                return next(results)
+
+            result = update_erga_checkout(
+                checkout_root=root,
+                runner=fake_run,
+                uv_command="/safe/uv",
+            )
+
+        self.assertTrue(result.updated)
+        self.assertEqual(result.previous_revision, old_revision)
+        self.assertEqual(result.current_revision, new_revision)
+        self.assertIn(
+            [
+                "git",
+                "fetch",
+                "--quiet",
+                "origin",
+                "refs/heads/main:refs/remotes/origin/main",
+            ],
+            calls,
+        )
+        self.assertIn(["git", "merge", "--ff-only", "refs/remotes/origin/main"], calls)
+        self.assertIn(["/safe/uv", "sync", "--extra", "discord", "--frozen"], calls)
+
+    def test_discord_update_refuses_tracked_local_changes_before_fetching(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".git").mkdir()
+            (root / "pyproject.toml").write_text("[project]\nname = 'erga-mcp'\n")
+            calls: list[list[str]] = []
+            results = iter(
+                (
+                    subprocess.CompletedProcess([], 0, "true\n", ""),
+                    subprocess.CompletedProcess([], 0, "main\n", ""),
+                    subprocess.CompletedProcess(
+                        [], 0, " M src/erga_mcp/integrations/discord/bridge.py\n", ""
+                    ),
+                )
+            )
+
+            def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                calls.append(command)
+                return next(results)
+
+            with self.assertRaisesRegex(ErgaUpdateError, "tracked local changes"):
+                update_erga_checkout(checkout_root=root, runner=fake_run, uv_command="/safe/uv")
+
+        self.assertFalse(any(command[:2] == ["git", "fetch"] for command in calls))
+
+    def test_discord_update_command_restarts_only_after_a_successful_update(self) -> None:
+        class FakeIntents:
+            message_content = False
+
+            @classmethod
+            def default(cls) -> FakeIntents:
+                return cls()
+
+        class FakeEmbed:
+            def __init__(self, **kwargs: object) -> None:
+                self.title = kwargs["title"]
+                self.description = kwargs["description"]
+                self.color = kwargs["color"]
+                self.fields: list[dict[str, object]] = []
+
+            def add_field(self, **kwargs: object) -> None:
+                self.fields.append(kwargs)
+
+            def set_footer(self, **_kwargs: object) -> None:
+                return None
+
+            def set_image(self, **_kwargs: object) -> None:
+                return None
+
+        class FakeClient:
+            def __init__(self, **_: object) -> None:
+                self.user = SimpleNamespace(id=777)
+                self.closed = False
+
+            async def close(self) -> None:
+                self.closed = True
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake_discord = SimpleNamespace(Intents=FakeIntents, Client=FakeClient, Embed=FakeEmbed)
+            status_message = SimpleNamespace(edit=AsyncMock())
+            message = SimpleNamespace(
+                author=SimpleNamespace(id=123456789, name="student", bot=False),
+                guild=SimpleNamespace(id=1),
+                mentions=[SimpleNamespace(id=777)],
+                content="<@!777> update",
+                reply=AsyncMock(return_value=status_message),
+            )
+            restart = Mock()
+            with (
+                patch(
+                    "erga_mcp.integrations.discord.bridge._discord_module",
+                    return_value=fake_discord,
+                ),
+                patch(
+                    "erga_mcp.integrations.discord.bridge.update_erga_checkout",
+                    return_value=ErgaUpdateResult(
+                        updated=True,
+                        previous_revision="a" * 40,
+                        current_revision="b" * 40,
+                    ),
+                ),
+            ):
+                client = _create_discord_client(
+                    self._settings(root),
+                    config_path=root / "config.toml",
+                    runtime_nonce="private-nonce",
+                    restart_bridge=restart,
+                )
+                asyncio.run(client.on_message(message))
+
+        self.assertEqual(message.reply.await_count, 1)
+        self.assertEqual(status_message.edit.await_count, 1)
+        self.assertEqual(status_message.edit.await_args.kwargs["embed"].title, "✓ Erga updated")
+        self.assertTrue(client.closed)
+        restart.assert_called_once_with(root / "config.toml", "private-nonce")
 
     def _settings(
         self,
