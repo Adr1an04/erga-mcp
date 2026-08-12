@@ -42,7 +42,7 @@ class OnboardingMcpTests(unittest.TestCase):
             self.assertEqual(len(skills["skills"]), 2)
             self.assertEqual(roots["roots"], [str(projects.resolve())])
             self.assertEqual(onboarding["title"], "Erga onboarding")
-            self.assertIn(str(projects.resolve()), json.dumps(onboarding))
+            self.assertEqual(onboarding["fields"][3]["value"], str(projects.resolve()))
             rendered_settings = json.dumps(settings)
             self.assertNotIn(str(load_config(config_path).data_dir), rendered_settings)
             self.assertNotIn("client_id", rendered_settings)
