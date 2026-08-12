@@ -34,6 +34,7 @@ jobs:
         with:
           enable-cache: true
           prune-cache: true
+          cache-suffix: release
 
       - name: Install dependencies
         run: uv sync --frozen --extra dev --extra discord

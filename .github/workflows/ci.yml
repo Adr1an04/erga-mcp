@@ -37,6 +37,7 @@ jobs:
         with:
           enable-cache: true
           prune-cache: true
+          cache-suffix: quality
 
       - name: Install dependencies
         run: uv sync --frozen --extra dev --extra discord
@@ -109,6 +110,7 @@ jobs:
         with:
           enable-cache: true
           prune-cache: true
+          cache-suffix: tests
           cache-dependency-glob: uv.lock
 
       - name: Install dependencies
@@ -142,6 +144,7 @@ jobs:
         with:
           enable-cache: true
           prune-cache: true
+          cache-suffix: coverage
           cache-dependency-glob: uv.lock
 
       - name: Install dependencies
@@ -175,6 +178,7 @@ jobs:
         with:
           enable-cache: true
           prune-cache: true
+          cache-suffix: package
 
       - name: Install locked build tools
         run: uv sync --frozen --extra dev
