@@ -1025,33 +1025,47 @@ def register(
     ready_timeout, retry_interval = _readiness_settings()
     component_tokens = _ComponentTokenStore(monotonic=monotonic_clock)
 
-    def dispatch(job_url: str) -> str:
+    def dispatch_with_readiness(
+        target_tool: str,
+        arguments: dict[str, Any],
+        *,
+        failure_label: str,
+    ) -> tuple[object | None, str | None]:
+        """Dispatch after bounded MCP registration, without retrying operational failures."""
         deadline = monotonic_clock() + ready_timeout
         attempts = 0
         while True:
             attempts += 1
             try:
                 # Hermes >=0.18.2 documents this exact synchronous dispatch signature.
-                result = ctx.dispatch_tool(tool_name, {"job_url": job_url})
+                result = ctx.dispatch_tool(target_tool, arguments)
             except Exception as error:  # Hermes isolates plugin exceptions; surface them safely.
                 error_text = str(error).strip()
-                if not _is_retryable_startup_error(error_text, tool_name=tool_name):
-                    return f"Erga MCP intake failed: {type(error).__name__}: {error}"
+                if not _is_retryable_startup_error(error_text, tool_name=target_tool):
+                    return None, f"{failure_label}: {type(error).__name__}: {error}"
                 rendered_error = f"{type(error).__name__}: {error}"
             else:
                 error_text = _dispatch_error_text(result)
-                if not _is_retryable_startup_error(error_text, tool_name=tool_name):
-                    return str(result)
+                if not _is_retryable_startup_error(error_text, tool_name=target_tool):
+                    return result, None
                 rendered_error = str(result)
 
             remaining = deadline - monotonic_clock()
             if remaining <= 0:
-                return (
-                    "Erga MCP intake failed after waiting "
+                return None, (
+                    f"{failure_label} after waiting "
                     f"{ready_timeout:g}s for MCP readiness ({attempts} attempts): "
                     f"{rendered_error}"
                 )
             sleep_for(min(retry_interval, remaining))
+
+    def dispatch(job_url: str) -> str:
+        result, error = dispatch_with_readiness(
+            tool_name,
+            {"job_url": job_url},
+            failure_label="Erga MCP intake failed",
+        )
+        return error if error is not None else str(result)
 
     def record_api_usage(
         *,
@@ -2646,10 +2660,13 @@ def register(
     def mail_sync_command(raw_args: str) -> str:
         if raw_args.strip():
             return "Usage: /erga-mail-sync"
-        try:
-            synced = ctx.dispatch_tool(mail_sync_tool, {})
-        except Exception as exc:
-            return f"Erga mail sync failed: {exc}"
+        synced, dispatch_error = dispatch_with_readiness(
+            mail_sync_tool,
+            {},
+            failure_label="Erga mail sync failed",
+        )
+        if dispatch_error is not None:
+            return dispatch_error
         error_text = _dispatch_error_text(synced)
         if error_text:
             return f"Erga mail sync failed: {error_text}"

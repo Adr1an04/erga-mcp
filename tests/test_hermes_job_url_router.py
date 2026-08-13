@@ -2142,6 +2142,42 @@ class HermesJobUrlRouterTests(unittest.TestCase):
             "Usage: /erga-mail-sync",
         )
 
+    def test_mail_sync_waits_for_transient_mcp_tool_registration(self) -> None:
+        tool_name = "mcp__erga_mcp__sync_recruiting_mail"
+        message = "📬 Erga mail sync complete\n\nNo new recruiting events."
+        context = _FakePluginContext(
+            results=[
+                json.dumps({"error": f"Unknown tool: {tool_name}"}),
+                json.dumps({"error": "MCP server 'erga-mcp' is not connected"}),
+                json.dumps(
+                    {
+                        "structuredContent": {
+                            "provider": "zoho",
+                            "fetched": 0,
+                            "created": 0,
+                            "message": message,
+                        }
+                    }
+                ),
+            ]
+        )
+        clock = _FakeClock()
+        env = {
+            "ERGA_MCP_READY_TIMEOUT_SECONDS": "2",
+            "ERGA_MCP_READY_RETRY_SECONDS": "0.25",
+        }
+
+        with patch.dict(os.environ, env, clear=False):
+            self.router.register(context, monotonic=clock.monotonic, sleep=clock.sleep)
+        result = context.commands["erga-mail-sync"]("")
+
+        self.assertEqual(result, message)
+        self.assertEqual(
+            context.calls,
+            [(tool_name, {}), (tool_name, {}), (tool_name, {})],
+        )
+        self.assertEqual(clock.sleeps, [0.25, 0.25])
+
     def test_erga_research_command_dispatches_and_renders_a_saved_result(self) -> None:
         context = _FakePluginContext(
             result=json.dumps(
