@@ -22,6 +22,8 @@ class MailMessageMetadata:
     subject: str
     preview: str
     content: str = ""
+    thread_id: str = ""
+    reference_ids: tuple[str, ...] = ()
 
 
 class ReadOnlyMailSource(Protocol):

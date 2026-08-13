@@ -239,7 +239,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 30)
+        self.assertEqual(TAILORING_VERSION, 31)
 
     def test_semantic_layout_gate_rejects_flattened_generated_resume(self) -> None:
         flattened = r"""
@@ -802,7 +802,10 @@ Synthetic University
             self.assertTrue(result.meaningful_change)
             self.assertEqual(result.constraint_violations, ())
             self.assertEqual(lengths["new_violations"], [])
-            self.assertIn({"length": len(bullet), "text": bullet}, lengths["soft_deviations"])
+            rewritten = (
+                "Developed a Python API with deterministic tests and reviewed Git provenance."
+            )
+            self.assertIn({"length": len(rewritten), "text": rewritten}, lengths["soft_deviations"])
 
     def test_duplicate_lead_verbs_are_resolved_before_constraint_validation(self) -> None:
         with TemporaryDirectory() as directory:
@@ -919,6 +922,11 @@ Synthetic University
             self.assertIn("quality_score", selection["selected"][0])
             self.assertIn("differentiation_score", selection["selected"][0])
             self.assertIn("metric_categories", selection["selected"][0])
+            assert result.proposal.decision_report_path is not None
+            decision = json.loads(result.proposal.decision_report_path.read_text(encoding="utf-8"))
+            self.assertEqual(decision["catalogue"]["selected"][0]["project_id"], "api-platform")
+            self.assertIn("master_parity", decision)
+            self.assertEqual(decision["preference_scope"], "current_generation_only")
 
     def test_duplicate_award_lead_verbs_use_an_award_specific_replacement(self) -> None:
         with TemporaryDirectory() as directory:
@@ -948,15 +956,27 @@ Synthetic University
             self.assertEqual(result.constraint_violations, ())
 
     def test_git_enrichment_can_resolve_six_implemented_project_bullets(self) -> None:
+        workstreams = (
+            "Implemented Python API authentication with OAuth token rotation and "
+            "scoped permissions.",
+            "Implemented contract tests for validation failures across FastAPI request handlers.",
+            "Implemented async ingestion queues with retry backoff and idempotent "
+            "event processing.",
+            "Implemented PostgreSQL database persistence with indexed SQL queries and "
+            "migration validation.",
+            "Implemented AWS observability with structured API logs, health checks, and "
+            "alert routing.",
+            "Implemented Docker deployment automation with reproducible environment validation.",
+        )
         evidence = [
             Evidence(
                 id=f"ev_{index}",
                 source_ref=f"git-derived:project-{index}",
-                text=f"Implemented verified workstream {index} from Git history.",
+                text=workstream,
                 approved=True,
                 created_at=datetime.now(UTC),
             )
-            for index in range(6)
+            for index, workstream in enumerate(workstreams)
         ]
         projects = tuple(
             ProjectCandidate(
@@ -967,11 +987,9 @@ Synthetic University
                     "\n"
                     r"\resumeItemListStart"
                     "\n"
-                    rf"\resumeItem{{Implemented Python API workstream {project * 2} across "
-                    "reviewed commits and files with deterministic Git provenance.}"
+                    rf"\resumeItem{{{workstreams[project * 2]}}}"
                     "\n"
-                    rf"\resumeItem{{Implemented Python API workstream {project * 2 + 1} across "
-                    "reviewed commits and files with deterministic Git provenance.}"
+                    rf"\resumeItem{{{workstreams[project * 2 + 1]}}}"
                     "\n"
                     r"\resumeItemListEnd"
                     "\n"
@@ -1191,8 +1209,9 @@ Synthetic University
                         "section": "Projects",
                         "source_kind": "project_inventory",
                         "source_ref": "project_inventory/api-platform/1",
-                        "text": "Built a Python FastAPI platform for service integration.",
-                        "text_changed": False,
+                        "original_text": "Built a Python FastAPI platform for service integration.",
+                        "text": "Developed a Python FastAPI platform for service integration.",
+                        "text_changed": True,
                     },
                     {
                         "evidence_ids": ["ev_tests"],

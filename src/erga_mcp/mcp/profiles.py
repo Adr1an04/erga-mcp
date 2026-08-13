@@ -45,6 +45,7 @@ READ_TOOL_NAMES = frozenset(
         "erga_settings_card",
         "list_evidence",
         "list_mail_events",
+        "list_mail_reconciliation_reviews",
         "token_usage",
         "search_keryx_jobs",
     }
@@ -60,6 +61,7 @@ LOCAL_WRITE_TOOL_NAMES = frozenset(
         "update_orbit_preferences",
         "record_token_usage",
         "update_application_status",
+        "confirm_application_submission",
         "export_data",
         "record_secondary_research",
         "create_research_brief",
@@ -75,13 +77,19 @@ LOCAL_WRITE_TOOL_NAMES = frozenset(
         "manage_portfolio_roots",
         "review_git_skill_group",
         "update_tailoring_plan",
+        "retry_mail_reconciliation",
+        "resolve_mail_reconciliation",
     }
 )
 HERMES_TOOL_NAMES = frozenset(
     {
         "application_orbit",
         "update_orbit_preferences",
+        "confirm_application_submission",
         "sync_recruiting_mail",
+        "list_mail_reconciliation_reviews",
+        "retry_mail_reconciliation",
+        "resolve_mail_reconciliation",
         "install_mail_monitor_scripts",
         "install_update_monitor_script",
         "discover_job_research",
@@ -111,6 +119,7 @@ CAREER_TOOL_NAMES = frozenset(
         "erga_settings_card",
         "list_evidence",
         "update_application_status",
+        "confirm_application_submission",
         "scrape_public_page",
         "extract_public_page",
         "intake_job_url",
@@ -132,6 +141,8 @@ CAREER_TOOL_NAMES = frozenset(
         "execute_tailoring_plan",
         "search_keryx_jobs",
         "install_update_monitor_script",
+        "retry_mail_reconciliation",
+        "resolve_mail_reconciliation",
     }
 )
 CAREER_PRIVATE_TOOL_NAMES = CAREER_TOOL_NAMES | frozenset(

@@ -147,3 +147,52 @@ class MailEvent:
     kind: str
     confidence: float
     requires_review: bool
+    sender_domain: str = ""
+    job_urls: tuple[str, ...] = ()
+    requisition_ids: tuple[str, ...] = ()
+    thread_id: str = ""
+    reference_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MailMatchCandidate:
+    """One deterministic application candidate for a retained mail event."""
+
+    application_id: str
+    company: str
+    role: str
+    score: float
+    confidence: str
+    provenance: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class MailReconciliation:
+    """Persisted, presentation-neutral result of matching one mail event."""
+
+    id: str
+    message_id: str
+    event_kind: str
+    event_received_at: datetime
+    state: str
+    matched_application_id: str | None
+    score: float
+    confidence: str
+    candidates: tuple[MailMatchCandidate, ...]
+    provenance: tuple[str, ...]
+    recommended_action: str
+    reason: str
+    application_fingerprint: str
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class MailReconciliationSummary:
+    """Aggregate result from a deterministic historical reconciliation pass."""
+
+    matched: int
+    review: int
+    unmatched: int
+    ignored: int
+    transitions: int
+    application_fingerprint: str

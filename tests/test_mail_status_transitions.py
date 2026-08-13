@@ -29,13 +29,13 @@ class MailStatusTransitionTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.directory.cleanup()
 
-    def test_exact_company_denial_transitions_one_active_application_and_is_audited(self) -> None:
+    def test_exact_company_denial_requires_review_and_does_not_mutate(self) -> None:
         result = sync_metadata(
             self.store,
             [
                 MailMessageMetadata(
                     message_id="uber-denial",
-                    received_at=datetime(2026, 7, 25, tzinfo=UTC),
+                    received_at=datetime.now(UTC),
                     sender="Talent@uber.com",
                     subject="Thanks for your interest in Uber",
                     preview="Unfortunately, we will not be moving forward.",
@@ -44,15 +44,11 @@ class MailStatusTransitionTests(unittest.TestCase):
         )
 
         application = self.store.list_applications()[0]
-        self.assertEqual(application.status, "rejected")
-        self.assertEqual(result["status_transitions"], 1)
-        audits = self.store.audit_events()
-        transition = next(
-            item for item in audits if item.action == "application.status_updated_from_mail"
-        )
-        self.assertEqual(transition.payload["mail_event_id"], "uber-denial")
-        self.assertEqual(transition.payload["from"], "applied")
-        self.assertEqual(transition.payload["to"], "rejected")
+        self.assertEqual(application.status, "applied")
+        self.assertEqual(result["status_transitions"], 0)
+        reconciliation = self.store.list_mail_reconciliations()[0]
+        self.assertEqual(reconciliation.state, "review")
+        self.assertEqual(reconciliation.reason, "classification_requires_review")
 
     def test_ambiguous_company_match_does_not_change_any_status(self) -> None:
         evidence = self.store.list_evidence()[0]
@@ -68,7 +64,7 @@ class MailStatusTransitionTests(unittest.TestCase):
             [
                 MailMessageMetadata(
                     message_id="ambiguous-denial",
-                    received_at=datetime(2026, 7, 25, tzinfo=UTC),
+                    received_at=datetime.now(UTC),
                     sender="Talent@uber.com",
                     subject="Thanks for your interest in Uber",
                     preview="Unfortunately, we will not be moving forward.",
@@ -85,12 +81,13 @@ class MailStatusTransitionTests(unittest.TestCase):
         self.store.record_mail_event(
             MailEvent(
                 message_id="stored-uber-denial",
-                received_at=datetime(2026, 7, 25, tzinfo=UTC),
+                received_at=datetime.now(UTC),
                 sender="Talent@uber.com",
                 subject="Thanks for your interest in Uber",
                 kind="application.denial",
                 confidence=0.95,
-                requires_review=True,
+                requires_review=False,
+                job_urls=("https://jobs.uber.com/en/jobs/300697",),
             )
         )
         result = sync_metadata(self.store, [])
@@ -100,20 +97,20 @@ class MailStatusTransitionTests(unittest.TestCase):
     def test_processed_mail_event_does_not_override_a_later_manual_status_change(self) -> None:
         message = MailMessageMetadata(
             message_id="processed-uber-denial",
-            received_at=datetime(2026, 7, 25, tzinfo=UTC),
+            received_at=datetime.now(UTC),
             sender="Talent@uber.com",
             subject="Thanks for your interest in Uber",
             preview="Unfortunately, we will not be moving forward.",
         )
         older_message = MailMessageMetadata(
             message_id="second-recorded-uber-denial",
-            received_at=datetime(2026, 7, 24, tzinfo=UTC),
+            received_at=datetime.now(UTC),
             sender="Talent@uber.com",
             subject="Update on your Uber application",
             preview="Unfortunately, we will not be moving forward.",
         )
         first = sync_metadata(self.store, [message, older_message])
-        self.assertEqual(first["status_transitions"], 1)
+        self.assertEqual(first["status_transitions"], 0)
         self.store.update_application_status(self.application.id, status="oa")
 
         replay = sync_metadata(self.store, [])
@@ -129,7 +126,7 @@ class MailStatusTransitionTests(unittest.TestCase):
             [
                 MailMessageMetadata(
                     message_id="generic-interview",
-                    received_at=datetime(2026, 8, 12, tzinfo=UTC),
+                    received_at=datetime.now(UTC),
                     sender="Talent@uber.com",
                     subject="Your Uber technical interview",
                     preview="We invite you to interview.",

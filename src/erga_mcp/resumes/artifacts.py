@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 import errno
+import hashlib
 import json
 import os
 import re
@@ -9,10 +10,12 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from threading import RLock
 
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
@@ -20,12 +23,22 @@ from pypdf.errors import PdfReadError
 from erga_mcp.models import Evidence
 from erga_mcp.operations.private_files import restrict_private_directory, restrict_private_file
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised by Windows CI
+    fcntl = None  # type: ignore[assignment]
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - exercised by POSIX CI
+    msvcrt = None  # type: ignore[assignment]
+
 
 @dataclass(frozen=True)
 class ResumeProposal:
     proposed_tex_path: Path
     diff_path: Path
     claim_report_path: Path
+    decision_report_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -55,7 +68,85 @@ class ResumePackage:
     manifest_path: Path
 
 
+@dataclass(frozen=True)
+class ResumeUseRecord:
+    """One validated generated artifact; generation is distinct from explicit use."""
+
+    id: str
+    application_id: str
+    generated_at: str
+    used_at: str | None
+    source_sha256: str
+    proposal_sha256: str
+    pdf_sha256: str
+    decision_sha256: str
+    project_ids: tuple[str, ...]
+    bullet_evidence_ids: tuple[tuple[str, ...], ...]
+    validation: dict[str, object]
+    quality: dict[str, object]
+    decision_version: int = 1
+
+    @property
+    def used(self) -> bool:
+        return self.used_at is not None
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        application_id: str,
+        source_sha256: str,
+        proposal_sha256: str,
+        pdf_sha256: str,
+        decision_sha256: str,
+        project_ids: tuple[str, ...],
+        bullet_evidence_ids: tuple[tuple[str, ...], ...],
+        validation: dict[str, object],
+        quality: dict[str, object],
+        generated_at: datetime | None = None,
+    ) -> ResumeUseRecord:
+        if validation.get("returncode") != 0:
+            raise ValueError("a resume version requires successful validation")
+        if quality.get("passed") is not True:
+            raise ValueError("a resume version requires a passing master-parity decision")
+        if not application_id.strip():
+            raise ValueError("application_id must be non-empty")
+        hashes = (source_sha256, proposal_sha256, pdf_sha256, decision_sha256)
+        if any(re.fullmatch(r"[0-9a-f]{64}", value) is None for value in hashes):
+            raise ValueError("resume version hashes must be lowercase SHA-256 values")
+        identity = hashlib.sha256(
+            json.dumps(
+                {
+                    "application_id": application_id,
+                    "source_sha256": source_sha256,
+                    "proposal_sha256": proposal_sha256,
+                    "pdf_sha256": pdf_sha256,
+                    "decision_sha256": decision_sha256,
+                },
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()[:24]
+        return cls(
+            id=f"resume_{identity}",
+            application_id=application_id,
+            generated_at=(generated_at or datetime.now(UTC)).isoformat(),
+            used_at=None,
+            source_sha256=source_sha256,
+            proposal_sha256=proposal_sha256,
+            pdf_sha256=pdf_sha256,
+            decision_sha256=decision_sha256,
+            project_ids=project_ids,
+            bullet_evidence_ids=bullet_evidence_ids,
+            validation=dict(validation),
+            quality=dict(quality),
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
 _SAFE_PATH_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_RESUME_MANIFEST_LOCK = RLock()
 _TERM_CYCLE = re.compile(
     r"^(?:(?P<season_a>spring|summer|fall|winter)[-_ ]*(?P<year_a>20\d{2})|"
     r"(?P<year_b>20\d{2})[-_ ]*(?P<season_b>spring|summer|fall|winter))$",
@@ -68,6 +159,7 @@ _LATEX_COMMAND = re.compile(r"\\[A-Za-z]+\*?(?:\[[^]]*\])?")
 _SPACE = re.compile(r"\s+")
 _LAYOUT_MARKER = re.compile(r"ERGA-RESUME-ITEM-(?P<state>FIT|WRAP|ORPHAN):(?P<index>\d+)")
 _PDF_BULLET_LINE = re.compile(r"^(?P<indent>\s*)[•●▪◦‣⁃]\s+(?P<text>.*\S)\s*$")
+_STANDARD_ITEM = re.compile(r"\\item(?![A-Za-z\[])", re.MULTILINE)
 _SINGLE_LINE_LAYOUT_INSTRUMENT = r"""
 \newlength{\ergaResumeItemWidth}
 \newcounter{ergaResumeItemCounter}
@@ -288,8 +380,71 @@ def resume_bullet_length_report(
 
 
 def resume_item_texts(latex_content: str) -> tuple[str, ...]:
-    """Return rendered text for every resume bullet in source order."""
-    return tuple(latex_to_text(value) for value in _command_arguments(latex_content, "resumeItem"))
+    """Return rendered text for custom-macro or standard LaTeX bullets in source order."""
+    # Ignore macro definitions in the preamble. Standard templates commonly use bare
+    # ``\item`` entries instead of defining Erga's historical ``\resumeItem`` helper.
+    document = latex_content.split(r"\begin{document}", 1)[-1]
+    custom: list[tuple[int, int, str]] = []
+    needle = r"\resumeItem"
+    position = 0
+    while (start := document.find(needle, position)) >= 0:
+        cursor = start + len(needle)
+        while cursor < len(document) and document[cursor].isspace():
+            cursor += 1
+        if cursor >= len(document) or document[cursor] != "{":
+            position = cursor
+            continue
+        depth = 0
+        end = cursor
+        while end < len(document):
+            character = document[end]
+            escaped = end > 0 and document[end - 1] == "\\"
+            if character == "{" and not escaped:
+                depth += 1
+            elif character == "}" and not escaped:
+                depth -= 1
+                if depth == 0:
+                    custom.append((start, end + 1, document[cursor + 1 : end]))
+                    position = end + 1
+                    break
+            end += 1
+        else:
+            raise ValueError("unterminated \\resumeItem argument")
+
+    standard_matches = tuple(
+        match
+        for match in _STANDARD_ITEM.finditer(document)
+        if not any(start <= match.start() < end for start, end, _ in custom)
+        and "skill"
+        not in re.sub(
+            r"[^a-z0-9]+",
+            "",
+            next(
+                (
+                    section.group(1).casefold()
+                    for section in reversed(
+                        tuple(re.finditer(r"(?m)^\\section\{([^}]+)\}", document[: match.start()]))
+                    )
+                ),
+                "",
+            ),
+        )
+    )
+    bullets: list[tuple[int, str]] = [(start, value) for start, _, value in custom]
+    boundaries = sorted(
+        [start for start, _, _ in custom]
+        + [match.start() for match in standard_matches]
+        + [len(document)]
+    )
+    for match in standard_matches:
+        next_item = next(boundary for boundary in boundaries if boundary > match.start())
+        list_end = re.search(r"\\end\{(?:itemize|enumerate|description)\}", document[match.end() :])
+        end = min(
+            next_item,
+            match.end() + list_end.start() if list_end is not None else len(document),
+        )
+        bullets.append((match.start(), document[match.end() : end]))
+    return tuple(rendered for _, value in sorted(bullets) if (rendered := latex_to_text(value)))
 
 
 def _safe_path_component(value: str) -> str:
@@ -340,6 +495,289 @@ def create_job_package(
     )
     restrict_private_file(manifest_path)
     return ResumePackage(package_dir=package_dir, manifest_path=manifest_path)
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _load_private_manifest(manifest_path: Path) -> dict[str, object]:
+    if manifest_path.is_symlink():
+        raise ValueError("package manifest must not be a symlink")
+    if manifest_path.parent.is_symlink():
+        raise ValueError("package directory must not be a symlink")
+    if manifest_path.name != "package.json" or not manifest_path.is_file():
+        raise ValueError("manifest_path must point to an existing package.json")
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("package manifest must be a JSON object")
+    return payload
+
+
+def _write_private_manifest(manifest_path: Path, payload: dict[str, object]) -> None:
+    with NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=manifest_path.parent,
+        prefix=".package-",
+        suffix=".json",
+        delete=False,
+    ) as temporary:
+        json.dump(payload, temporary, indent=2, sort_keys=True)
+        temporary.write("\n")
+        temporary.flush()
+        os.fsync(temporary.fileno())
+        temporary_path = Path(temporary.name)
+    try:
+        temporary_path.replace(manifest_path)
+        restrict_private_file(manifest_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+@contextmanager
+def _resume_manifest_transaction(manifest_path: Path):
+    """Serialize package-manifest read-modify-writes across threads and processes."""
+    lock_path = manifest_path.with_name(".package.lock")
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(lock_path, flags, 0o600)
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
+        if fcntl is not None:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        elif msvcrt is not None:  # pragma: no cover - exercised by Windows CI
+            os.write(descriptor, b"\0")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+        yield
+    finally:
+        if fcntl is not None:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        elif msvcrt is not None:  # pragma: no cover - exercised by Windows CI
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        os.close(descriptor)
+
+
+def update_private_manifest(
+    manifest_path: Path,
+    update: Callable[[dict[str, object]], None],
+) -> dict[str, object]:
+    """Apply one interprocess-safe package manifest mutation and return the persisted value."""
+    with _RESUME_MANIFEST_LOCK, _resume_manifest_transaction(manifest_path):
+        manifest = _load_private_manifest(manifest_path)
+        update(manifest)
+        _write_private_manifest(manifest_path, manifest)
+        return manifest
+
+
+def _resume_use_record_from_dict(value: object) -> ResumeUseRecord:
+    if not isinstance(value, dict):
+        raise ValueError("stored resume version must be an object")
+
+    def required_string(name: str) -> str:
+        item = value.get(name)
+        if not isinstance(item, str) or not item:
+            raise ValueError(f"stored resume version {name} must be a non-empty string")
+        return item
+
+    identifier = required_string("id")
+    application_id = required_string("application_id")
+    generated_at = required_string("generated_at")
+    raw_used_at = value.get("used_at")
+    if raw_used_at is not None and not isinstance(raw_used_at, str):
+        raise ValueError("stored resume version used_at must be a timestamp or null")
+    try:
+        datetime.fromisoformat(generated_at)
+        if raw_used_at is not None:
+            datetime.fromisoformat(raw_used_at)
+    except ValueError as error:
+        raise ValueError("stored resume version timestamps must be ISO-8601") from error
+    hashes = tuple(
+        required_string(name)
+        for name in ("source_sha256", "proposal_sha256", "pdf_sha256", "decision_sha256")
+    )
+    if any(re.fullmatch(r"[0-9a-f]{64}", item) is None for item in hashes):
+        raise ValueError("stored resume version hashes must be lowercase SHA-256 values")
+    raw_projects = value.get("project_ids", [])
+    raw_bullets = value.get("bullet_evidence_ids", [])
+    validation = value.get("validation")
+    quality = value.get("quality")
+    decision_version = value.get("decision_version", 1)
+    if not isinstance(raw_projects, list) or any(
+        not isinstance(item, str) for item in raw_projects
+    ):
+        raise ValueError("stored resume version project_ids must be strings")
+    if not isinstance(raw_bullets, list) or any(
+        not isinstance(ids, list) or any(not isinstance(item, str) for item in ids)
+        for ids in raw_bullets
+    ):
+        raise ValueError("stored resume version bullet provenance must be string lists")
+    if not isinstance(validation, dict) or not isinstance(quality, dict):
+        raise ValueError("stored resume version validation and quality must be objects")
+    if not isinstance(decision_version, int) or isinstance(decision_version, bool):
+        raise ValueError("stored resume version decision_version must be an integer")
+    return ResumeUseRecord(
+        id=identifier,
+        application_id=application_id,
+        generated_at=generated_at,
+        used_at=raw_used_at,
+        source_sha256=hashes[0],
+        proposal_sha256=hashes[1],
+        pdf_sha256=hashes[2],
+        decision_sha256=hashes[3],
+        project_ids=tuple(raw_projects),
+        bullet_evidence_ids=tuple(tuple(ids) for ids in raw_bullets),
+        validation=dict(validation),
+        quality=dict(quality),
+        decision_version=decision_version,
+    )
+
+
+def record_validated_resume_version(
+    *,
+    manifest_path: Path,
+    application_id: str,
+    source_path: Path,
+    proposal_path: Path,
+    pdf_path: Path,
+    decision_path: Path,
+    validation: dict[str, object],
+) -> ResumeUseRecord:
+    """Append one idempotent validated version, deriving claims from its decision artifact."""
+    package_root = manifest_path.parent.resolve()
+    if manifest_path.parent.is_symlink():
+        raise ValueError("package directory must not be a symlink")
+    for path in (source_path, proposal_path, pdf_path, decision_path):
+        resolved = path.resolve()
+        if path.is_symlink() or path.parent.is_symlink():
+            raise ValueError("resume version artifacts must not use symlinks")
+        if not resolved.is_file() or not resolved.is_relative_to(package_root):
+            raise ValueError("resume version artifacts must be files inside the package")
+    try:
+        decision = json.loads(decision_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("resume decision artifact must be readable JSON") from error
+    if not isinstance(decision, dict):
+        raise ValueError("resume decision artifact must contain an object")
+    quality = decision.get("master_parity")
+    catalogue = decision.get("catalogue")
+    raw_bullet_ids = decision.get("selected_bullet_evidence_ids")
+    if not isinstance(quality, dict) or quality.get("passed") is not True:
+        raise ValueError("resume decision artifact must record passing master parity")
+    if not isinstance(catalogue, dict) or not isinstance(catalogue.get("selected"), list):
+        raise ValueError("resume decision artifact must record selected projects")
+    project_ids = tuple(
+        item["project_id"]
+        for item in catalogue["selected"]
+        if isinstance(item, dict) and isinstance(item.get("project_id"), str)
+    )
+    if not isinstance(raw_bullet_ids, list) or any(
+        not isinstance(ids, list) or any(not isinstance(item, str) for item in ids)
+        for ids in raw_bullet_ids
+    ):
+        raise ValueError("resume decision artifact must record bullet evidence provenance")
+    bullet_evidence_ids = tuple(tuple(ids) for ids in raw_bullet_ids)
+    record = ResumeUseRecord.create(
+        application_id=application_id,
+        source_sha256=_sha256_path(source_path),
+        proposal_sha256=_sha256_path(proposal_path),
+        pdf_sha256=_sha256_path(pdf_path),
+        decision_sha256=_sha256_path(decision_path),
+        project_ids=project_ids,
+        bullet_evidence_ids=bullet_evidence_ids,
+        validation=validation,
+        quality=dict(quality),
+    )
+    with _RESUME_MANIFEST_LOCK, _resume_manifest_transaction(manifest_path):
+        manifest = _load_private_manifest(manifest_path)
+        raw_versions = manifest.get("resume_versions", [])
+        if not isinstance(raw_versions, list):
+            raise ValueError("package resume_versions must be a list")
+        versions = [_resume_use_record_from_dict(item) for item in raw_versions]
+        existing = next((item for item in versions if item.id == record.id), None)
+        if existing is not None:
+            if manifest.get("generated_resume_version_id") != existing.id:
+                manifest["generated_resume_version_id"] = existing.id
+                manifest.setdefault("used_resume_version_id", None)
+                _write_private_manifest(manifest_path, manifest)
+            return existing
+        versions.append(record)
+        manifest["resume_versions"] = [item.as_dict() for item in versions]
+        manifest["generated_resume_version_id"] = record.id
+        manifest.setdefault("used_resume_version_id", None)
+        _write_private_manifest(manifest_path, manifest)
+        return record
+
+
+def mark_resume_version_used(
+    *,
+    manifest_path: Path,
+    application_id: str,
+    version_id: str,
+    used_at: datetime | None = None,
+) -> ResumeUseRecord:
+    """Record explicit application use without erasing immutable generation history."""
+    with _RESUME_MANIFEST_LOCK, _resume_manifest_transaction(manifest_path):
+        manifest = _load_private_manifest(manifest_path)
+        raw_versions = manifest.get("resume_versions", [])
+        if not isinstance(raw_versions, list):
+            raise ValueError("package resume_versions must be a list")
+        versions = [_resume_use_record_from_dict(item) for item in raw_versions]
+        matched = next((item for item in versions if item.id == version_id), None)
+        if matched is None:
+            raise ValueError("resume version does not exist in this package")
+        if matched.application_id != application_id:
+            raise ValueError("resume version belongs to a different application")
+        if matched.validation.get("returncode") != 0 or matched.quality.get("passed") is not True:
+            raise ValueError("only a successfully validated resume version can be marked used")
+        current_id = manifest.get("used_resume_version_id")
+        if matched.used_at is not None and current_id == version_id:
+            return matched
+        timestamp = (used_at or datetime.now(UTC)).isoformat()
+        updated = replace(matched, used_at=matched.used_at or timestamp)
+        manifest["resume_versions"] = [
+            (updated if item.id == version_id else item).as_dict() for item in versions
+        ]
+        manifest["used_resume_version_id"] = version_id
+        _write_private_manifest(manifest_path, manifest)
+        return updated
+
+
+def find_resume_version_manifest(
+    *, output_root: Path, application_id: str, version_id: str
+) -> Path:
+    """Resolve one generated version inside the configured package root without path input."""
+    if not application_id.strip() or not version_id.startswith("resume_"):
+        raise ValueError("application_id and resume version ID are required")
+    root = output_root.expanduser().resolve()
+    matches: list[Path] = []
+    if root.is_dir() and not root.is_symlink():
+        for manifest_path in root.glob("*/*/package.json"):
+            if manifest_path.is_symlink() or not manifest_path.is_file():
+                continue
+            manifest_path.resolve().relative_to(root)
+            manifest = _load_private_manifest(manifest_path)
+            raw_versions = manifest.get("resume_versions", [])
+            if not isinstance(raw_versions, list):
+                continue
+            versions = [_resume_use_record_from_dict(item) for item in raw_versions]
+            if any(
+                item.id == version_id and item.application_id == application_id for item in versions
+            ):
+                matches.append(manifest_path)
+    if not matches:
+        raise ValueError("resume version does not exist for this application")
+    if len(matches) > 1:
+        raise ValueError("resume version is ambiguous across local packages")
+    return matches[0]
 
 
 _DISALLOWED_LATEX = ("\\input", "\\include", "\\write18", "\\immediate\\write")
@@ -631,11 +1069,17 @@ def validate_single_line_resume_items(
     if document_start < 0:
         raise ValueError("resume proposal must contain \\begin{document}")
     document = source[document_start:]
+    custom_item_count = len(_command_arguments(document, "resumeItem"))
     item_count = len(resume_item_texts(document))
-    instrumented = source.replace(
-        document_marker,
-        document_marker + _SINGLE_LINE_LAYOUT_INSTRUMENT,
-        1,
+    has_standard_items = item_count > custom_item_count
+    instrumented = (
+        source
+        if custom_item_count == 0
+        else source.replace(
+            document_marker,
+            document_marker + _SINGLE_LINE_LAYOUT_INSTRUMENT,
+            1,
+        )
     )
     latexmk_executable = resolve_latexmk_executable(latexmk)
     environment = os.environ.copy()
@@ -683,11 +1127,24 @@ def validate_single_line_resume_items(
         observed: dict[int, str] = {}
         for match in _LAYOUT_MARKER.finditer(f"{completed.stdout}\n{log}"):
             observed[int(match.group("index"))] = match.group("state")
-        if completed.returncode == 0 and set(observed) != set(range(1, item_count + 1)):
+        if completed.returncode == 0 and set(observed) != set(range(1, custom_item_count + 1)):
             raise ValueError(
                 "single-line layout validation did not observe every rendered resume bullet"
             )
         pdf_items = _pdf_resume_item_lines(temporary_path.with_suffix(".pdf"))
+        if (
+            completed.returncode == 0
+            and has_standard_items
+            and (pdf_items is None or len(pdf_items) != item_count)
+        ):
+            raise ValueError(
+                "single-line layout validation could not observe every standard LaTeX bullet"
+            )
+        wrapped_items = (
+            tuple(index for index, lines in enumerate(pdf_items) if len(lines) > 1)
+            if has_standard_items and pdf_items is not None
+            else tuple(index - 1 for index, state in sorted(observed.items()) if state != "FIT")
+        )
         rendered_orphans = (
             tuple(
                 index
@@ -701,9 +1158,7 @@ def validate_single_line_resume_items(
             command=command,
             returncode=completed.returncode,
             item_count=item_count,
-            wrapped_item_indices=tuple(
-                index - 1 for index, state in sorted(observed.items()) if state != "FIT"
-            ),
+            wrapped_item_indices=wrapped_items,
             stdout=completed.stdout,
             stderr=completed.stderr,
             orphan_item_indices=rendered_orphans,

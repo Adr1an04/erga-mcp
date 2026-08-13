@@ -122,6 +122,7 @@ from erga_mcp.resumes.sources import (
 from erga_mcp.resumes.template import ensure_resume_template, reset_resume_template
 from erga_mcp.store import ErgaStore
 from erga_mcp.tracking.contact_projection import project_recruiter_contacts
+from erga_mcp.tracking.mail_reconciliation import reconcile_mail_events
 from erga_mcp.tracking.onboarding import build_onboarding_card
 from erga_mcp.tracking.orbit import create_orbit_artifact, render_orbit_png
 from erga_mcp.tracking.reporting import render_history_digest
@@ -1683,6 +1684,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 source_url=args.source_url,
                 evidence_ids=args.evidence_id,
             )
+            if store.list_mail_events():
+                reconcile_mail_events(store, store.list_mail_events())
             _print_json(asdict(application))
             return 0
         if args.applications_command == "update-status":

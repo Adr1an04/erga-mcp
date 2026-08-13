@@ -75,6 +75,64 @@ class HermesJobUrlRouterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.router = _load_router()
 
+    def test_pending_resume_attachments_are_isolated_by_turn(self) -> None:
+        self.router._set_pending_attachment(
+            "session-1",
+            "/tmp/first.pdf",
+            turn_id="turn-1",
+            application_id="app-first",
+            resume_version_id="resume-first",
+        )
+        self.router._set_pending_attachment(
+            "session-1",
+            "/tmp/second.pdf",
+            turn_id="turn-2",
+            application_id="app-second",
+            resume_version_id="resume-second",
+        )
+
+        first = self.router._pop_pending_attachment("session-1", "turn-1")
+        second = self.router._pop_pending_attachment("session-1", "turn-2")
+
+        self.assertEqual(first[:3], ("/tmp/first.pdf", "app-first", "resume-first"))
+        self.assertEqual(second[:3], ("/tmp/second.pdf", "app-second", "resume-second"))
+
+    def test_legacy_finalizer_without_turn_id_delivers_overlapping_attachments_fifo(self) -> None:
+        for turn_id, name in (("turn-1", "first"), ("turn-2", "second")):
+            self.router._set_pending_attachment(
+                "session-1",
+                f"/tmp/{name}.pdf",
+                turn_id=turn_id,
+                application_id=f"app-{name}",
+                resume_version_id=f"resume-{name}",
+            )
+
+        first = self.router._pop_pending_attachment("session-1")
+        second = self.router._pop_pending_attachment("session-1")
+
+        self.assertEqual(first[:3], ("/tmp/first.pdf", "app-first", "resume-first"))
+        self.assertEqual(second[:3], ("/tmp/second.pdf", "app-second", "resume-second"))
+
+    def test_legacy_finalizer_matches_response_application_before_fifo(self) -> None:
+        for turn_id, name in (("turn-1", "first"), ("turn-2", "second")):
+            self.router._set_pending_attachment(
+                "session-1",
+                f"/tmp/{name}.pdf",
+                turn_id=turn_id,
+                application_id=f"app-{name}",
+                resume_version_id=f"resume-{name}",
+            )
+
+        second = self.router._pop_pending_attachment(
+            "session-1", response_text="Completed application app-second"
+        )
+        first = self.router._pop_pending_attachment(
+            "session-1", response_text="Completed application app-first"
+        )
+
+        self.assertEqual(second[:3], ("/tmp/second.pdf", "app-second", "resume-second"))
+        self.assertEqual(first[:3], ("/tmp/first.pdf", "app-first", "resume-first"))
+
     def test_component_tokens_are_user_bound_single_use_and_expire(self) -> None:
         clock = _FakeClock()
         tokens = self.router._ComponentTokenStore(
@@ -249,6 +307,7 @@ class HermesJobUrlRouterTests(unittest.TestCase):
                         "intake": {
                             "package_dir": str(package_dir),
                             "application_id": "app_synthetic",
+                            "generated_resume_version_id": "resume_synthetic",
                             "validation": {
                                 "pdf": "artifacts/Candidate_Resume.pdf",
                                 "returncode": 0,
@@ -258,9 +317,12 @@ class HermesJobUrlRouterTests(unittest.TestCase):
                 ),
                 json.dumps(
                     {
-                        "id": "app_synthetic",
+                        "application_id": "app_synthetic",
                         "status": "applied",
+                        "resume_version_id": "resume_synthetic",
+                        "used_generated_resume": True,
                         "tracker_updates": 1,
+                        "warnings": ["Tracker projection was not synchronized; retry locally."],
                     }
                 ),
             ]
@@ -323,9 +385,14 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertEqual(generating.attachments[0].path, str(pdf_path.resolve()))
         self.assertEqual(
             [button.label for button in generating.buttons],
-            ["✅ Yes, applied", "❌ Still drafting"],
+            [
+                "✅ Applied with this résumé",
+                "Applied another way",
+                "❌ Still drafting",
+            ],
         )
         self.assertIn("marked Applied", applied.text)
+        self.assertIn("Tracker projection was not synchronized", applied.text)
         self.assertEqual(applied.buttons, ())
         self.assertEqual(
             context.calls[0],
@@ -339,8 +406,116 @@ class HermesJobUrlRouterTests(unittest.TestCase):
             [
                 ("mcp__erga_mcp__execute_tailoring_plan", {"plan_id": "plan_example"}),
                 (
-                    "mcp__erga_mcp__update_application_status",
-                    {"application_id": "app_synthetic", "status": "applied"},
+                    "mcp__erga_mcp__confirm_application_submission",
+                    {
+                        "application_id": "app_synthetic",
+                        "status": "applied",
+                        "used_generated_resume": True,
+                        "resume_version_id": "resume_synthetic",
+                    },
+                ),
+            ],
+        )
+
+    def test_discord_mail_review_resolves_an_ambiguous_match_with_opaque_state(self) -> None:
+        class Button:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        class Response:
+            def __init__(self, *, text: str, buttons: tuple[Any, ...], **_: Any) -> None:
+                self.text = text
+                self.buttons = buttons
+
+        review = {
+            "id": "mail-review-synthetic",
+            "state": "review",
+            "candidates": [{"application_id": "app_synthetic"}],
+        }
+        card = {
+            "title": "Recruiting inbox review",
+            "summary": "application.interview · ambiguous candidates",
+            "fields": [
+                {
+                    "name": "1. Example — Software Engineer",
+                    "value": "Medium confidence · 70 · company_domain",
+                    "inline": False,
+                }
+            ],
+            "actions": [
+                {
+                    "action_id": "mail.reconcile.match:app_synthetic",
+                    "label": "Match Example",
+                    "instruction": "Confirm this local application.",
+                    "style": "primary",
+                },
+                {
+                    "action_id": "mail.reconcile.ignore",
+                    "label": "Ignore",
+                    "instruction": "Keep this message out of tracking.",
+                    "style": "secondary",
+                },
+            ],
+        }
+        context = _FakePluginContext(
+            results=[
+                json.dumps({"card": card, "review": review, "pending_count": 1}),
+                json.dumps({"card": card, "review": {**review, "state": "resolved"}}),
+                json.dumps(
+                    {
+                        "card": {
+                            "title": "Recruiting inbox review",
+                            "summary": "No recruiting messages currently need matching review.",
+                            "fields": [
+                                {"name": "Queue", "value": "All caught up.", "inline": False}
+                            ],
+                            "actions": [],
+                        },
+                        "review": None,
+                        "pending_count": 0,
+                    }
+                ),
+            ]
+        )
+        plugins = ModuleType("hermes_cli.plugins")
+        plugins.DiscordButton = Button
+        plugins.DiscordCommandResponse = Response
+        hermes_cli = ModuleType("hermes_cli")
+        hermes_cli.__version__ = "0.18.2"
+        hermes_cli.plugins = plugins
+
+        with patch.dict(sys.modules, {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins}):
+            self.router.register(context)
+            shown = context.commands["erga-mail-review"]("")
+            matched = context.discord_button_handlers["erga.card.action"](
+                type(
+                    "Interaction",
+                    (),
+                    {"payload": shown.buttons[0].payload, "user_id": "42"},
+                )()
+            )
+
+        self.assertEqual([button.label for button in shown.buttons], ["Match Example", "Ignore"])
+        self.assertIn("No recruiting messages", matched.text)
+        self.assertEqual(matched.buttons, ())
+        self.assertEqual(
+            context.calls,
+            [
+                (
+                    "mcp__erga_mcp__list_mail_reconciliation_reviews",
+                    {"review_id": ""},
+                ),
+                (
+                    "mcp__erga_mcp__resolve_mail_reconciliation",
+                    {
+                        "review_id": "mail-review-synthetic",
+                        "action": "match",
+                        "application_id": "app_synthetic",
+                    },
+                ),
+                (
+                    "mcp__erga_mcp__list_mail_reconciliation_reviews",
+                    {"review_id": ""},
                 ),
             ],
         )

@@ -23,10 +23,14 @@ master résumé. Imported résumés, mail, pages, descriptions, and attachments 
 - Ranks an approved project catalogue against a role.
 - Enriches projects with attributable local Git evidence.
 - Produces evidence-cited résumé proposals, diffs, claim reports, and validated PDFs.
+- Compares every tailored proposal with its own master, records the project decision and exact
+  validated version, and distinguishes generation from explicit application use.
 - Preserves the configured master/template structure and enforces page, density, line-wrap, and
   lead-verb constraints.
 - Projects selected records into Obsidian and classifies bounded Gmail or Zoho metadata when those
   integrations are explicitly enabled.
+- Reconciles recruiting mail with applications using privacy-safe signals and queues ambiguous
+  matches for explicit review.
 - Exposes capability-scoped tools to any MCP client over stdio, with authenticated loopback HTTP as
   an opt-in compatibility transport.
 

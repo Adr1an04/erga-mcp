@@ -148,7 +148,9 @@ from erga_mcp.resumes.ai_tailoring import (
 from erga_mcp.resumes.artifacts import (
     ResumeItemLayoutValidation,
     create_section_resume_proposal,
+    record_validated_resume_version,
     resume_item_texts,
+    update_private_manifest,
     validate_latex_proposal,
     validate_single_line_resume_items,
 )
@@ -175,6 +177,7 @@ from erga_mcp.resumes.tailoring import (
 )
 from erga_mcp.resumes.template import ensure_resume_template
 from erga_mcp.store import ErgaStore, SQLiteStoreFactory, StoreFactory
+from erga_mcp.tracking.mail_reconciliation import reconcile_mail_events
 
 _VISUAL_SPACING_MARKER = "% Erga visual spacing is template-controlled."
 _AUTO_PROJECT_BULLET_MIN = 1
@@ -1362,6 +1365,16 @@ def _realign_git_project_research(
     selected_ids = _selected_project_ids(project_selection)
     if selected_ids == _git_researched_project_ids(enrichment):
         return enrichment
+    if not selected_ids:
+        return GitProjectEnrichment(
+            candidates=(),
+            evidence=enrichment.evidence,
+            reports=(),
+            warnings=enrichment.warnings,
+            catalogue_candidate_count=enrichment.catalogue_candidate_count,
+            quality_rejections=enrichment.quality_rejections,
+            requires_spacing_fallback=enrichment.requires_spacing_fallback,
+        )
     refreshed = enrich_ranked_projects_from_git(
         candidates=enrichment.candidates,
         job_description=job_description,
@@ -1532,6 +1545,17 @@ def _require_constraint_valid_proposal(automatic: object) -> None:
         raise ValueError(
             "automatic tailored resume violates hard constraints: " + "; ".join(violations)
         )
+    proposal = getattr(automatic, "proposal", None)
+    decision_path = getattr(proposal, "decision_report_path", None)
+    if decision_path is None:
+        return
+    try:
+        decision = json.loads(Path(decision_path).read_text(encoding="utf-8"))
+    except (OSError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError("automatic tailored resume has no readable quality decision") from error
+    master_parity = decision.get("master_parity") if isinstance(decision, dict) else None
+    if not isinstance(master_parity, dict) or master_parity.get("passed") is not True:
+        raise ValueError("automatic tailored resume did not pass the master-quality floor")
 
 
 def _json_value(value: object) -> object:
@@ -1803,37 +1827,36 @@ def _upgrade_existing_tailoring(
             config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
         ),
     )
-    manifest_value.update(
-        {
-            "selection_strategy": str(
-                automatic.project_selection.get("strategy", "weighted_role_signal_coverage")
+    manifest_updates = {
+        "selection_strategy": str(
+            automatic.project_selection.get("strategy", "weighted_role_signal_coverage")
+        ),
+        "project_selections": automatic.project_selection.get("selected", []),
+        "git_project_research": list(enrichment.reports),
+        "integration_warnings": list(enrichment.warnings),
+        "tailoring": {
+            "changed_sections": list(automatic.changed_sections),
+            "meaningful_change": automatic.meaningful_change,
+            "snapshot_refreshed": snapshot_refreshed,
+            "template_refreshed": template_refreshed,
+            "version": TAILORING_VERSION,
+        },
+        "validation": {
+            "page_count": validation.page_count,
+            "page_fill_ratio": validation.page_fill_ratio,
+            "minimum_page_fill_ratio": validation.minimum_page_fill_ratio,
+            "pdf": (
+                Path(validation.pdf).relative_to(package_dir).as_posix()
+                if validation.pdf is not None
+                else None
             ),
-            "project_selections": automatic.project_selection.get("selected", []),
-            "git_project_research": list(enrichment.reports),
-            "integration_warnings": list(enrichment.warnings),
-            "tailoring": {
-                "changed_sections": list(automatic.changed_sections),
-                "meaningful_change": automatic.meaningful_change,
-                "snapshot_refreshed": snapshot_refreshed,
-                "template_refreshed": template_refreshed,
-                "version": TAILORING_VERSION,
-            },
-            "validation": {
-                "page_count": validation.page_count,
-                "page_fill_ratio": validation.page_fill_ratio,
-                "minimum_page_fill_ratio": validation.minimum_page_fill_ratio,
-                "pdf": (
-                    Path(validation.pdf).relative_to(package_dir).as_posix()
-                    if validation.pdf is not None
-                    else None
-                ),
-                "returncode": validation.returncode,
-                "skipped": validation.skipped,
-            },
-        }
-    )
-    manifest_path.write_text(
-        json.dumps(manifest_value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            "returncode": validation.returncode,
+            "skipped": validation.skipped,
+        },
+    }
+    manifest_value = update_private_manifest(
+        manifest_path,
+        lambda current: current.update(manifest_updates),
     )
     return _result_from_manifest(package_dir=package_dir, manifest=manifest_value, reused=True)
 
@@ -1859,6 +1882,8 @@ def _complete_intake_integrations(
     application_id: str | None = None
     tracker_notes: list[str] = []
     tracker_cycles: list[str] = []
+    generated_resume_version_id = result.generated_resume_version_id
+    used_resume_version_id = result.used_resume_version_id
     evidence_ids = _selected_evidence_ids(Path(result.selected_evidence))
     try:
         snapshot = Path(result.job_snapshot).read_text(encoding="utf-8")
@@ -1901,8 +1926,37 @@ def _complete_intake_integrations(
                 role=research.role,
             )
         application_id = application.id if application is not None else None
+        if application is not None and store.list_mail_events():
+            reconcile_mail_events(store, store.list_mail_events())
     except (OSError, ValueError) as error:
         warnings.append(f"Local application record was not synchronized: {error}")
+
+    if (
+        application_id is not None
+        and result.validation.returncode == 0
+        and result.validation.pdf is not None
+        and result.decision_report is not None
+    ):
+        try:
+            version = record_validated_resume_version(
+                manifest_path=package_dir / "package.json",
+                application_id=application_id,
+                source_path=package_dir / "source" / "resume.tex",
+                proposal_path=Path(result.proposal_tex),
+                pdf_path=Path(result.validation.pdf),
+                decision_path=Path(result.decision_report),
+                validation=cast(dict[str, object], result.validation.model_dump(mode="python")),
+            )
+            generated_resume_version_id = version.id
+            manifest_value = json.loads((package_dir / "package.json").read_text(encoding="utf-8"))
+            if isinstance(manifest_value, dict) and isinstance(
+                manifest_value.get("used_resume_version_id"), str
+            ):
+                used_resume_version_id = cast(str, manifest_value["used_resume_version_id"])
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise RuntimeError(
+                "validated résumé version could not be recorded in its private package"
+            ) from error
 
     if config.tracker.enabled:
         if config.tracker.tracker_dir is None:
@@ -1945,6 +1999,8 @@ def _complete_intake_integrations(
         update={
             "research_note": str(research_path) if research_path is not None else None,
             "application_id": application_id,
+            "generated_resume_version_id": generated_resume_version_id,
+            "used_resume_version_id": used_resume_version_id,
             "tracker_notes": tracker_notes,
             "tracker_cycles": tracker_cycles,
             "integration_warnings": warnings,
@@ -1964,6 +2020,7 @@ def _result_from_manifest(
     proposal_tex = package_dir / "artifacts" / "proposal.tex"
     diff = package_dir / "artifacts" / "proposal.diff"
     claim_report = package_dir / "artifacts" / "claim-report.json"
+    decision_report = package_dir / "artifacts" / "resume-decision.json"
     required = (job_snapshot, selected_evidence, proposal_tex, diff, claim_report)
     if any(not path.is_file() for path in required):
         raise FileExistsError(
@@ -2024,6 +2081,7 @@ def _result_from_manifest(
         proposal_tex=str(proposal_tex),
         diff=str(diff),
         claim_report=str(claim_report),
+        decision_report=str(decision_report) if decision_report.is_file() else None,
         validation=_validation_from_manifest(
             package_dir=package_dir, manifest=manifest, reused=reused
         ),
@@ -2031,6 +2089,16 @@ def _result_from_manifest(
         tailoring_changed_sections=tailoring_changed_sections,
         tailoring_version=tailoring_version,
         integration_warnings=integration_warnings,
+        generated_resume_version_id=(
+            cast(str, manifest["generated_resume_version_id"])
+            if isinstance(manifest.get("generated_resume_version_id"), str)
+            else None
+        ),
+        used_resume_version_id=(
+            cast(str, manifest["used_resume_version_id"])
+            if isinstance(manifest.get("used_resume_version_id"), str)
+            else None
+        ),
         reused=reused,
     )
 
@@ -2434,11 +2502,9 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             backup_dir = repaired_package / "legacy-backup"
             quarantine.rename(backup_dir)
             repaired_manifest_path = repaired_package / "package.json"
-            repaired_manifest = json.loads(repaired_manifest_path.read_text(encoding="utf-8"))
-            repaired_manifest["legacy_backup"] = "legacy-backup"
-            repaired_manifest_path.write_text(
-                json.dumps(repaired_manifest, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
+            update_private_manifest(
+                repaired_manifest_path,
+                lambda current: current.__setitem__("legacy_backup", "legacy-backup"),
             )
             return repaired.model_copy(
                 update={
@@ -2664,50 +2730,46 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 ),
                 abandon_on_cancel=True,
             )
-            manifest = json.loads(workspace.package.manifest_path.read_text(encoding="utf-8"))
-            manifest.update(
-                {
-                    "job_identity": _job_identity(job_url),
-                    "selection_strategy": str(
-                        automatic.project_selection.get("strategy", selection_strategy)
-                    ),
-                    "project_selections": automatic.project_selection.get("selected", []),
-                    "git_project_research": list(enrichment.reports),
-                    "integration_warnings": list(enrichment.warnings),
-                    "tailoring_plan": (
-                        {
-                            "id": tailoring_plan.id,
-                            "preferences": asdict(preferences),
-                        }
-                        if tailoring_plan is not None and preferences is not None
+            manifest_updates = {
+                "job_identity": _job_identity(job_url),
+                "selection_strategy": str(
+                    automatic.project_selection.get("strategy", selection_strategy)
+                ),
+                "project_selections": automatic.project_selection.get("selected", []),
+                "git_project_research": list(enrichment.reports),
+                "integration_warnings": list(enrichment.warnings),
+                "tailoring_plan": (
+                    {
+                        "id": tailoring_plan.id,
+                        "preferences": asdict(preferences),
+                    }
+                    if tailoring_plan is not None and preferences is not None
+                    else None
+                ),
+                "status": "complete",
+                "tailoring": {
+                    "changed_sections": list(automatic.changed_sections),
+                    "meaningful_change": automatic.meaningful_change,
+                    "snapshot_refreshed": False,
+                    "version": TAILORING_VERSION,
+                },
+                "template_status": "copied",
+                "validation": {
+                    "pdf": (
+                        Path(validation.pdf).relative_to(workspace.package.package_dir).as_posix()
+                        if validation.pdf is not None
                         else None
                     ),
-                    "status": "complete",
-                    "tailoring": {
-                        "changed_sections": list(automatic.changed_sections),
-                        "meaningful_change": automatic.meaningful_change,
-                        "snapshot_refreshed": False,
-                        "version": TAILORING_VERSION,
-                    },
-                    "template_status": "copied",
-                    "validation": {
-                        "pdf": (
-                            Path(validation.pdf)
-                            .relative_to(workspace.package.package_dir)
-                            .as_posix()
-                            if validation.pdf is not None
-                            else None
-                        ),
-                        "page_count": validation.page_count,
-                        "page_fill_ratio": validation.page_fill_ratio,
-                        "minimum_page_fill_ratio": validation.minimum_page_fill_ratio,
-                        "returncode": validation.returncode,
-                        "skipped": validation.skipped,
-                    },
-                }
-            )
-            workspace.package.manifest_path.write_text(
-                json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+                    "page_count": validation.page_count,
+                    "page_fill_ratio": validation.page_fill_ratio,
+                    "minimum_page_fill_ratio": validation.minimum_page_fill_ratio,
+                    "returncode": validation.returncode,
+                    "skipped": validation.skipped,
+                },
+            }
+            manifest = update_private_manifest(
+                workspace.package.manifest_path,
+                lambda current: current.update(manifest_updates),
             )
             try:
                 workspace.package.package_dir.rename(final_package_dir)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
+from threading import Lock
 from typing import Annotated, cast
 
 from mcp.server.mcpserver import Context
@@ -25,6 +26,7 @@ from erga_mcp.mcp.profiles import (
     profile_visible_evidence,
 )
 from erga_mcp.mcp.registry import ToolRegistry
+from erga_mcp.models import MailReconciliation
 from erga_mcp.portfolio.catalogue import build_project_catalogue
 from erga_mcp.portfolio.github import discover_github_projects
 from erga_mcp.portfolio.metrics import propose_git_project_metrics
@@ -35,13 +37,101 @@ from erga_mcp.portfolio.skills import (
     explicit_skills_in_texts,
     reconcile_git_skill_groups,
 )
+from erga_mcp.resumes.artifacts import (
+    find_resume_version_manifest,
+)
+from erga_mcp.resumes.artifacts import (
+    mark_resume_version_used as mark_generated_resume_used,
+)
 from erga_mcp.resumes.sources import resume_source_context as build_resume_source_context
 from erga_mcp.store import ErgaStore
+from erga_mcp.tracking.cards import CardField, CardView
 from erga_mcp.tracking.contact_projection import project_recruiter_contacts
+from erga_mcp.tracking.mail_reconciliation import (
+    mail_reconciliation_card,
+    reconcile_mail_events,
+)
+from erga_mcp.tracking.mail_reconciliation import (
+    resolve_mail_reconciliation as resolve_mail_review,
+)
 from erga_mcp.tracking.onboarding import build_onboarding_card
 
 JsonValue = Callable[[object], object]
 GitResearchReport = Callable[[ErgaStore, list[str]], dict[str, object]]
+_SUBMISSION_CONFIRMATION_LOCK = Lock()
+
+
+def _confirm_submission_locally(
+    *,
+    store: ErgaStore,
+    config: ErgaConfig,
+    config_path: Path,
+    application_id: str,
+    status: str,
+    used_generated_resume: bool,
+    resume_version_id: str,
+) -> dict[str, object]:
+    """Serialize the cross-store confirmation and compensate a rare manifest write failure."""
+    with _SUBMISSION_CONFIRMATION_LOCK:
+        application = next(
+            (item for item in store.list_applications() if item.id == application_id), None
+        )
+        if application is None:
+            raise ValueError("application does not exist")
+        if status not in {"applied", "draft"}:
+            raise ValueError("confirmation status must be applied or draft")
+        if status != "applied" and used_generated_resume:
+            raise ValueError("a generated résumé can only be marked used for an applied role")
+        manifest_path: Path | None = None
+        if used_generated_resume:
+            manifest_path = find_resume_version_manifest(
+                output_root=load_config(config_path).resume.output_root,
+                application_id=application_id,
+                version_id=resume_version_id,
+            )
+        previous_status = application.status
+        updated = store.update_application_status(application_id, status=status)
+        record = None
+        if manifest_path is not None:
+            try:
+                record = mark_generated_resume_used(
+                    manifest_path=manifest_path,
+                    application_id=application_id,
+                    version_id=resume_version_id,
+                )
+            except (OSError, ValueError):
+                if previous_status != updated.status:
+                    store.update_application_status(application_id, status=previous_status)
+                raise
+        tracker_updates = 0
+        warnings: list[str] = []
+        if config.tracker.enabled and config.tracker.tracker_dir is not None:
+            try:
+                tracker_updates = reconcile_application_status_tracker_rows(
+                    tracker_dir=config.tracker.tracker_dir,
+                    applications=store.list_applications(),
+                )
+            except (OSError, RuntimeError, ValueError):
+                # Provider and filesystem exceptions can embed private absolute paths. The
+                # detailed exception remains local to the failing call; external adapters get a
+                # fixed, actionable warning only.
+                warnings.append("Tracker projection was not synchronized; retry locally.")
+        return {
+            "application_id": application_id,
+            "status": updated.status,
+            "resume_version_id": record.id if record is not None else None,
+            "used_generated_resume": record is not None and record.used,
+            "used_at": record.used_at if record is not None else None,
+            "tracker_updates": tracker_updates,
+            "warnings": warnings,
+        }
+
+
+def _mail_review_payload(value: MailReconciliation, *, json_value: JsonValue) -> dict[str, object]:
+    """Expose review state without raw provider message identifiers."""
+    payload = cast(dict[str, object], json_value(asdict(value)))
+    payload.pop("message_id", None)
+    return payload
 
 
 def register_workspace_tools(
@@ -80,6 +170,33 @@ def register_workspace_tools(
         payload = cast(dict[str, object], json_value(asdict(application)))
         payload["tracker_updates"] = tracker_updates
         return payload
+
+    @registry.tool(
+        "confirm_application_submission",
+        title="Confirm local application submission and résumé use",
+        description=(
+            "Apply one explicit user confirmation to the local tracker and, when selected, "
+            "record the exact validated generated résumé version used. The package is resolved "
+            "from Erga's configured output root; callers cannot provide a filesystem path."
+        ),
+        annotations=LOCAL_IDEMPOTENT_WRITE,
+    )
+    def confirm_application_submission(
+        application_id: str,
+        status: str,
+        used_generated_resume: bool = False,
+        resume_version_id: str = "",
+    ) -> dict[str, object]:
+        """Persist submission and exact résumé use as one guarded local operation."""
+        return _confirm_submission_locally(
+            store=store,
+            config=config,
+            config_path=config_path,
+            application_id=application_id,
+            status=status,
+            used_generated_resume=used_generated_resume,
+            resume_version_id=resume_version_id,
+        )
 
     @registry.tool(
         "refresh_project_catalogue",
@@ -268,6 +385,89 @@ def register_workspace_tools(
         return [
             cast(dict[str, object], json_value(asdict(event))) for event in store.list_mail_events()
         ]
+
+    @registry.tool(
+        "list_mail_reconciliation_reviews",
+        title="Review ambiguous recruiting mail",
+        description=(
+            "Return one private, presentation-neutral recruiting-mail review card with ranked "
+            "local application candidates, confidence, and signal provenance. Message bodies, "
+            "previews, tracking URLs, and raw provider identifiers are never returned."
+        ),
+        annotations=READ_ONLY,
+    )
+    def list_mail_reconciliation_reviews(review_id: str = "") -> dict[str, object]:
+        pending = [
+            item
+            for item in store.list_mail_reconciliations()
+            if item.state in {"review", "unmatched"}
+        ]
+        normalized = review_id.strip()
+        selected = next((item for item in pending if item.id == normalized), None)
+        if normalized and selected is None:
+            raise ValueError("mail reconciliation review does not exist or is no longer pending")
+        selected = selected or (pending[0] if pending else None)
+        if selected is None:
+            card = CardView(
+                title="Recruiting inbox review",
+                summary="No recruiting messages currently need matching review.",
+                fields=(CardField("Queue", "All caught up."),),
+            )
+            return {"card": card.as_dict(), "review": None, "pending_count": 0}
+        return {
+            "card": mail_reconciliation_card(selected).as_dict(),
+            "review": _mail_review_payload(selected, json_value=json_value),
+            "pending_count": len(pending),
+        }
+
+    @registry.tool(
+        "retry_mail_reconciliation",
+        title="Retry historical recruiting-mail matching",
+        description=(
+            "Re-evaluate retained metadata-only mail events against current local application "
+            "records. Ambiguous results remain review-only and no remote mailbox is changed."
+        ),
+        annotations=LOCAL_IDEMPOTENT_WRITE,
+    )
+    def retry_mail_reconciliation() -> dict[str, object]:
+        summary = reconcile_mail_events(store, store.list_mail_events())
+        pending = [
+            item
+            for item in store.list_mail_reconciliations()
+            if item.state in {"review", "unmatched"}
+        ]
+        result: dict[str, object] = {
+            "summary": cast(dict[str, object], json_value(asdict(summary))),
+            "pending_count": len(pending),
+        }
+        if pending:
+            result["card"] = mail_reconciliation_card(pending[0]).as_dict()
+            result["review"] = _mail_review_payload(pending[0], json_value=json_value)
+        return result
+
+    @registry.tool(
+        "resolve_mail_reconciliation",
+        title="Resolve one recruiting-mail match",
+        description=(
+            "Apply an explicit match or ignore decision to one private local mail review. A "
+            "match may perform a guarded local application-status update; it never sends mail "
+            "or mutates a remote mailbox."
+        ),
+        annotations=LOCAL_IDEMPOTENT_WRITE,
+    )
+    def resolve_mail_reconciliation(
+        review_id: str, action: str, application_id: str = ""
+    ) -> dict[str, object]:
+        resolved = resolve_mail_review(
+            store,
+            review_id,
+            action=action,
+            application_id=application_id,
+        )
+        return {
+            "review": _mail_review_payload(resolved, json_value=json_value),
+            "card": mail_reconciliation_card(resolved).as_dict(),
+        }
 
     @registry.tool("token_usage", annotations=READ_ONLY)
     def token_usage(application_id: str = "") -> dict[str, object]:
@@ -472,26 +672,37 @@ def register_workspace_tools(
         sync_result = sync_metadata(store, new_messages)
         tracker_updates = 0
         tracker_imports = 0
+        warnings: list[str] = []
         if config.tracker.enabled and config.tracker.tracker_dir is not None:
-            tracker_updates = reconcile_application_status_tracker_rows(
-                tracker_dir=config.tracker.tracker_dir,
-                applications=store.list_applications(),
-            )
-            tracker_updates += reconcile_confirmed_application_tracker_rows(
-                tracker_dir=config.tracker.tracker_dir,
-                events=store.list_mail_events(),
-            )
-            tracker_imports = import_confirmed_application_tracker_rows(
-                tracker_dir=config.tracker.tracker_dir,
-                active_cycles=config.tracker.active_cycles,
-                events=store.list_mail_events(),
-            )
+            try:
+                tracker_updates = reconcile_application_status_tracker_rows(
+                    tracker_dir=config.tracker.tracker_dir,
+                    applications=store.list_applications(),
+                )
+                tracker_updates += reconcile_confirmed_application_tracker_rows(
+                    tracker_dir=config.tracker.tracker_dir,
+                    events=store.list_mail_events(),
+                )
+                tracker_imports = import_confirmed_application_tracker_rows(
+                    tracker_dir=config.tracker.tracker_dir,
+                    active_cycles=config.tracker.active_cycles,
+                    events=store.list_mail_events(),
+                )
+            except (OSError, RuntimeError, ValueError):
+                warnings.append("Tracker projection was not synchronized; retry locally.")
         tracker_rows_updated = tracker_updates + tracker_imports
-        contacts_projected = project_recruiter_contacts(
-            store.list_recruiter_contacts(), config.contact_outputs
-        )
+        try:
+            contacts_projected = project_recruiter_contacts(
+                store.list_recruiter_contacts(), config.contact_outputs
+            )
+        except (OSError, RuntimeError, ValueError):
+            contacts_projected = 0
+            warnings.append("Contact projection was not synchronized; retry locally.")
         created = cast(int, sync_result["created"])
         recruiting_events = cast(int, sync_result["application"]) + cast(int, sync_result["job"])
+        pending_reviews = sum(
+            item.state in {"review", "unmatched"} for item in store.list_mail_reconciliations()
+        )
         message = (
             "📬 **Erga mail sync complete**\n\n"
             f"{config.mail_provider.title()} {config.mail_folder} checked: "
@@ -500,6 +711,13 @@ def register_workspace_tools(
             f"{tracker_rows_updated} tracker rows updated · "
             f"{contacts_projected} contacts projected."
         )
+        if pending_reviews:
+            message += (
+                f"\n{pending_reviews} inbox match"
+                f"{'es' if pending_reviews != 1 else ''} need review; use `/erga-mail-review`."
+            )
+        if warnings:
+            message += "\n⚠️ " + " ".join(warnings)
         return {
             "provider": config.mail_provider,
             "fetched": len(messages),
@@ -508,5 +726,7 @@ def register_workspace_tools(
             "tracker_updates": tracker_rows_updated,
             "tracker_imports": tracker_imports,
             "contacts_projected": contacts_projected,
+            "mail_reviews_pending": pending_reviews,
+            "warnings": warnings,
             "message": message,
         }

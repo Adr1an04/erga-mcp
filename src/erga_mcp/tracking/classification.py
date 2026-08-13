@@ -59,6 +59,16 @@ _NON_APPLICATION_MARKERS = (
     "trial for",
     "unsubscribe",
 )
+_STRONG_NON_APPLICATION_SUBJECT_MARKERS = (
+    "job alert",
+    "recommended jobs",
+    "security alert",
+    "trial ended",
+    "trial has ended",
+)
+_COHERENT_NON_APPLICATION_MARKERS = tuple(
+    marker for marker in _NON_APPLICATION_MARKERS if marker != "unsubscribe"
+)
 _ACKNOWLEDGEMENT_MARKERS = (
     "we received your application",
     "application received",
@@ -70,7 +80,12 @@ _ACKNOWLEDGEMENT_MARKERS = (
 
 def classify_application_message(*, subject: str, preview: str) -> Classification:
     """Classify a message conservatively without following message instructions."""
+    normalized_subject = subject.casefold()
     content = f"{subject}\n{preview}".casefold()
+    if any(marker in normalized_subject for marker in _STRONG_NON_APPLICATION_SUBJECT_MARKERS):
+        return Classification(kind="unknown", confidence=0.0, requires_review=False)
+    if any(marker in content for marker in _COHERENT_NON_APPLICATION_MARKERS):
+        return Classification(kind="unknown", confidence=0.0, requires_review=False)
     if any(marker in content for marker in _DENIAL_MARKERS):
         return Classification(kind="denial", confidence=0.95, requires_review=True)
     if any(marker in content for marker in _OFFER_MARKERS):
@@ -79,8 +94,8 @@ def classify_application_message(*, subject: str, preview: str) -> Classificatio
         return Classification(kind="interview", confidence=0.98, requires_review=True)
     if any(marker in content for marker in _ASSESSMENT_MARKERS):
         return Classification(kind="assessment", confidence=0.98, requires_review=True)
-    if any(marker in content for marker in _NON_APPLICATION_MARKERS):
-        return Classification(kind="unknown", confidence=0.0, requires_review=False)
     if any(marker in content for marker in _ACKNOWLEDGEMENT_MARKERS):
         return Classification(kind="acknowledgement", confidence=0.9, requires_review=False)
+    if "unsubscribe" in content:
+        return Classification(kind="unknown", confidence=0.0, requires_review=False)
     return Classification(kind="unknown", confidence=0.0, requires_review=True)

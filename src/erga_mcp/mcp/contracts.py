@@ -36,11 +36,14 @@ class IntakeJobResult(BaseModel):
     diff: str
     claim_report: str
     validation: IntakeValidationResult
+    decision_report: str | None = None
     tailoring_meaningful_change: bool = False
     tailoring_changed_sections: list[str] = Field(default_factory=list)
     tailoring_version: int | None = None
     research_note: str | None = None
     application_id: str | None = None
+    generated_resume_version_id: str | None = None
+    used_resume_version_id: str | None = None
     tracker_notes: list[str] = Field(default_factory=list)
     tracker_cycles: list[str] = Field(default_factory=list)
     integration_warnings: list[str] = Field(default_factory=list)

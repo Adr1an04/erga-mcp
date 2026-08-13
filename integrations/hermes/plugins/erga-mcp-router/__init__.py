@@ -30,6 +30,9 @@ _DEFAULT_RESEARCH_NAVIGATOR_TOOL_NAME = "mcp__erga_mcp__research_navigator"
 _DEFAULT_DISCOVERY_RESEARCH_TOOL_NAME = "mcp__erga_mcp__discover_job_research"
 _DEFAULT_RESEARCH_BRIEF_TOOL_NAME = "mcp__erga_mcp__create_research_brief"
 _DEFAULT_MAIL_SYNC_TOOL_NAME = "mcp__erga_mcp__sync_recruiting_mail"
+_DEFAULT_MAIL_REVIEW_TOOL_NAME = "mcp__erga_mcp__list_mail_reconciliation_reviews"
+_DEFAULT_MAIL_RETRY_TOOL_NAME = "mcp__erga_mcp__retry_mail_reconciliation"
+_DEFAULT_MAIL_RESOLVE_TOOL_NAME = "mcp__erga_mcp__resolve_mail_reconciliation"
 _DEFAULT_GIT_RESEARCH_TOOL_NAME = "mcp__erga_mcp__research_git_worktrees"
 _DEFAULT_GIT_REVIEW_TOOL_NAME = "mcp__erga_mcp__review_git_drafts"
 _DEFAULT_ONBOARDING_TOOL_NAME = "mcp__erga_mcp__onboarding_status"
@@ -43,7 +46,7 @@ _DEFAULT_PROJECT_CATALOGUE_REFRESH_TOOL_NAME = "mcp__erga_mcp__refresh_project_c
 _DEFAULT_TAILORING_PLAN_CREATE_TOOL_NAME = "mcp__erga_mcp__create_tailoring_plan"
 _DEFAULT_TAILORING_PLAN_UPDATE_TOOL_NAME = "mcp__erga_mcp__update_tailoring_plan"
 _DEFAULT_TAILORING_PLAN_EXECUTE_TOOL_NAME = "mcp__erga_mcp__execute_tailoring_plan"
-_DEFAULT_APPLICATION_STATUS_TOOL_NAME = "mcp__erga_mcp__update_application_status"
+_DEFAULT_APPLICATION_CONFIRMATION_TOOL_NAME = "mcp__erga_mcp__confirm_application_submission"
 _DEFAULT_CRON_TOOL_NAME = "cronjob"
 _DEFAULT_TOKEN_TOOL_NAME = "mcp__erga_mcp__record_token_usage"
 _DISCORD_CONTENT_LIMIT = 2_000
@@ -140,7 +143,9 @@ _NON_PAGE_SUFFIXES = (
 _MAX_REMEMBERED_TURNS = 1024
 _ROUTED_TURNS: OrderedDict[tuple[str, str, str], str | None] = OrderedDict()
 _ROUTED_TURNS_LOCK = threading.Lock()
-_PENDING_ATTACHMENTS: OrderedDict[str, tuple[str, str | None, str | None]] = OrderedDict()
+_PENDING_ATTACHMENTS: OrderedDict[
+    tuple[str, str], tuple[str, str | None, str | None, str | None]
+] = OrderedDict()
 _PENDING_ATTACHMENTS_LOCK = threading.Lock()
 _PENDING_TOKEN_APPLICATIONS: OrderedDict[tuple[str, str], str] = OrderedDict()
 _PENDING_TOKEN_APPLICATIONS_LOCK = threading.Lock()
@@ -754,40 +759,62 @@ def _secondary_research(
     }
 
 
-def _clear_pending_attachment(session_id: str) -> None:
+def _clear_pending_attachment(session_id: str, turn_id: str = "") -> None:
     if not session_id:
         return
     with _PENDING_ATTACHMENTS_LOCK:
-        _PENDING_ATTACHMENTS.pop(session_id, None)
+        _PENDING_ATTACHMENTS.pop((session_id, turn_id), None)
 
 
 def _set_pending_attachment(
     session_id: str,
     pdf_path: str | None,
     *,
+    turn_id: str = "",
     application_id: str | None = None,
+    resume_version_id: str | None = None,
     owner_user_id: str | None = None,
 ) -> None:
     if not session_id or pdf_path is None:
         return
     with _PENDING_ATTACHMENTS_LOCK:
-        _PENDING_ATTACHMENTS[session_id] = (
+        key = (session_id, turn_id)
+        _PENDING_ATTACHMENTS[key] = (
             pdf_path,
             application_id,
+            resume_version_id,
             owner_user_id,
         )
-        _PENDING_ATTACHMENTS.move_to_end(session_id)
+        _PENDING_ATTACHMENTS.move_to_end(key)
         while len(_PENDING_ATTACHMENTS) > _MAX_REMEMBERED_TURNS:
             _PENDING_ATTACHMENTS.popitem(last=False)
 
 
 def _pop_pending_attachment(
     session_id: str,
-) -> tuple[str, str | None, str | None] | None:
+    turn_id: str = "",
+    response_text: str = "",
+) -> tuple[str, str | None, str | None, str | None] | None:
     if not session_id:
         return None
     with _PENDING_ATTACHMENTS_LOCK:
-        return _PENDING_ATTACHMENTS.pop(session_id, None)
+        exact = _PENDING_ATTACHMENTS.pop((session_id, turn_id), None)
+        if exact is not None or turn_id:
+            return exact
+        matches = [key for key in _PENDING_ATTACHMENTS if key[0] == session_id]
+        response_matches = [
+            key
+            for key in matches
+            if any(
+                identifier and identifier in response_text
+                for identifier in _PENDING_ATTACHMENTS[key][1:3]
+            )
+        ]
+        if len(response_matches) == 1:
+            return _PENDING_ATTACHMENTS.pop(response_matches[0], None)
+        # Older Hermes finalizers omit turn_id. Preserve completion-order delivery instead of
+        # silently dropping every attachment when two turns in one Discord session overlap.
+        return _PENDING_ATTACHMENTS.pop(matches[0], None) if matches else None
 
 
 def _application_id_from_result(result: object) -> str | None:
@@ -797,6 +824,19 @@ def _application_id_from_result(result: object) -> str | None:
             application_id
             for item in _nested_objects(result)
             if isinstance((application_id := item.get("application_id")), str) and application_id
+        ),
+        None,
+    )
+
+
+def _resume_version_id_from_result(result: object) -> str | None:
+    """Extract the immutable generated résumé version attached by the intake pipeline."""
+    return next(
+        (
+            version_id
+            for item in _nested_objects(result)
+            if isinstance((version_id := item.get("generated_resume_version_id")), str)
+            and version_id
         ),
         None,
     )
@@ -1016,9 +1056,16 @@ def register(
         "ERGA_MCP_TAILORING_PLAN_EXECUTE_TOOL",
         _DEFAULT_TAILORING_PLAN_EXECUTE_TOOL_NAME,
     ).strip()
-    application_status_tool = os.getenv(
-        "ERGA_MCP_APPLICATION_STATUS_TOOL",
-        _DEFAULT_APPLICATION_STATUS_TOOL_NAME,
+    mail_review_tool = os.getenv(
+        "ERGA_MCP_MAIL_REVIEW_TOOL", _DEFAULT_MAIL_REVIEW_TOOL_NAME
+    ).strip()
+    mail_retry_tool = os.getenv("ERGA_MCP_MAIL_RETRY_TOOL", _DEFAULT_MAIL_RETRY_TOOL_NAME).strip()
+    mail_resolve_tool = os.getenv(
+        "ERGA_MCP_MAIL_RESOLVE_TOOL", _DEFAULT_MAIL_RESOLVE_TOOL_NAME
+    ).strip()
+    application_confirmation_tool = os.getenv(
+        "ERGA_MCP_APPLICATION_CONFIRMATION_TOOL",
+        _DEFAULT_APPLICATION_CONFIRMATION_TOOL_NAME,
     ).strip()
     cron_tool = os.getenv("ERGA_MCP_CRON_TOOL", _DEFAULT_CRON_TOOL_NAME).strip()
     token_tool = os.getenv("ERGA_MCP_TOKEN_TOOL", _DEFAULT_TOKEN_TOOL_NAME).strip()
@@ -1115,7 +1162,7 @@ def register(
         **_: Any,
     ) -> dict[str, str] | None:
         # Clear an interrupted turn's undelivered file before evaluating the next message.
-        _clear_pending_attachment(session_id)
+        _clear_pending_attachment(session_id, turn_id)
         job_url = extract_job_url(user_message or "")
         if job_url is None:
             return None
@@ -1159,7 +1206,9 @@ def register(
         _set_pending_attachment(
             session_id,
             _validated_pdf_from_result(result),
+            turn_id=turn_id,
             application_id=application_id,
+            resume_version_id=_resume_version_id_from_result(result),
             owner_user_id=sender_id or None,
         )
         return {
@@ -1187,13 +1236,14 @@ def register(
     def attach_validated_resume(
         response_text: str,
         session_id: str = "",
+        turn_id: str = "",
         platform: str = "",
         **_: Any,
     ) -> str | None:
-        pending = _pop_pending_attachment(session_id)
+        pending = _pop_pending_attachment(session_id, turn_id, response_text)
         if pending is None or platform.strip().casefold() in _NON_MESSAGING_PLATFORMS:
             return None
-        pdf_path, application_id, owner_user_id = pending
+        pdf_path, application_id, resume_version_id, owner_user_id = pending
         status_prompt = ""
         button_directive = ""
         if (
@@ -1206,6 +1256,7 @@ def register(
             button_token = register_message_buttons(
                 application_status_buttons(
                     application_id,
+                    resume_version_id=resume_version_id,
                     owner_user_id=owner_user_id,
                 )
             )
@@ -1286,18 +1337,33 @@ def register(
     def application_status_buttons(
         application_id: str,
         *,
+        resume_version_id: str | None = None,
         owner_user_id: str,
-    ) -> tuple[Any, Any]:
+    ) -> tuple[Any, ...]:
         """Bind submission confirmation to the exact generated application record."""
         assert DiscordButton is not None
         buttons = []
-        for label, status, style in (
-            ("✅ Yes, applied", "applied", "success"),
-            ("❌ Still drafting", "draft", "secondary"),
-        ):
+        choices = (
+            (
+                ("✅ Applied with this résumé", "applied", "success", True),
+                ("Applied another way", "applied", "secondary", False),
+                ("❌ Still drafting", "draft", "secondary", False),
+            )
+            if resume_version_id is not None
+            else (
+                ("✅ Yes, applied", "applied", "success", False),
+                ("❌ Still drafting", "draft", "secondary", False),
+            )
+        )
+        for label, status, style, used_generated_resume in choices:
             token = component_tokens.issue(
                 "application.status",
-                {"application_id": application_id, "status": status},
+                {
+                    "application_id": application_id,
+                    "status": status,
+                    "resume_version_id": resume_version_id,
+                    "used_generated_resume": used_generated_resume,
+                },
                 owner_user_id=owner_user_id,
             )
             buttons.append(
@@ -1308,7 +1374,7 @@ def register(
                     style=style,
                 )
             )
-        return buttons[0], buttons[1]
+        return tuple(buttons)
 
     def tailoring_plan_response(result: object, *, owner_user_id: str | None = None) -> object:
         error_text = _dispatch_error_text(result)
@@ -1981,6 +2047,10 @@ def register(
                 payload["skill"] = action_id.partition(":")[2]
             elif action_id.startswith("git.group.skip:"):
                 payload["skill"] = action_id.partition(":")[2]
+            elif action_id.startswith("mail.reconcile.match:"):
+                payload["application_id"] = action_id.partition(":")[2]
+            elif action_id == "mail.reconcile.ignore":
+                pass
             elif action_id not in {
                 "settings.show",
                 "onboarding.status",
@@ -2437,6 +2507,32 @@ def register(
             )
         if action == "git.scan":
             return git_scan_response([], owner_user_id=user_id)
+        if action == "mail.reconcile.ignore" or action.startswith("mail.reconcile.match:"):
+            review_id = payload.get("review_id")
+            application_id = payload.get("application_id")
+            if not isinstance(review_id, str) or not review_id:
+                return "Erga mail review failed: invalid or stale review state."
+            if action.startswith("mail.reconcile.match:") and (
+                not isinstance(application_id, str) or not application_id
+            ):
+                return "Erga mail review failed: invalid application match state."
+            try:
+                resolved = ctx.dispatch_tool(
+                    mail_resolve_tool,
+                    {
+                        "review_id": review_id,
+                        "action": (
+                            "match" if action.startswith("mail.reconcile.match:") else "ignore"
+                        ),
+                        "application_id": application_id if isinstance(application_id, str) else "",
+                    },
+                )
+            except Exception as exc:
+                return f"Erga mail review failed: {exc}"
+            error_text = _dispatch_error_text(resolved)
+            if error_text:
+                return f"Erga mail review failed: {error_text}"
+            return mail_review_response(owner_user_id=user_id)
         if action.startswith(("git.group.approve:", "git.group.skip:")):
             skill = payload.get("skill")
             if not isinstance(skill, str) or not skill:
@@ -2505,6 +2601,7 @@ def register(
                 buttons = (
                     application_status_buttons(
                         application_id,
+                        resume_version_id=_resume_version_id_from_result(result),
                         owner_user_id=user_id,
                     )
                     if application_id is not None
@@ -2591,15 +2688,31 @@ def register(
             )
         application_id = payload.get("application_id")
         status = payload.get("status")
+        resume_version_id = payload.get("resume_version_id")
+        used_generated_resume = payload.get("used_generated_resume") is True
         if not isinstance(application_id, str) or status not in {"applied", "draft"}:
             return DiscordCommandResponse(
                 text="Erga tracker update failed: invalid application state.",
                 buttons=(),
             )
+        if used_generated_resume and (
+            not isinstance(resume_version_id, str) or not resume_version_id
+        ):
+            return DiscordCommandResponse(
+                text="Erga tracker update failed: the attached résumé version is missing.",
+                buttons=(),
+            )
         try:
             updated = ctx.dispatch_tool(
-                application_status_tool,
-                {"application_id": application_id, "status": status},
+                application_confirmation_tool,
+                {
+                    "application_id": application_id,
+                    "status": status,
+                    "used_generated_resume": used_generated_resume,
+                    "resume_version_id": (
+                        resume_version_id if isinstance(resume_version_id, str) else ""
+                    ),
+                },
             )
         except Exception as exc:
             return DiscordCommandResponse(
@@ -2612,16 +2725,37 @@ def register(
                 text=f"Erga tracker update failed: {error_text}",
                 buttons=(),
             )
+        confirmation = next(
+            (
+                item
+                for item in _nested_objects(updated)
+                if item.get("application_id") == application_id
+                and isinstance(item.get("warnings"), list)
+            ),
+            None,
+        )
+        warnings = (
+            [item for item in confirmation["warnings"] if isinstance(item, str)]
+            if confirmation is not None
+            else []
+        )
         if status == "applied":
             text = (
                 "✅ **Tracker marked Applied**\n"
-                "This role now flows into No response until an OA, interview, or outcome arrives."
+                + (
+                    "The exact attached résumé version was recorded. "
+                    if used_generated_resume
+                    else "No generated résumé was marked as used. "
+                )
+                + "This role now flows into No response until an OA, interview, or outcome arrives."
             )
         else:
             text = (
                 "❌ **Kept as Draft**\n"
                 "The résumé is ready, but this role will not count as submitted in Orbit."
             )
+        if warnings:
+            text += "\n\n⚠️ " + " ".join(warnings)
         return DiscordCommandResponse(text=text, buttons=())
 
     def discovery_research_command(raw_args: str) -> str:
@@ -2684,6 +2818,40 @@ def register(
         if payload is None:
             return "Erga mail sync failed: the mail-sync tool returned no display message."
         return str(payload["message"])
+
+    def mail_review_response(*, owner_user_id: str | None = None) -> object:
+        try:
+            result = ctx.dispatch_tool(mail_review_tool, {"review_id": ""})
+        except Exception as exc:
+            return f"Erga mail review failed: {exc}"
+        review = next(
+            (
+                item.get("review")
+                for item in _nested_objects(result)
+                if "review" in item and isinstance(item.get("pending_count"), int)
+            ),
+            None,
+        )
+        review_id = review.get("id") if isinstance(review, dict) else None
+        return card_response(
+            result,
+            owner_user_id=owner_user_id,
+            view_state={"review_id": review_id} if isinstance(review_id, str) else {},
+        )
+
+    def mail_review_command(raw_args: str) -> object:
+        operation = raw_args.strip().casefold()
+        if operation not in {"", "retry"}:
+            return "Usage: /erga-mail-review [retry]"
+        if operation == "retry":
+            try:
+                retried = ctx.dispatch_tool(mail_retry_tool, {})
+            except Exception as exc:
+                return f"Erga mail review retry failed: {exc}"
+            error_text = _dispatch_error_text(retried)
+            if error_text:
+                return f"Erga mail review retry failed: {error_text}"
+        return mail_review_response()
 
     def git_scan_response(roots: list[str], *, owner_user_id: str | None = None) -> object:
         try:
@@ -2939,6 +3107,12 @@ def register(
         description=(
             "Synchronize configured recruiting mail and summarize only metadata-safe results."
         ),
+    )
+    ctx.register_command(
+        "erga-mail-review",
+        handler=mail_review_command,
+        description="Review ambiguous recruiting-email matches without exposing message bodies.",
+        args_hint="[retry]",
     )
     ctx.register_command(
         "erga-review",

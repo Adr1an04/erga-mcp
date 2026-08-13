@@ -12,9 +12,11 @@ from erga_mcp.models import Evidence
 from erga_mcp.portfolio.inventory import ProjectCandidate
 from erga_mcp.resumes.ai_tailoring import (
     _FORBIDDEN_GIT_PROSE,
+    ResumeStylePreferences,
     TailoringDraftRequest,
     TailoringDraftResponse,
     _latex_text,
+    _metric_claims,
     _normalized_number,
     _resume_quality_numbers,
     _resume_safe_approved_bullet,
@@ -54,7 +56,7 @@ def _candidate() -> ProjectCandidate:
             "\n"
             r"\resumeItemListStart"
             "\n"
-            r"\resumeItem{Built a Python API serving 100 users with authenticated requests.}"
+            r"\resumeItem{Built a Python API serving 100 users safely with authenticated requests.}"
             "\n"
             r"\resumeItem{Tested 20 API routes covering request validation and failures.}"
             "\n"
@@ -122,6 +124,8 @@ class AIResumeTailoringTests(unittest.TestCase):
         required_project_ids: tuple[str, ...] = (),
         maximum_bullets: int = 2,
         minimum_bullets: int | None = None,
+        style_preferences: ResumeStylePreferences | None = None,
+        candidate: ProjectCandidate | None = None,
     ):
         with TemporaryDirectory() as directory:
             resume = Path(directory) / "resume.tex"
@@ -184,7 +188,7 @@ class AIResumeTailoringTests(unittest.TestCase):
                     related_request_id="request-1",
                     resume_path=resume,
                     job_description="Required: Python FastAPI API testing",
-                    candidates=(_candidate(),),
+                    candidates=(candidate or _candidate(),),
                     evidence=[approved, git, metric, scope],
                     reports=(
                         {
@@ -219,6 +223,7 @@ class AIResumeTailoringTests(unittest.TestCase):
                     require_unique_lead_verbs=True,
                     retry_feedback=retry_feedback,
                     required_project_ids=required_project_ids,
+                    style_preferences=style_preferences,
                 )
             )
             return result, session
@@ -252,6 +257,150 @@ class AIResumeTailoringTests(unittest.TestCase):
         ]["bullets"]
         self.assertEqual(schema["minItems"], 1)
         self.assertEqual(schema["maxItems"], 4)
+
+    def test_ranks_multiple_evidence_valid_variants_from_one_model_response(self) -> None:
+        result, session = self._draft(
+            {
+                "projects": [
+                    {
+                        "project_id": "api-platform",
+                        "bullets": [
+                            {
+                                "text": "Implemented a Python API serving 100 users.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                            {
+                                "text": "Validated 20 API routes across request failures.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                        ],
+                    }
+                ],
+                "alternatives": [
+                    {
+                        "projects": [
+                            {
+                                "project_id": "api-platform",
+                                "bullets": [
+                                    {
+                                        "text": (
+                                            "Engineered a Python API serving 100 users with "
+                                            "authenticated request handling."
+                                        ),
+                                        "evidence_ids": ["ev_api"],
+                                    },
+                                    {
+                                        "text": (
+                                            "Validated 20 API routes across request validation "
+                                            "and failure handling."
+                                        ),
+                                        "evidence_ids": ["ev_api"],
+                                    },
+                                ],
+                            }
+                        ]
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(len(session.calls), 1)
+        self.assertEqual(
+            resume_item_texts(result.candidates[0].latex)[0],
+            "Engineered a Python API serving 100 users with authenticated request handling.",
+        )
+        self.assertEqual(result.quality_report["variant_selection"]["evaluated_count"], 2)
+        self.assertEqual(result.quality_report["variant_selection"]["selected_index"], 1)
+
+    def test_discards_one_invalid_optional_variant_without_aborting_valid_copy(self) -> None:
+        result, _ = self._draft(
+            {
+                "projects": [
+                    {
+                        "project_id": "api-platform",
+                        "bullets": [
+                            {
+                                "text": "Engineered a Python API serving 100 users safely.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                            {
+                                "text": "Validated 20 API routes across request failures.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                        ],
+                    }
+                ],
+                "alternatives": [
+                    {
+                        "projects": [
+                            {
+                                "project_id": "api-platform",
+                                "bullets": [
+                                    {
+                                        "text": "Built a Python API serving 999 users.",
+                                        "evidence_ids": ["ev_api"],
+                                    },
+                                    {
+                                        "text": "Validated 20 API routes across failures.",
+                                        "evidence_ids": ["ev_api"],
+                                    },
+                                ],
+                            }
+                        ]
+                    }
+                ],
+            }
+        )
+
+        selection = result.quality_report["variant_selection"]
+        self.assertEqual(selection["evaluated_count"], 1)
+        self.assertEqual(selection["rejected_count"], 1)
+        self.assertIn("number absent", selection["rejections"][0])
+
+    def test_uses_valid_alternative_when_primary_variant_is_invalid(self) -> None:
+        result, _ = self._draft(
+            {
+                "projects": [
+                    {
+                        "project_id": "api-platform",
+                        "bullets": [
+                            {
+                                "text": "Built a Python API serving 999 users.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                            {
+                                "text": "Validated 20 API routes across failures.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                        ],
+                    }
+                ],
+                "alternatives": [
+                    {
+                        "projects": [
+                            {
+                                "project_id": "api-platform",
+                                "bullets": [
+                                    {
+                                        "text": "Engineered a Python API serving 100 users safely.",
+                                        "evidence_ids": ["ev_api"],
+                                    },
+                                    {
+                                        "text": "Validated 20 API routes across request failures.",
+                                        "evidence_ids": ["ev_api"],
+                                    },
+                                ],
+                            }
+                        ]
+                    }
+                ],
+            }
+        )
+
+        selection = result.quality_report["variant_selection"]
+        self.assertEqual(selection["evaluated_count"], 1)
+        self.assertEqual(selection["selected_index"], 1)
+        self.assertEqual(selection["rejected_count"], 1)
 
     def test_model_can_synthesize_new_bullets_with_project_scoped_evidence(self) -> None:
         result, session = self._draft(
@@ -315,6 +464,44 @@ class AIResumeTailoringTests(unittest.TestCase):
         self.assertIn("verified_git_functional_scope_evidence", json.dumps(prompt))
         self.assertEqual(prompt["master_project_quantitative_coverage_percent"], 100)
         self.assertEqual(prompt["required_quantified_bullets_per_project_at_minimum"], 2)
+        provenance = result.quality_report["metric_provenance"]
+        self.assertEqual(provenance[0]["value"], "100")
+        self.assertEqual(provenance[0]["unit"], "users")
+        self.assertEqual(provenance[0]["evidence_ids"], ["ev_api"])
+        self.assertEqual(provenance[0]["basis"], "approved_exact_numeric_token")
+
+    def test_explicit_style_preferences_are_run_scoped_and_contain_no_personal_facts(self) -> None:
+        result, session = self._draft(
+            {
+                "projects": [
+                    {
+                        "project_id": "api-platform",
+                        "bullets": [
+                            {
+                                "text": "Engineered a Python API serving 100 users safely.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                            {
+                                "text": "Validated 20 API routes across request failures.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                        ],
+                    }
+                ]
+            },
+            style_preferences=ResumeStylePreferences(
+                preferred_narratives=("developer tooling",),
+                preferred_metric_categories=("reliability",),
+            ),
+        )
+
+        self.assertEqual(result.model, "synthetic-tailor")
+        prompt = json.loads(session.messages[0][0].text)
+        self.assertEqual(prompt["style_preferences"]["scope"], "current_generation_only")
+        self.assertEqual(
+            prompt["style_preferences"]["preferred_metric_categories"], ["reliability"]
+        )
+        self.assertNotIn("evidence", json.dumps(prompt["style_preferences"]).casefold())
 
     def test_retry_can_lock_the_semantic_project_selection_during_copy_repair(self) -> None:
         result, session = self._draft(
@@ -389,6 +576,680 @@ class AIResumeTailoringTests(unittest.TestCase):
                 }
             )
 
+    def test_rejects_reusing_approved_numbers_with_invented_units_or_meaning(self) -> None:
+        with self.assertRaisesRegex(ValueError, "value/unit/context"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": "Engineered a Python API with 100 ms latency.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated request processing across 20 GPUs.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                }
+            )
+
+    def test_rejects_metric_magnitude_and_rate_modifiers_absent_from_evidence(self) -> None:
+        unsupported = (
+            "Engineered a Python API serving 100 users per second.",
+            "Engineered a Python API serving 100 million users.",
+            "Engineered a Python API serving over 100 users.",
+            "Engineered a Python API serving 100 users per API route.",
+            "Engineered a Python API serving -100 users.",
+            "Engineered a Python API serving +100 users.",
+            "Engineered a Python API serving ~100 users.",
+        )
+        for text in unsupported:
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, "value/unit/context"):
+                self._draft(
+                    {
+                        "projects": [
+                            {
+                                "project_id": "api-platform",
+                                "bullets": [
+                                    {"text": text, "evidence_ids": ["ev_api"]},
+                                    {
+                                        "text": "Validated 20 API routes across request failures.",
+                                        "evidence_ids": ["ev_api"],
+                                    },
+                                ],
+                            }
+                        ]
+                    }
+                )
+
+    def test_rejects_lead_verbs_that_assert_unsupported_delivery_or_ownership(self) -> None:
+        with self.assertRaisesRegex(ValueError, "(?:lead verb.*stronger|implementation claims)"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Launched a Python API serving 100 users safely with "
+                                        "authenticated requests."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": (
+                                        "Architected 20 API routes covering request validation "
+                                        "and failures."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                }
+            )
+
+    def test_metric_rate_qualifiers_do_not_leak_across_multiple_metrics(self) -> None:
+        for text, qualifier in (
+            ("Served 100 users and handled 20 API routes per day.", "per-day"),
+            ("Served 100 users and handled 20 requests per second.", "per-second"),
+        ):
+            with self.subTest(text=text):
+                claims = _metric_claims(text)
+                self.assertTrue(all(qualifier not in signature[0] for signature in claims["100"]))
+                self.assertTrue(any(qualifier in signature[0] for signature in claims["20"]))
+
+    def test_rejects_technologies_and_implementation_claims_absent_from_cited_evidence(
+        self,
+    ) -> None:
+        unsupported = (
+            (
+                "Engineered Kubernetes clusters serving 100 users with zero-downtime autoscaling.",
+                "technologies absent.*Kubernetes",
+            ),
+            (
+                "Engineered a Python API serving 100 users with zero-downtime autoscaling.",
+                "implementation claims absent",
+            ),
+        )
+        for text, error in unsupported:
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, error):
+                self._draft(
+                    {
+                        "projects": [
+                            {
+                                "project_id": "api-platform",
+                                "bullets": [
+                                    {"text": text, "evidence_ids": ["ev_api"]},
+                                    {
+                                        "text": "Validated 20 API routes across request failures.",
+                                        "evidence_ids": ["ev_api"],
+                                    },
+                                ],
+                            }
+                        ]
+                    }
+                )
+
+    def test_rejects_unseen_qualitative_claim_atoms_outside_a_finite_denylist(self) -> None:
+        unsupported_variants = (
+            (
+                "Engineered an event-driven Python API serving 100 users with "
+                "end-to-end ownership.",
+                "Validated 20 API routes through chaos engineering and property-based testing.",
+            ),
+            (
+                "Architected a multi-tenant Python API serving 100 users with zero data loss.",
+                "Validated 20 API routes using schema migrations and blue-green deployments.",
+            ),
+        )
+        for first, second in unsupported_variants:
+            with (
+                self.subTest(first=first),
+                self.assertRaisesRegex(ValueError, "implementation claims absent"),
+            ):
+                self._draft(
+                    {
+                        "projects": [
+                            {
+                                "project_id": "api-platform",
+                                "bullets": [
+                                    {"text": first, "evidence_ids": ["ev_api"]},
+                                    {"text": second, "evidence_ids": ["ev_api"]},
+                                ],
+                            }
+                        ]
+                    }
+                )
+
+    def test_rejects_negation_that_inverts_approved_evidence(self) -> None:
+        with self.assertRaisesRegex(ValueError, "changes the polarity"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Engineered a Python API serving 100 users without "
+                                        "authenticated requests."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": (
+                                        "Validated 20 API routes without request validation "
+                                        "and failures."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                }
+            )
+
+    def test_unrelated_negated_clause_does_not_authorize_claim_inversion(self) -> None:
+        candidate = _candidate()
+        candidate = ProjectCandidate(
+            **{
+                **candidate.__dict__,
+                "latex": candidate.latex.replace(
+                    "authenticated requests.",
+                    "authenticated requests. Tested a client without external services.",
+                ),
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "changes the polarity"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Engineered a Python API serving 100 users without "
+                                        "authenticated requests."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated 20 API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                candidate=candidate,
+            )
+
+    def test_negated_detail_from_another_subject_does_not_transfer_to_api(self) -> None:
+        candidate = _candidate()
+        candidate = ProjectCandidate(
+            **{
+                **candidate.__dict__,
+                "latex": candidate.latex.replace(
+                    "authenticated requests.",
+                    "authenticated requests. Tested a client without external services.",
+                ),
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "changes the polarity"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Engineered a Python API serving 100 users without "
+                                        "external services."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated 20 API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                candidate=candidate,
+            )
+
+    def test_rejects_removing_negation_from_an_approved_claim(self) -> None:
+        candidate = _candidate()
+        candidate = ProjectCandidate(
+            **{
+                **candidate.__dict__,
+                "latex": candidate.latex.replace(
+                    "authenticated requests.",
+                    "authenticated requests and was not shipped.",
+                ),
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "changes the polarity"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": "Shipped a Python API serving 100 users safely.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated 20 API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                candidate=candidate,
+            )
+
+    def test_rejects_unsupported_standalone_year(self) -> None:
+        with self.assertRaisesRegex(ValueError, "number absent.*2027"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Engineered a Python API serving 100 users safely in 2027."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated 20 API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                }
+            )
+
+    def test_year_from_an_unrelated_claim_does_not_transfer_to_api(self) -> None:
+        candidate = _candidate()
+        candidate = ProjectCandidate(
+            **{
+                **candidate.__dict__,
+                "latex": candidate.latex.replace(
+                    "authenticated requests.",
+                    "authenticated requests. Won an award in 2027.",
+                ),
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "supported claim context.*2027"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Engineered a Python API serving 100 users safely in 2027."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated 20 API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                candidate=candidate,
+            )
+
+    def test_failed_behavior_cannot_be_rewritten_as_success(self) -> None:
+        candidate = _candidate()
+        candidate = ProjectCandidate(
+            **{
+                **candidate.__dict__,
+                "latex": candidate.latex.replace(
+                    "with authenticated requests.",
+                    "but failed to authenticate requests.",
+                ),
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "changes the polarity"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Engineered a Python API serving 100 users safely with "
+                                        "authenticated requests."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated 20 API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                candidate=candidate,
+            )
+
+    def test_same_metric_on_two_components_does_not_merge_their_technologies(self) -> None:
+        candidate = _candidate()
+        candidate = ProjectCandidate(
+            **{
+                **candidate.__dict__,
+                "latex": candidate.latex.replace(
+                    "authenticated requests.",
+                    "authenticated requests. Built a separate Kafka benchmark serving 100 users.",
+                ),
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "technologies absent.*Kafka"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Engineered a Python Kafka API serving 100 users safely "
+                                        "with authenticated requests."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated 20 API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                candidate=candidate,
+            )
+
+    def test_api_metric_does_not_transfer_to_a_separate_benchmark_component(self) -> None:
+        candidate = _candidate()
+        candidate = ProjectCandidate(
+            **{
+                **candidate.__dict__,
+                "latex": candidate.latex.replace(
+                    "authenticated requests.",
+                    "authenticated requests. Built a separate Kafka benchmark tool.",
+                ),
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "technologies absent|implementation claims"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Engineered a Kafka benchmark tool serving 100 users "
+                                        "safely."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated 20 API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                candidate=candidate,
+            )
+
+    def test_same_component_clauses_can_synthesize_one_supported_bullet(self) -> None:
+        candidate = _candidate()
+        candidate = ProjectCandidate(
+            **{
+                **candidate.__dict__,
+                "latex": candidate.latex.replace(
+                    "with authenticated requests.",
+                    "safely. Implemented authenticated requests for the API.",
+                ),
+            }
+        )
+        result, _ = self._draft(
+            {
+                "projects": [
+                    {
+                        "project_id": "api-platform",
+                        "bullets": [
+                            {
+                                "text": (
+                                    "Engineered a Python API serving 100 users safely with "
+                                    "authenticated requests."
+                                ),
+                                "evidence_ids": ["ev_api"],
+                            },
+                            {
+                                "text": "Validated 20 API routes across request failures.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                        ],
+                    }
+                ]
+            },
+            candidate=candidate,
+        )
+
+        self.assertIn("authenticated requests", result.candidates[0].latex)
+
+    def test_repeated_unlisted_component_can_synthesize_supported_clauses(self) -> None:
+        candidate = _candidate()
+        candidate = ProjectCandidate(
+            **{
+                **candidate.__dict__,
+                "latex": candidate.latex.replace(
+                    "Python API serving 100 users safely with authenticated requests.",
+                    (
+                        "Python agent serving 100 users safely. Implemented authenticated "
+                        "requests for the agent."
+                    ),
+                ),
+            }
+        )
+        result, _ = self._draft(
+            {
+                "projects": [
+                    {
+                        "project_id": "api-platform",
+                        "bullets": [
+                            {
+                                "text": (
+                                    "Engineered a Python agent serving 100 users safely with "
+                                    "authenticated requests."
+                                ),
+                                "evidence_ids": ["ev_api"],
+                            },
+                            {
+                                "text": "Validated 20 API routes across request failures.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                        ],
+                    }
+                ]
+            },
+            candidate=candidate,
+        )
+
+        self.assertIn("Python agent serving 100 users", result.candidates[0].latex)
+
+    def test_shared_auth_detail_does_not_fuse_separate_components(self) -> None:
+        candidate = _candidate()
+        candidate = ProjectCandidate(
+            **{
+                **candidate.__dict__,
+                "latex": candidate.latex.replace(
+                    "with authenticated requests.",
+                    "with authenticated requests. Built a separate Kafka benchmark with "
+                    "authenticated requests.",
+                ),
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "technologies absent|implementation claims"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Engineered a Python Kafka API serving 100 users safely "
+                                        "with authenticated requests."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated 20 API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                candidate=candidate,
+            )
+
+    def test_project_level_technology_does_not_transfer_between_components(self) -> None:
+        candidate = _candidate()
+        candidate = ProjectCandidate(
+            **{
+                **candidate.__dict__,
+                "latex": candidate.latex.replace(
+                    "authenticated requests.",
+                    "authenticated requests. Built a separate Kafka benchmark tool.",
+                ),
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "technologies absent.*Kafka"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Engineered a Python Kafka API serving 100 users safely "
+                                        "with authenticated requests."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated 20 API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                candidate=candidate,
+            )
+
+    def test_unrelated_launched_clause_does_not_authorize_stronger_api_lead(self) -> None:
+        candidate = _candidate()
+        candidate = ProjectCandidate(
+            **{
+                **candidate.__dict__,
+                "latex": candidate.latex.replace(
+                    "authenticated requests.",
+                    "authenticated requests. Launched a documentation website.",
+                ),
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "(?:lead verb.*stronger|implementation claims)"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Launched a Python API serving 100 users safely with "
+                                        "authenticated requests."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated 20 API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                candidate=candidate,
+            )
+
+    def test_unrelated_launched_conjunct_does_not_authorize_stronger_api_lead(self) -> None:
+        candidate = _candidate()
+        candidate = ProjectCandidate(
+            **{
+                **candidate.__dict__,
+                "latex": candidate.latex.replace(
+                    "authenticated requests.",
+                    "authenticated requests and launched a documentation website.",
+                ),
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "(?:lead verb.*stronger|implementation claims)"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Launched a Python API serving 100 users safely with a "
+                                        "documentation website."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated 20 API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                candidate=candidate,
+            )
+
     def test_rejects_metric_free_copy_below_master_quantitative_coverage(self) -> None:
         with self.assertRaisesRegex(ValueError, "quantitative bullet coverage"):
             self._draft(
@@ -449,7 +1310,7 @@ class AIResumeTailoringTests(unittest.TestCase):
                                 "evidence_ids": ["ev_api"],
                             },
                             {
-                                "text": "Validated request handling with 5 attributed tests.",
+                                "text": "Validated 5 distinct attributed test cases.",
                                 "evidence_ids": ["ev_scope", "ev_git"],
                             },
                         ],
@@ -460,7 +1321,7 @@ class AIResumeTailoringTests(unittest.TestCase):
 
         self.assertEqual(
             resume_item_texts(result.candidates[0].latex)[1],
-            "Validated request handling with 5 attributed tests.",
+            "Validated 5 distinct attributed test cases.",
         )
 
     def test_adds_the_project_evidence_id_that_supports_a_number(self) -> None:
