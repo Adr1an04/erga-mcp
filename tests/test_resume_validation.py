@@ -11,12 +11,33 @@ from unittest.mock import Mock, patch
 from erga_mcp.resumes.artifacts import (
     _pdf_resume_item_lines,
     resolve_latexmk_executable,
+    resume_item_texts,
     validate_latex_proposal,
     validate_single_line_resume_items,
 )
 
 
 class ResumeValidationTests(unittest.TestCase):
+    def test_standard_skills_container_is_not_treated_as_an_achievement_bullet(self) -> None:
+        source = r"""\begin{document}
+\section{Projects}
+\begin{itemize}
+\item Built a Python API supporting 5 routes.
+\end{itemize}
+\section{Technical Skills}
+\begin{itemize}
+\item
+\textbf{Languages:} Python, C++ \\
+\textbf{Tools:} Docker, Git
+\end{itemize}
+\end{document}
+"""
+
+        self.assertEqual(
+            resume_item_texts(source),
+            ("Built a Python API supporting 5 routes.",),
+        )
+
     def test_extracts_rendered_bullet_lines_without_mistaking_headings_for_continuations(
         self,
     ) -> None:
@@ -87,6 +108,42 @@ class ResumeValidationTests(unittest.TestCase):
             self.assertEqual(result.orphan_item_indices, (1,))
             self.assertIn("-no-shell-escape", result.command)
             self.assertEqual(proposal.read_text(encoding="utf-8"), source)
+            self.assertEqual(tuple(root.glob("erga-layout-*")), ())
+
+    def test_standard_latex_items_use_rendered_pdf_layout_without_custom_macro(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            proposal = root / "proposal.tex"
+            source = (
+                r"\begin{document}"
+                "\n"
+                r"\begin{itemize}"
+                "\n"
+                r"\item Fits on one line."
+                "\n"
+                r"\item Needs another rendered line."
+                "\n"
+                r"\end{itemize}"
+                "\n"
+                r"\end{document}"
+                "\n"
+            )
+            proposal.write_text(source, encoding="utf-8")
+            completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+            with patch(
+                "erga_mcp.resumes.artifacts._pdf_resume_item_lines",
+                return_value=(("Fits on one line.",), ("Needs another", "rendered line.")),
+            ):
+                result = validate_single_line_resume_items(
+                    proposal,
+                    latexmk=Path(sys.executable),
+                    runner=lambda *args, **kwargs: completed,
+                )
+
+            self.assertEqual(result.item_count, 2)
+            self.assertEqual(result.wrapped_item_indices, (1,))
+            self.assertNotIn("ergaOriginalResumeItem", proposal.read_text(encoding="utf-8"))
             self.assertEqual(tuple(root.glob("erga-layout-*")), ())
 
     def test_compiles_only_a_proposed_tex_file_with_a_user_selected_latexmk(self) -> None:

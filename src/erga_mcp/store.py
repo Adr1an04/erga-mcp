@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import sqlite3
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 from erga_mcp.models import (
@@ -17,6 +20,8 @@ from erga_mcp.models import (
     GitResearchBullet,
     GitResearchDraft,
     MailEvent,
+    MailMatchCandidate,
+    MailReconciliation,
     OrbitDashboardBinding,
     RecruiterContact,
     SkillSeedRecord,
@@ -45,6 +50,37 @@ APPLICATION_STATUSES = frozenset(
         "rejected",
         "withdrawn",
     }
+)
+_TERMINAL_APPLICATION_STATUSES = frozenset({"offer", "accepted", "rejected", "withdrawn"})
+_APPLICATION_STATUS_PROGRESS = {
+    "draft": 0,
+    "applied": 1,
+    "oa": 2,
+    "assessment": 2,
+    "interview": 3,
+    "interview-2": 4,
+    "interview-3": 5,
+    "final-interview": 6,
+    "offer": 7,
+    "accepted": 8,
+}
+_OPAQUE_MAIL_IDENTIFIER = re.compile(r"^sha256:[0-9a-f]{24}$")
+_MAIL_JOB_ROUTE = re.compile(r"/(?:apply|career|careers|job|jobs|position|positions)(?:/|$)", re.I)
+_MAIL_ATS_HOSTS = (
+    "applytojob.com",
+    "ashbyhq.com",
+    "bamboohr.com",
+    "breezy.hr",
+    "eightfold.ai",
+    "greenhouse.io",
+    "icims.com",
+    "jobvite.com",
+    "lever.co",
+    "myworkdayjobs.com",
+    "myworkdaysite.com",
+    "oraclecloud.com",
+    "smartrecruiters.com",
+    "workable.com",
 )
 
 _SCHEMA = """
@@ -148,8 +184,31 @@ CREATE TABLE IF NOT EXISTS mail_events (
     kind TEXT NOT NULL,
     confidence REAL NOT NULL,
     requires_review INTEGER NOT NULL,
+    sender_domain TEXT NOT NULL DEFAULT '',
+    job_urls_json TEXT NOT NULL DEFAULT '[]',
+    requisition_ids_json TEXT NOT NULL DEFAULT '[]',
+    thread_id TEXT NOT NULL DEFAULT '',
+    reference_ids_json TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS mail_reconciliations (
+    id TEXT PRIMARY KEY,
+    message_id TEXT NOT NULL UNIQUE REFERENCES mail_events(message_id),
+    event_kind TEXT NOT NULL,
+    event_received_at TEXT NOT NULL,
+    state TEXT NOT NULL,
+    matched_application_id TEXT REFERENCES applications(id),
+    score REAL NOT NULL,
+    confidence TEXT NOT NULL,
+    candidates_json TEXT NOT NULL,
+    provenance_json TEXT NOT NULL,
+    recommended_action TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    application_fingerprint TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mail_reconciliations_state_idx
+ON mail_reconciliations(state, event_received_at DESC);
 CREATE TABLE IF NOT EXISTS recruiter_contacts (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -207,6 +266,53 @@ def _require_token_count(value: object, *, field: str) -> int:
     return value
 
 
+def _opaque_mail_identifier(value: str) -> str:
+    normalized = value.strip().strip("<>")
+    if not normalized:
+        return ""
+    if _OPAQUE_MAIL_IDENTIFIER.fullmatch(normalized):
+        return normalized
+    return f"sha256:{hashlib.sha256(normalized.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _canonical_mail_job_url(value: str) -> str:
+    """Enforce token-free URL retention at the persistence boundary."""
+    parsed = urlsplit(value.strip().rstrip(".,);]"))
+    if parsed.scheme.casefold() not in {"http", "https"} or not parsed.hostname:
+        return ""
+    try:
+        port = parsed.port
+    except ValueError:
+        return ""
+    host = parsed.hostname.rstrip(".").casefold()
+    recognized_ats = any(
+        host == suffix or host.endswith(f".{suffix}") for suffix in _MAIL_ATS_HOSTS
+    )
+    if not recognized_ats and _MAIL_JOB_ROUTE.search(parsed.path) is None:
+        return ""
+    netloc = host if port in {None, 80, 443} else f"{host}:{port}"
+    return urlunsplit((parsed.scheme.casefold(), netloc, parsed.path or "/", "", ""))
+
+
+def _bounded_requisition_id(value: str) -> str:
+    normalized = value.strip().casefold()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,39}", normalized):
+        return ""
+    return normalized if any(character.isdigit() for character in normalized) else ""
+
+
+def _safe_mail_signals(event: MailEvent) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    urls = tuple(
+        sorted({safe for value in event.job_urls if (safe := _canonical_mail_job_url(value))})
+    )[:8]
+    requisitions = tuple(
+        sorted(
+            {safe for value in event.requisition_ids if (safe := _bounded_requisition_id(value))}
+        )
+    )[:12]
+    return urls, requisitions
+
+
 class StoreFactory(Protocol):
     """Construct a store for one configured local workspace."""
 
@@ -260,6 +366,19 @@ class ErgaStore:
                     connection.execute(
                         f"ALTER TABLE git_research_drafts ADD COLUMN {name} {definition}"
                     )
+            mail_event_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(mail_events)").fetchall()
+            }
+            for name, definition in (
+                ("sender_domain", "TEXT NOT NULL DEFAULT ''"),
+                ("job_urls_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("requisition_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("thread_id", "TEXT NOT NULL DEFAULT ''"),
+                ("reference_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ):
+                if name not in mail_event_columns:
+                    connection.execute(f"ALTER TABLE mail_events ADD COLUMN {name} {definition}")
             connection.commit()
 
     def add_evidence(self, *, source_ref: str, text: str, approved: bool) -> Evidence:
@@ -1437,6 +1556,7 @@ class ErgaStore:
                     "application.status_updated_from_mail",
                     application_id,
                     {
+                        "event_received_at": _as_text(event.received_at),
                         "from": previous,
                         "mail_event_id": event.message_id,
                         "mail_kind": event.kind,
@@ -1478,11 +1598,18 @@ class ErgaStore:
 
     def record_mail_event(self, event: MailEvent) -> bool:
         """Persist minimal classified mail metadata once; never retain preview/body content."""
+        if event.received_at.tzinfo is None or event.received_at.utcoffset() is None:
+            raise ValueError("mail event received_at must be timezone-aware")
         self.initialize()
+        job_urls, requisition_ids = _safe_mail_signals(event)
         with closing(self._connection()) as connection:
             result = connection.execute(
                 """
-                INSERT INTO mail_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO mail_events (
+                    message_id, received_at, sender, subject, kind, confidence,
+                    requires_review, sender_domain, job_urls_json, requisition_ids_json,
+                    thread_id, reference_ids_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(message_id) DO NOTHING
                 """,
                 (
@@ -1493,6 +1620,19 @@ class ErgaStore:
                     event.kind,
                     event.confidence,
                     event.requires_review,
+                    event.sender_domain,
+                    json.dumps(job_urls),
+                    json.dumps(requisition_ids),
+                    _opaque_mail_identifier(event.thread_id),
+                    json.dumps(
+                        tuple(
+                            sorted(
+                                identifier
+                                for value in event.reference_ids
+                                if (identifier := _opaque_mail_identifier(value))
+                            )
+                        )
+                    ),
                     _as_text(_now()),
                 ),
             )
@@ -1508,23 +1648,58 @@ class ErgaStore:
 
     def update_mail_event_classification(self, event: MailEvent) -> bool:
         """Refresh a retained event when deterministic classification rules improve."""
+        if event.received_at.tzinfo is None or event.received_at.utcoffset() is None:
+            raise ValueError("mail event received_at must be timezone-aware")
         self.initialize()
+        job_urls, requisition_ids = _safe_mail_signals(event)
         with closing(self._connection()) as connection:
             result = connection.execute(
                 """
                 UPDATE mail_events
-                SET kind = ?, confidence = ?, requires_review = ?
+                SET kind = ?, confidence = ?, requires_review = ?, sender_domain = ?,
+                    job_urls_json = ?, requisition_ids_json = ?, thread_id = ?,
+                    reference_ids_json = ?
                 WHERE message_id = ?
-                  AND (kind != ? OR confidence != ? OR requires_review != ?)
+                  AND (
+                    kind != ? OR confidence != ? OR requires_review != ? OR
+                    sender_domain != ? OR job_urls_json != ? OR requisition_ids_json != ? OR
+                    thread_id != ? OR reference_ids_json != ?
+                  )
                 """,
                 (
                     event.kind,
                     event.confidence,
                     event.requires_review,
+                    event.sender_domain,
+                    json.dumps(job_urls),
+                    json.dumps(requisition_ids),
+                    _opaque_mail_identifier(event.thread_id),
+                    json.dumps(
+                        tuple(
+                            sorted(
+                                identifier
+                                for value in event.reference_ids
+                                if (identifier := _opaque_mail_identifier(value))
+                            )
+                        )
+                    ),
                     event.message_id,
                     event.kind,
                     event.confidence,
                     event.requires_review,
+                    event.sender_domain,
+                    json.dumps(job_urls),
+                    json.dumps(requisition_ids),
+                    _opaque_mail_identifier(event.thread_id),
+                    json.dumps(
+                        tuple(
+                            sorted(
+                                identifier
+                                for value in event.reference_ids
+                                if (identifier := _opaque_mail_identifier(value))
+                            )
+                        )
+                    ),
                 ),
             )
             if result.rowcount:
@@ -1550,9 +1725,402 @@ class ErgaStore:
                 kind=row["kind"],
                 confidence=float(row["confidence"]),
                 requires_review=bool(row["requires_review"]),
+                sender_domain=str(row["sender_domain"]),
+                job_urls=tuple(str(value) for value in json.loads(row["job_urls_json"])),
+                requisition_ids=tuple(
+                    str(value) for value in json.loads(row["requisition_ids_json"])
+                ),
+                thread_id=str(row["thread_id"]),
+                reference_ids=tuple(str(value) for value in json.loads(row["reference_ids_json"])),
             )
             for row in rows
         ]
+
+    def upsert_mail_reconciliation(self, reconciliation: MailReconciliation) -> MailReconciliation:
+        """Persist one body-free deterministic mail matching result idempotently."""
+        self.initialize()
+        candidates = [
+            {
+                "application_id": item.application_id,
+                "company": item.company,
+                "role": item.role,
+                "score": item.score,
+                "confidence": item.confidence,
+                "provenance": list(item.provenance),
+            }
+            for item in reconciliation.candidates
+        ]
+        with closing(self._connection()) as connection:
+            prior = connection.execute(
+                "SELECT * FROM mail_reconciliations WHERE id = ?",
+                (reconciliation.id,),
+            ).fetchone()
+            if prior is not None and (
+                str(prior["state"]) == "resolved"
+                or (
+                    str(prior["state"]) == "ignored"
+                    and str(prior["reason"]) == "explicitly_ignored"
+                )
+            ):
+                return self._mail_reconciliation_from_row(prior)
+            connection.execute(
+                """
+                INSERT INTO mail_reconciliations (
+                    id, message_id, event_kind, event_received_at, state,
+                    matched_application_id, score, confidence, candidates_json,
+                    provenance_json, recommended_action, reason,
+                    application_fingerprint, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    event_kind = excluded.event_kind,
+                    event_received_at = excluded.event_received_at,
+                    state = excluded.state,
+                    matched_application_id = excluded.matched_application_id,
+                    score = excluded.score,
+                    confidence = excluded.confidence,
+                    candidates_json = excluded.candidates_json,
+                    provenance_json = excluded.provenance_json,
+                    recommended_action = excluded.recommended_action,
+                    reason = excluded.reason,
+                    application_fingerprint = excluded.application_fingerprint,
+                    updated_at = excluded.updated_at
+                WHERE mail_reconciliations.state != 'resolved'
+                  AND NOT (
+                    mail_reconciliations.state = 'ignored'
+                    AND mail_reconciliations.reason = 'explicitly_ignored'
+                  )
+                """,
+                (
+                    reconciliation.id,
+                    reconciliation.message_id,
+                    reconciliation.event_kind,
+                    _as_text(reconciliation.event_received_at),
+                    reconciliation.state,
+                    reconciliation.matched_application_id,
+                    reconciliation.score,
+                    reconciliation.confidence,
+                    json.dumps(candidates, sort_keys=True),
+                    json.dumps(reconciliation.provenance),
+                    reconciliation.recommended_action,
+                    reconciliation.reason,
+                    reconciliation.application_fingerprint,
+                    _as_text(reconciliation.updated_at),
+                ),
+            )
+            persisted = connection.execute(
+                "SELECT * FROM mail_reconciliations WHERE id = ?", (reconciliation.id,)
+            ).fetchone()
+            assert persisted is not None
+            action = (
+                "mail_reconciliation.updated"
+                if prior is not None
+                else "mail_reconciliation.created"
+            )
+            self._record_audit(
+                connection,
+                action,
+                reconciliation.id,
+                {
+                    "confidence": reconciliation.confidence,
+                    "reason": reconciliation.reason,
+                    "state": reconciliation.state,
+                },
+            )
+            connection.commit()
+        return self._mail_reconciliation_from_row(persisted)
+
+    def list_mail_reconciliations(self) -> list[MailReconciliation]:
+        """List body-free reconciliation results, newest event first."""
+        self.initialize()
+        with closing(self._connection()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM mail_reconciliations ORDER BY event_received_at DESC, id"
+            ).fetchall()
+        return [self._mail_reconciliation_from_row(row) for row in rows]
+
+    def get_mail_reconciliation(self, review_id: str) -> MailReconciliation | None:
+        self.initialize()
+        with closing(self._connection()) as connection:
+            row = connection.execute(
+                "SELECT * FROM mail_reconciliations WHERE id = ?", (review_id,)
+            ).fetchone()
+        return self._mail_reconciliation_from_row(row) if row is not None else None
+
+    def resolve_mail_reconciliation_record(
+        self,
+        review_id: str,
+        *,
+        state: str,
+        application_id: str | None,
+        reason: str,
+    ) -> MailReconciliation:
+        """Persist one explicit local review decision with an audit trail."""
+        if state not in {"resolved", "ignored"}:
+            raise ValueError("mail reconciliation resolution must be resolved or ignored")
+        self.initialize()
+        observed_at = _now()
+        with closing(self._connection()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM mail_reconciliations WHERE id = ?", (review_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("mail reconciliation review does not exist")
+            prior_state = str(row["state"])
+            prior_application = row["matched_application_id"]
+            if prior_state in {"resolved", "ignored"}:
+                if prior_state != state or prior_application != application_id:
+                    raise ValueError("mail reconciliation was already resolved differently")
+                return self._mail_reconciliation_from_row(row)
+            connection.execute(
+                """
+                UPDATE mail_reconciliations
+                SET state = ?, matched_application_id = ?, recommended_action = 'none',
+                    reason = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (state, application_id, reason, _as_text(observed_at), review_id),
+            )
+            self._record_audit(
+                connection,
+                f"mail_reconciliation.{state}",
+                review_id,
+                {"application_id": application_id, "reason": reason},
+            )
+            connection.commit()
+        result = self.get_mail_reconciliation(review_id)
+        assert result is not None
+        return result
+
+    def resolve_mail_reconciliation_match(
+        self,
+        review_id: str,
+        *,
+        application_id: str,
+        target_status: str,
+        automatic: bool = False,
+    ) -> MailReconciliation:
+        """Atomically claim a mail review and apply its guarded local status transition."""
+        normalized_target = target_status.strip().casefold()
+        if normalized_target not in APPLICATION_STATUSES:
+            raise ValueError("mail reconciliation target status is invalid")
+        self.initialize()
+        observed_at = _now()
+        with closing(self._connection()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            review = connection.execute(
+                "SELECT * FROM mail_reconciliations WHERE id = ?", (review_id,)
+            ).fetchone()
+            if review is None:
+                raise ValueError("mail reconciliation review does not exist")
+            prior_state = str(review["state"])
+            prior_application = review["matched_application_id"]
+            if prior_state in {"resolved", "ignored"}:
+                if prior_state == "matched" and prior_application == application_id:
+                    connection.rollback()
+                    return self._mail_reconciliation_from_row(review)
+                if prior_state == "resolved" and prior_application == application_id:
+                    connection.rollback()
+                    return self._mail_reconciliation_from_row(review)
+                raise ValueError("mail reconciliation was already resolved differently")
+            candidate_ids = {
+                str(item["application_id"]) for item in json.loads(str(review["candidates_json"]))
+            }
+            if application_id not in candidate_ids:
+                raise ValueError("application must be one of this review's candidates")
+            application = connection.execute(
+                "SELECT * FROM applications WHERE id = ?", (application_id,)
+            ).fetchone()
+            event = connection.execute(
+                "SELECT * FROM mail_events WHERE message_id = ?", (review["message_id"],)
+            ).fetchone()
+            if application is None:
+                raise ValueError("selected application does not exist")
+            if event is None:
+                raise ValueError("mail event no longer exists")
+            received_at = _as_datetime(str(event["received_at"]))
+            created_at = _as_datetime(str(application["created_at"]))
+            if received_at > observed_at + timedelta(hours=24):
+                resolution_reason = "explicit_match_future_event_no_status_change"
+                connection.execute(
+                    """
+                    UPDATE mail_reconciliations
+                    SET state = 'resolved', matched_application_id = ?,
+                        recommended_action = 'none', reason = ?, updated_at = ?
+                    WHERE id = ? AND state NOT IN ('resolved', 'ignored')
+                    """,
+                    (application_id, resolution_reason, _as_text(observed_at), review_id),
+                )
+                self._record_audit(
+                    connection,
+                    "mail_reconciliation.resolved",
+                    review_id,
+                    {"application_id": application_id, "reason": resolution_reason},
+                )
+                persisted = connection.execute(
+                    "SELECT * FROM mail_reconciliations WHERE id = ?", (review_id,)
+                ).fetchone()
+                assert persisted is not None
+                connection.commit()
+                return self._mail_reconciliation_from_row(persisted)
+            if received_at < created_at:
+                resolution_reason = (
+                    "automatic_match_event_predates_application_no_status_change"
+                    if automatic
+                    else "explicit_match_event_predates_application_no_status_change"
+                )
+                connection.execute(
+                    """
+                    UPDATE mail_reconciliations
+                    SET state = 'resolved', matched_application_id = ?,
+                        recommended_action = 'none', reason = ?, updated_at = ?
+                    WHERE id = ? AND state NOT IN ('resolved', 'ignored')
+                    """,
+                    (application_id, resolution_reason, _as_text(observed_at), review_id),
+                )
+                self._record_audit(
+                    connection,
+                    "mail_reconciliation.resolved",
+                    review_id,
+                    {"application_id": application_id, "reason": resolution_reason},
+                )
+                persisted = connection.execute(
+                    "SELECT * FROM mail_reconciliations WHERE id = ?", (review_id,)
+                ).fetchone()
+                assert persisted is not None
+                connection.commit()
+                return self._mail_reconciliation_from_row(persisted)
+            current_status = str(application["status"])
+            if current_status != normalized_target:
+                if current_status in _TERMINAL_APPLICATION_STATUSES:
+                    raise ValueError(
+                        "mail reconciliation cannot be applied: application_is_terminal"
+                    )
+                current_progress = _APPLICATION_STATUS_PROGRESS.get(current_status)
+                target_progress = _APPLICATION_STATUS_PROGRESS.get(normalized_target)
+                if (
+                    current_progress is not None
+                    and target_progress is not None
+                    and target_progress < current_progress
+                ):
+                    raise ValueError(
+                        "mail reconciliation cannot be applied: status_regression_prevented"
+                    )
+                audits = connection.execute(
+                    "SELECT action, payload_json, created_at FROM audit_events "
+                    "WHERE subject_id = ?",
+                    (application_id,),
+                ).fetchall()
+                manual_updates = [
+                    _as_datetime(str(row["created_at"]))
+                    for row in audits
+                    if str(row["action"]) == "application.status_updated"
+                ]
+                if manual_updates and max(manual_updates) > received_at:
+                    raise ValueError(
+                        "mail reconciliation cannot be applied: older_than_manual_status_update"
+                    )
+                mail_updates: list[datetime] = []
+                for row in audits:
+                    if str(row["action"]) != "application.status_updated_from_mail":
+                        continue
+                    payload = json.loads(str(row["payload_json"]))
+                    value = payload.get("event_received_at")
+                    if not isinstance(value, str):
+                        continue
+                    try:
+                        mail_updates.append(_as_datetime(value))
+                    except ValueError:
+                        continue
+                if mail_updates and received_at <= max(mail_updates):
+                    raise ValueError(
+                        "mail reconciliation cannot be applied: older_than_latest_mail_transition"
+                    )
+                connection.execute(
+                    "UPDATE applications SET status = ? WHERE id = ?",
+                    (normalized_target, application_id),
+                )
+                self._record_audit(
+                    connection,
+                    "application.status_updated_from_mail",
+                    application_id,
+                    {
+                        "event_received_at": _as_text(received_at),
+                        "from": current_status,
+                        "mail_event_id": str(event["message_id"]),
+                        "mail_kind": str(event["kind"]),
+                        "to": normalized_target,
+                    },
+                )
+                resolution_reason = (
+                    "automatic_match_status_transitioned"
+                    if automatic
+                    else "explicit_match_status_transitioned"
+                )
+            else:
+                resolution_reason = "automatic_match_noop" if automatic else "explicit_match_noop"
+            final_state = "matched" if automatic else "resolved"
+            connection.execute(
+                """
+                UPDATE mail_reconciliations
+                SET state = ?, matched_application_id = ?,
+                    recommended_action = 'none', reason = ?, updated_at = ?
+                WHERE id = ? AND state NOT IN ('matched', 'resolved', 'ignored')
+                """,
+                (
+                    final_state,
+                    application_id,
+                    resolution_reason,
+                    _as_text(observed_at),
+                    review_id,
+                ),
+            )
+            self._record_audit(
+                connection,
+                "mail_reconciliation.resolved",
+                review_id,
+                {"application_id": application_id, "reason": resolution_reason},
+            )
+            persisted = connection.execute(
+                "SELECT * FROM mail_reconciliations WHERE id = ?", (review_id,)
+            ).fetchone()
+            assert persisted is not None
+            connection.commit()
+        return self._mail_reconciliation_from_row(persisted)
+
+    @staticmethod
+    def _mail_reconciliation_from_row(row: sqlite3.Row) -> MailReconciliation:
+        candidates = tuple(
+            MailMatchCandidate(
+                application_id=str(item["application_id"]),
+                company=str(item["company"]),
+                role=str(item["role"]),
+                score=float(item["score"]),
+                confidence=str(item["confidence"]),
+                provenance=tuple(str(value) for value in item["provenance"]),
+            )
+            for item in json.loads(row["candidates_json"])
+        )
+        return MailReconciliation(
+            id=str(row["id"]),
+            message_id=str(row["message_id"]),
+            event_kind=str(row["event_kind"]),
+            event_received_at=_as_datetime(str(row["event_received_at"])),
+            state=str(row["state"]),
+            matched_application_id=(
+                str(row["matched_application_id"])
+                if row["matched_application_id"] is not None
+                else None
+            ),
+            score=float(row["score"]),
+            confidence=str(row["confidence"]),
+            candidates=candidates,
+            provenance=tuple(str(value) for value in json.loads(row["provenance_json"])),
+            recommended_action=str(row["recommended_action"]),
+            reason=str(row["reason"]),
+            application_fingerprint=str(row["application_fingerprint"]),
+            updated_at=_as_datetime(str(row["updated_at"])),
+        )
 
     def upsert_recruiter_contact(
         self,

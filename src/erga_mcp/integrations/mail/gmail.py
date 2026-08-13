@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from erga_mcp.integrations.mail.zoho import MailMessageMetadata
+from erga_mcp.tracking.mail_reconciliation import opaque_identifier_digest
 
 _GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
 
@@ -46,6 +47,17 @@ def parse_message_metadata(payload: dict[str, object]) -> MailMessageMetadata:
         sender=values.get("from", ""),
         subject=values.get("subject", ""),
         preview=str(payload.get("snippet", "")),
+        thread_id=opaque_identifier_digest(str(payload.get("threadId", ""))),
+        reference_ids=tuple(
+            sorted(
+                {
+                    opaque_identifier_digest(value)
+                    for key in ("message-id", "in-reply-to", "references")
+                    for value in values.get(key, "").replace(">", " ").replace("<", " ").split()
+                    if opaque_identifier_digest(value)
+                }
+            )
+        ),
     )
 
 
@@ -78,7 +90,17 @@ def fetch_inbox_metadata(
         result.append(
             parse_message_metadata(
                 request_get(
-                    f"{_GMAIL_API}/messages/{item['id']}?format=metadata&metadataHeaders=From&metadataHeaders=Subject"
+                    f"{_GMAIL_API}/messages/{item['id']}?"
+                    + urlencode(
+                        [
+                            ("format", "metadata"),
+                            ("metadataHeaders", "From"),
+                            ("metadataHeaders", "Subject"),
+                            ("metadataHeaders", "Message-ID"),
+                            ("metadataHeaders", "In-Reply-To"),
+                            ("metadataHeaders", "References"),
+                        ]
+                    )
                 )
             )
         )
@@ -131,7 +153,13 @@ def fetch_inbox_metadata_with_gws(
                         "userId": "me",
                         "id": item["id"],
                         "format": "metadata",
-                        "metadataHeaders": ["From", "Subject"],
+                        "metadataHeaders": [
+                            "From",
+                            "Subject",
+                            "Message-ID",
+                            "In-Reply-To",
+                            "References",
+                        ],
                     }
                 ),
                 "--format",
@@ -191,7 +219,13 @@ def fetch_all_inbox_metadata_with_gws(
                             "userId": "me",
                             "id": item["id"],
                             "format": "metadata",
-                            "metadataHeaders": ["From", "Subject"],
+                            "metadataHeaders": [
+                                "From",
+                                "Subject",
+                                "Message-ID",
+                                "In-Reply-To",
+                                "References",
+                            ],
                         }
                     ),
                     "--format",

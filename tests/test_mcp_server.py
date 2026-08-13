@@ -49,7 +49,12 @@ from erga_mcp.resumes.ai_tailoring import (
     TailoringDraftRequest,
     TailoringDraftTool,
 )
-from erga_mcp.resumes.artifacts import LatexValidation, ResumeItemLayoutValidation
+from erga_mcp.resumes.artifacts import (
+    LatexValidation,
+    ResumeItemLayoutValidation,
+    create_job_package,
+    record_validated_resume_version,
+)
 from erga_mcp.resumes.tailoring import create_automatic_resume_proposal
 from erga_mcp.store import ErgaStore
 
@@ -1617,6 +1622,7 @@ Bottom of the approved master template.
                     "pipeline_status",
                     "list_applications",
                     "update_application_status",
+                    "confirm_application_submission",
                     "application_tracker",
                     "application_orbit",
                     "update_orbit_preferences",
@@ -1635,11 +1641,14 @@ Bottom of the approved master template.
                     "list_evidence",
                     "resume_source_context",
                     "list_mail_events",
+                    "list_mail_reconciliation_reviews",
                     "token_usage",
                     "propose_project_metrics",
                     "search_keryx_jobs",
                     "record_token_usage",
                     "sync_recruiting_mail",
+                    "retry_mail_reconciliation",
+                    "resolve_mail_reconciliation",
                     "intake_job_url",
                     "install_mail_monitor_scripts",
                     "install_update_monitor_script",
@@ -1672,6 +1681,7 @@ Bottom of the approved master template.
                 "list_evidence",
                 "resume_source_context",
                 "list_mail_events",
+                "list_mail_reconciliation_reviews",
                 "search_keryx_jobs",
             }:
                 annotations = by_name[name].annotations
@@ -2140,6 +2150,182 @@ Bottom of the approved master template.
             ]
             self.assertEqual(len(status_audits), 1)
 
+    def test_submission_confirmation_binds_status_to_the_exact_generated_resume(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(_BROAD_CONFIG, encoding="utf-8")
+            store = ErgaStore(root / "state" / "erga.sqlite3")
+            application = store.create_application(
+                company="Example",
+                role="Software Engineer",
+                source_url="https://jobs.example.test/engineer",
+                evidence_ids=[],
+            )
+            other = store.create_application(
+                company="Other",
+                role="Engineer",
+                source_url="https://jobs.other.test/engineer",
+                evidence_ids=[],
+            )
+            package = create_job_package(
+                output_root=root / "output",
+                cycle="fall-2026",
+                application_slug="example-engineer",
+                job_url=application.source_url,
+            )
+            source = package.package_dir / "source" / "resume.tex"
+            proposal = package.package_dir / "artifacts" / "proposal.tex"
+            pdf = package.package_dir / "artifacts" / "resume.pdf"
+            decision = package.package_dir / "artifacts" / "resume-decision.json"
+            source.write_text("synthetic master", encoding="utf-8")
+            proposal.write_text("synthetic proposal", encoding="utf-8")
+            pdf.write_bytes(b"%PDF synthetic")
+            decision.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "master_parity": {"passed": True},
+                        "catalogue": {"selected": [{"project_id": "api"}]},
+                        "selected_bullet_evidence_ids": [["ev_api"]],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            version = record_validated_resume_version(
+                manifest_path=package.manifest_path,
+                application_id=application.id,
+                source_path=source,
+                proposal_path=proposal,
+                pdf_path=pdf,
+                decision_path=decision,
+                validation={"returncode": 0, "page_count": 1},
+            )
+            server = build_server(config_path)
+
+            for invalid_application_id, invalid_version_id in (
+                (application.id, "resume_missing"),
+                (other.id, version.id),
+            ):
+                with self.assertRaises(Exception):
+                    asyncio.run(
+                        server.call_tool(
+                            "confirm_application_submission",
+                            {
+                                "application_id": invalid_application_id,
+                                "status": "applied",
+                                "used_generated_resume": True,
+                                "resume_version_id": invalid_version_id,
+                            },
+                        )
+                    )
+            statuses = {item.id: item.status for item in store.list_applications()}
+            self.assertEqual(statuses[application.id], "draft")
+            self.assertEqual(statuses[other.id], "draft")
+
+            with (
+                patch(
+                    "erga_mcp.mcp.workspace_tools.mark_generated_resume_used",
+                    side_effect=OSError("synthetic manifest failure"),
+                ),
+                self.assertRaises(Exception),
+            ):
+                asyncio.run(
+                    server.call_tool(
+                        "confirm_application_submission",
+                        {
+                            "application_id": application.id,
+                            "status": "applied",
+                            "used_generated_resume": True,
+                            "resume_version_id": version.id,
+                        },
+                    )
+                )
+            self.assertEqual(
+                {item.id: item.status for item in store.list_applications()}[application.id],
+                "draft",
+            )
+
+            confirmed: Any = asyncio.run(
+                server.call_tool(
+                    "confirm_application_submission",
+                    {
+                        "application_id": application.id,
+                        "status": "applied",
+                        "used_generated_resume": True,
+                        "resume_version_id": version.id,
+                    },
+                )
+            )
+            payload = cast(dict[str, object], confirmed.structured_content)
+            used_at = payload["used_at"]
+            self.assertEqual(payload["resume_version_id"], version.id)
+            self.assertTrue(payload["used_generated_resume"])
+            self.assertEqual(
+                {item.id: item.status for item in store.list_applications()}[application.id],
+                "applied",
+            )
+
+            replayed: Any = asyncio.run(
+                server.call_tool(
+                    "confirm_application_submission",
+                    {
+                        "application_id": application.id,
+                        "status": "applied",
+                        "used_generated_resume": True,
+                        "resume_version_id": version.id,
+                    },
+                )
+            )
+            self.assertEqual(replayed.structured_content["used_at"], used_at)
+
+            other_way: Any = asyncio.run(
+                server.call_tool(
+                    "confirm_application_submission",
+                    {
+                        "application_id": other.id,
+                        "status": "applied",
+                        "used_generated_resume": False,
+                        "resume_version_id": "",
+                    },
+                )
+            )
+            self.assertFalse(other_way.structured_content["used_generated_resume"])
+            statuses = {item.id: item.status for item in store.list_applications()}
+            self.assertEqual(statuses[other.id], "applied")
+
+            tracker_dir = root / "tracker"
+            tracker_dir.mkdir()
+            config_path.write_text(
+                _BROAD_CONFIG.replace(
+                    'enabled = false\ntracker_dir = ""\n# Explicit recruiting cycles',
+                    f"enabled = true\ntracker_dir = {json.dumps(str(tracker_dir))}\n"
+                    "# Explicit recruiting cycles",
+                ),
+                encoding="utf-8",
+            )
+            tracker_server = build_server(config_path)
+            with patch(
+                "erga_mcp.mcp.workspace_tools.reconcile_application_status_tracker_rows",
+                side_effect=OSError(
+                    "permission denied: /Users/private/Vault/Applications/Secret.md"
+                ),
+            ):
+                projected: Any = asyncio.run(
+                    tracker_server.call_tool(
+                        "confirm_application_submission",
+                        {
+                            "application_id": application.id,
+                            "status": "applied",
+                            "used_generated_resume": True,
+                            "resume_version_id": version.id,
+                        },
+                    )
+                )
+            self.assertEqual(projected.structured_content["status"], "applied")
+            self.assertIn("Tracker projection", projected.structured_content["warnings"][0])
+            self.assertNotIn("/Users/private", json.dumps(projected.structured_content))
+
     def test_hermes_monitor_tool_prepares_scripts_without_creating_delivery_jobs(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
@@ -2367,8 +2553,12 @@ Bottom of the approved master template.
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
             self.assertTrue(result["tailoring_meaningful_change"])
             self.assertEqual(result["tailoring_changed_sections"], ["Experience"])
-            self.assertEqual(result["tailoring_version"], 30)
+            self.assertEqual(result["tailoring_version"], 31)
             self.assertEqual(result["git_project_research"], [])
+            self.assertIsInstance(result["application_id"], str)
+            self.assertTrue(result["generated_resume_version_id"].startswith("resume_"))
+            self.assertIsNone(result["used_resume_version_id"])
+            self.assertTrue(Path(result["decision_report"]).is_file())
             output_pdf = Path(result["validation"]["pdf"])
             self.assertEqual(output_pdf.name, "Candidate_Resume.pdf")
             self.assertEqual(output_pdf.read_bytes(), b"exact tailored pdf")
@@ -2376,7 +2566,12 @@ Bottom of the approved master template.
                 (Path(result["package_dir"]) / "package.json").read_text(encoding="utf-8")
             )
             self.assertTrue(manifest["tailoring"]["meaningful_change"])
-            self.assertEqual(manifest["tailoring"]["version"], 30)
+            self.assertEqual(manifest["tailoring"]["version"], 31)
+            self.assertEqual(
+                manifest["generated_resume_version_id"], result["generated_resume_version_id"]
+            )
+            self.assertIsNone(manifest["used_resume_version_id"])
+            self.assertEqual(len(manifest["resume_versions"]), 1)
 
     def test_rebuilds_an_incomplete_legacy_package_and_preserves_its_files(self) -> None:
         with TemporaryDirectory() as directory:
@@ -2445,7 +2640,7 @@ Bottom of the approved master template.
             )
             manifest = json.loads((repaired / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["legacy_backup"], "legacy-backup")
-            self.assertEqual(manifest["tailoring"]["version"], 30)
+            self.assertEqual(manifest["tailoring"]["version"], 31)
             self.assertIn("Legacy package preserved", result["integration_warnings"][-1])
 
     def test_compile_rejects_a_pdf_over_the_configured_page_cap(self) -> None:

@@ -128,12 +128,19 @@ are deleted from the Erga host after Discord confirms upload by default; the ✅
 preview and the **Orbit images** action in `/erga-settings` change that preset for future renders.
 
 After `/intake-job` or a pasted job link generates and attaches a validated résumé, the same Discord
-message asks whether the application was actually submitted. ✅ **Yes, applied** moves that exact
-application record to Applied; ❌ **Still drafting** keeps it out of the submitted funnel. Either
-choice also synchronizes an unambiguous configured Obsidian tracker row. Later high-confidence
-recruiting mail can advance the canonical record and is mirrored back into the tracker, while
-ambiguous mail stays unchanged for review. These controls update private tracking state only and
-never submit an application.
+message asks whether the application was actually submitted. ✅ **Applied with this résumé** moves
+that exact application to Applied and records the immutable, validated résumé version; **Applied
+another way** moves it without claiming the generated file was used; ❌ **Still drafting** keeps it
+out of the submitted funnel. The confirmation is application-bound and rejects stale or mismatched
+résumé versions before changing status. Each choice also synchronizes an unambiguous configured
+Obsidian tracker row.
+
+Later high-confidence recruiting mail can advance the canonical record and is mirrored back into
+the tracker. Ambiguous, older, or sensitive messages stay unchanged in a metadata-only review
+queue. Hermes users can open that queue with `/erga-mail-review`, choose a candidate application or
+ignore the message, and use `/erga-mail-review retry` after adding older application records. No
+mail body is retained by the reconciliation record, and these controls never send email or mutate a
+remote mailbox.
 
 ## Live request experience and color system
 

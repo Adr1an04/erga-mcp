@@ -29,6 +29,7 @@ _READ_TOOLS = {
     "erga_settings_card",
     "list_evidence",
     "list_mail_events",
+    "list_mail_reconciliation_reviews",
     "token_usage",
     "search_keryx_jobs",
 }
@@ -46,6 +47,7 @@ _CAREER_TOOLS = {
     "erga_settings_card",
     "list_evidence",
     "update_application_status",
+    "confirm_application_submission",
     "scrape_public_page",
     "extract_public_page",
     "intake_job_url",
@@ -67,6 +69,8 @@ _CAREER_TOOLS = {
     "execute_tailoring_plan",
     "search_keryx_jobs",
     "install_update_monitor_script",
+    "retry_mail_reconciliation",
+    "resolve_mail_reconciliation",
 }
 
 
@@ -190,6 +194,7 @@ class McpToolProfileTests(unittest.TestCase):
                 "update_orbit_preferences",
                 "record_token_usage",
                 "update_application_status",
+                "confirm_application_submission",
                 "export_data",
                 "record_secondary_research",
                 "create_research_brief",
@@ -205,6 +210,8 @@ class McpToolProfileTests(unittest.TestCase):
                 "manage_portfolio_roots",
                 "review_git_skill_group",
                 "update_tailoring_plan",
+                "retry_mail_reconciliation",
+                "resolve_mail_reconciliation",
             },
         )
 
@@ -217,6 +224,7 @@ class McpToolProfileTests(unittest.TestCase):
             | {
                 "application_orbit",
                 "update_orbit_preferences",
+                "confirm_application_submission",
                 "sync_recruiting_mail",
                 "install_mail_monitor_scripts",
                 "install_update_monitor_script",
@@ -230,6 +238,8 @@ class McpToolProfileTests(unittest.TestCase):
                 "create_tailoring_plan",
                 "update_tailoring_plan",
                 "execute_tailoring_plan",
+                "retry_mail_reconciliation",
+                "resolve_mail_reconciliation",
             },
         )
 

@@ -32,6 +32,7 @@ class GitSkillGroup:
 # Deliberately small, reviewed vocabulary. Matching this table is discovery, not proof by itself.
 _SKILL_ALIASES: dict[str, tuple[str, ...]] = {
     "AWS": ("aws", "amazon web services"),
+    "Apache Kafka": ("apache kafka", "kafka"),
     "C#": ("c#", "c sharp"),
     "C++": ("c++", "cpp"),
     "CUDA": ("cuda",),
@@ -40,6 +41,8 @@ _SKILL_ALIASES: dict[str, tuple[str, ...]] = {
     "Flask": ("flask",),
     "GCP": ("gcp", "google cloud platform"),
     "GitHub Actions": ("github actions",),
+    "GraphQL": ("graphql",),
+    "gRPC": ("grpc",),
     "Go": ("golang", "go"),
     "Java": ("java",),
     "JavaScript": ("javascript",),

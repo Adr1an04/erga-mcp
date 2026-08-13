@@ -62,6 +62,30 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(result.kind, "offer")
         self.assertTrue(result.requires_review)
 
+    def test_unsubscribe_footer_does_not_hide_a_denial(self) -> None:
+        result = classify_application_message(
+            subject="Update on your application",
+            preview="Unfortunately, we will not be moving forward. Unsubscribe from updates.",
+        )
+
+        self.assertEqual(result.kind, "denial")
+
+    def test_unsubscribe_footer_does_not_hide_an_interview(self) -> None:
+        result = classify_application_message(
+            subject="Interview invitation",
+            preview="Schedule your technical interview. Unsubscribe from updates.",
+        )
+
+        self.assertEqual(result.kind, "interview")
+
+    def test_unsubscribe_footer_does_not_hide_an_assessment(self) -> None:
+        result = classify_application_message(
+            subject="Online assessment",
+            preview="Complete your coding assessment. Unsubscribe from updates.",
+        )
+
+        self.assertEqual(result.kind, "assessment")
+
 
 if __name__ == "__main__":
     unittest.main()

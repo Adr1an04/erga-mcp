@@ -15,6 +15,55 @@ from erga_mcp.store import ErgaStore
 
 
 class MailSyncMcpTests(unittest.TestCase):
+    def test_projection_failure_reports_sanitized_warning_after_canonical_sync(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace('tool_profile = "career"', 'tool_profile = "hermes"')
+                .replace('client_id = ""', 'client_id = "test-client"')
+                .replace(
+                    'enabled = false\ntracker_dir = ""', 'enabled = true\ntracker_dir = "tracker"'
+                ),
+                encoding="utf-8",
+            )
+            message = MailMessageMetadata(
+                message_id="projection-failure",
+                received_at=datetime.now(UTC),
+                sender="talent@example.test",
+                subject="Application received",
+                preview="We received your application.",
+            )
+            sentinel = "/Users/private/Vault/Secret.md"
+            with (
+                patch(
+                    "erga_mcp.integrations.mail.provider.refresh_access_token",
+                    return_value="test-token",
+                ),
+                patch(
+                    "erga_mcp.integrations.mail.provider.fetch_all_inbox_metadata",
+                    return_value=[message],
+                ),
+                patch(
+                    "erga_mcp.mcp.workspace_tools.reconcile_application_status_tracker_rows",
+                    side_effect=OSError(f"permission denied: {sentinel}"),
+                ),
+                patch(
+                    "erga_mcp.mcp.workspace_tools.project_recruiter_contacts",
+                    side_effect=OSError(f"permission denied: {sentinel}"),
+                ),
+            ):
+                result: Any = asyncio.run(
+                    build_server(config_path).call_tool("sync_recruiting_mail", {})
+                )
+            payload = cast(dict[str, Any], result.structured_content)
+            retained = ErgaStore(root / "state" / "erga.sqlite3").list_mail_events()
+
+        self.assertEqual(len(retained), 1)
+        self.assertEqual(payload["created"], 1)
+        self.assertEqual(len(payload["warnings"]), 2)
+        self.assertNotIn(sentinel, str(payload))
+
     def test_mail_status_transition_is_mirrored_to_the_exact_tracker_row(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -51,7 +100,7 @@ class MailSyncMcpTests(unittest.TestCase):
             store.update_application_status(application.id, status="applied")
             denial = MailMessageMetadata(
                 message_id="uber-denial",
-                received_at=datetime(2026, 8, 12, tzinfo=UTC),
+                received_at=datetime.now(UTC),
                 sender="talent@uber.com",
                 subject="Thanks for your interest in Uber",
                 preview="Unfortunately, we will not be moving forward.",
@@ -72,8 +121,9 @@ class MailSyncMcpTests(unittest.TestCase):
                 )
             payload = cast(dict[str, Any], result.structured_content)
 
-            self.assertEqual(payload["tracker_updates"], 1)
-            self.assertIn("| Rejected |", tracker_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["tracker_updates"], 0)
+            self.assertIn("| Applied |", tracker_path.read_text(encoding="utf-8"))
+            self.assertEqual(store.list_mail_reconciliations()[0].state, "review")
 
     def test_syncs_configured_zoho_folder_and_returns_a_safe_compact_message(self) -> None:
         with TemporaryDirectory() as directory:

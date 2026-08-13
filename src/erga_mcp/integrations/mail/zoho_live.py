@@ -11,10 +11,7 @@ from erga_mcp.models import MailEvent
 from erga_mcp.store import ErgaStore
 from erga_mcp.tracking.classification import classify_application_message
 from erga_mcp.tracking.contacts import record_recruiter_contact_from_mail
-from erga_mcp.tracking.status_transitions import (
-    apply_mail_status_transition,
-    reconcile_mail_status_transitions,
-)
+from erga_mcp.tracking.mail_reconciliation import reconcile_mail_events, sanitized_mail_signals
 
 _JOB_MARKERS = ("recruiter", "opportunity", "position", "opening", "hiring")
 _MARKETING_MARKERS = ("free applications", "one tap", "one click", "jobbie")
@@ -59,15 +56,18 @@ def sync_metadata(
             kind=kind,
             confidence=confidence,
             requires_review=requires_review,
+            **sanitized_mail_signals(
+                sender=message.sender,
+                subject=message.subject,
+                preview=message.preview,
+                content=message.content,
+                thread_id=message.thread_id,
+                reference_ids=message.reference_ids,
+            ),
         )
         created = store.record_mail_event(event)
-        reclassified = False
         if not created:
-            reclassified = store.update_mail_event_classification(event)
-        if created or reclassified:
-            transitioned = apply_mail_status_transition(store, event)
-            if transitioned is not None:
-                counts["status_transitions"] = int(counts["status_transitions"]) + 1
+            store.update_mail_event_classification(event)
         contact = record_recruiter_contact_from_mail(store, event)
         if contact is not None:
             counts.setdefault("contacts", 0)
@@ -86,9 +86,8 @@ def sync_metadata(
                         "requires_review": requires_review,
                     }
                 )
-    counts["status_transitions"] = int(
-        counts["status_transitions"]
-    ) + reconcile_mail_status_transitions(store, store.list_mail_events())
+    reconciliation = reconcile_mail_events(store, store.list_mail_events())
+    counts["status_transitions"] = reconciliation.transitions
     return {**counts, "alerts": alerts}
 
 
@@ -193,6 +192,12 @@ def fetch_inbox_metadata(
                 subject=str(item.get("subject", "")),
                 preview=str(item.get("summary", "")),
                 content=content,
+                thread_id=str(item.get("threadId", item.get("conversationId", ""))),
+                reference_ids=tuple(
+                    str(item.get(key, ""))
+                    for key in ("messageIdHeader", "inReplyTo")
+                    if item.get(key)
+                ),
             )
         )
     return result

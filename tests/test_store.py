@@ -11,6 +11,24 @@ from erga_mcp.tracking.contacts import record_recruiter_contact_from_mail
 
 
 class StoreTests(unittest.TestCase):
+    def test_mail_event_timestamp_must_be_timezone_aware(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = ErgaStore(Path(directory) / "erga.sqlite3")
+            event = MailEvent(
+                message_id="naive-event",
+                received_at=datetime(2026, 8, 13),
+                sender="talent@example.test",
+                subject="Application update",
+                kind="application.update",
+                confidence=0.9,
+                requires_review=True,
+            )
+
+            with self.assertRaisesRegex(ValueError, "timezone-aware"):
+                store.record_mail_event(event)
+            with self.assertRaisesRegex(ValueError, "timezone-aware"):
+                store.update_mail_event_classification(event)
+
     def test_persists_one_live_orbit_dashboard_per_discord_channel(self) -> None:
         with TemporaryDirectory() as directory:
             store = ErgaStore(Path(directory) / "erga.sqlite3")
