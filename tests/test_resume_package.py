@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from erga_mcp.resumes.artifacts import (
     ResumeUseRecord,
+    _resume_manifest_transaction,
     create_job_package,
     mark_resume_version_used,
     record_validated_resume_version,
@@ -19,6 +20,29 @@ from erga_mcp.resumes.artifacts import (
 
 
 class ResumePackageTests(unittest.TestCase):
+    def test_windows_manifest_lock_tolerates_concurrent_byte_initialization(self) -> None:
+        with TemporaryDirectory() as directory:
+            manifest_path = Path(directory) / "package.json"
+            manifest_path.write_text("{}", encoding="utf-8")
+            fake_msvcrt = unittest.mock.Mock(LK_LOCK=1, LK_UNLCK=2)
+
+            with (
+                patch("erga_mcp.resumes.artifacts.fcntl", None),
+                patch("erga_mcp.resumes.artifacts.msvcrt", fake_msvcrt),
+                patch(
+                    "erga_mcp.resumes.artifacts.os.write",
+                    side_effect=PermissionError,
+                ),
+                patch("erga_mcp.resumes.artifacts.os.fstat") as fstat,
+            ):
+                fstat.return_value.st_size = 0
+                with _resume_manifest_transaction(manifest_path):
+                    pass
+
+            self.assertEqual(fake_msvcrt.locking.call_count, 2)
+            fake_msvcrt.locking.assert_any_call(unittest.mock.ANY, fake_msvcrt.LK_LOCK, 1)
+            fake_msvcrt.locking.assert_any_call(unittest.mock.ANY, fake_msvcrt.LK_UNLCK, 1)
+
     def test_resume_version_history_is_lossless_across_processes(self) -> None:
         with TemporaryDirectory() as directory:
             package = create_job_package(

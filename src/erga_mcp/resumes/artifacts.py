@@ -547,20 +547,28 @@ def _resume_manifest_transaction(manifest_path: Path):
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     descriptor = os.open(lock_path, flags, 0o600)
+    windows_lock_acquired = False
     try:
         if hasattr(os, "fchmod"):
             os.fchmod(descriptor, 0o600)
         if fcntl is not None:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
         elif msvcrt is not None:  # pragma: no cover - exercised by Windows CI
-            os.write(descriptor, b"\0")
+            if os.fstat(descriptor).st_size == 0:
+                try:
+                    os.write(descriptor, b"\0")
+                except PermissionError:
+                    # Another process can initialize and lock the byte after our
+                    # size check. In that race, wait on the byte it created.
+                    pass
             os.lseek(descriptor, 0, os.SEEK_SET)
             msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+            windows_lock_acquired = True
         yield
     finally:
         if fcntl is not None:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
-        elif msvcrt is not None:  # pragma: no cover - exercised by Windows CI
+        elif msvcrt is not None and windows_lock_acquired:  # pragma: no cover
             os.lseek(descriptor, 0, os.SEEK_SET)
             msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
         os.close(descriptor)
