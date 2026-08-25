@@ -12,6 +12,7 @@ from erga_mcp.integrations.mail.zoho_live import (
     fetch_all_inbox_metadata,
     fetch_inbox_metadata,
     format_recruiting_alerts,
+    refresh_known_metadata,
     sync_metadata,
 )
 from erga_mcp.models import MailEvent
@@ -281,6 +282,97 @@ class LiveZohoSyncTests(unittest.TestCase):
         self.assertEqual(summary["job"], 0)
         self.assertEqual(summary["other"], 2)
         self.assertEqual(summary["alerts"], [])
+
+    def test_application_footer_does_not_hide_real_receipt_and_retains_only_identity(self) -> None:
+        message = MailMessageMetadata(
+            "example-software-receipt",
+            datetime(2026, 8, 25, tzinfo=UTC),
+            "Example Software Careers <donotreply@email.careers.example.test>",
+            "Thank you for your application!",
+            "",
+            content=(
+                "Thank you for taking the time to submit your application for AI Software "
+                "Engineering Intern - Edge (Job number: 900050373). Unsubscribe"
+            ),
+        )
+        with TemporaryDirectory() as directory:
+            store = ErgaStore(Path(directory) / "erga.sqlite3")
+            summary = sync_metadata(store, [message])
+            retained = store.list_mail_events()[0]
+
+            self.assertEqual(summary["application"], 1)
+            self.assertEqual(retained.kind, "application.acknowledgement")
+            self.assertEqual(retained.company_hint, "Example Software")
+            self.assertEqual(retained.role_hint, "AI Software Engineering Intern - Edge")
+            self.assertEqual(retained.requisition_ids, ("900050373",))
+            self.assertNotIn("Unsubscribe", str(retained))
+
+    def test_candidate_account_password_reset_is_not_an_application(self) -> None:
+        message = MailMessageMetadata(
+            "candidate-password-reset",
+            datetime(2026, 8, 25, tzinfo=UTC),
+            "acme-gpu@otp.workday.com",
+            "Reset your password for your candidate account",
+            "Use this code to reset your account password.",
+        )
+        with TemporaryDirectory() as directory:
+            summary = sync_metadata(ErgaStore(Path(directory) / "erga.sqlite3"), [message])
+
+        self.assertEqual(summary["application"], 0)
+        self.assertEqual(summary["other"], 1)
+
+    def test_metadata_only_refresh_does_not_downgrade_a_known_decision(self) -> None:
+        message = MailMessageMetadata(
+            "known-decision",
+            datetime(2026, 8, 25, tzinfo=UTC),
+            "recruiting@example.test",
+            "Thank you for applying",
+            "",
+        )
+        with TemporaryDirectory() as directory:
+            store = ErgaStore(Path(directory) / "erga.sqlite3")
+            store.record_mail_event(
+                MailEvent(
+                    message_id=message.message_id,
+                    received_at=message.received_at,
+                    sender=message.sender,
+                    subject=message.subject,
+                    kind="application.denial",
+                    confidence=0.95,
+                    requires_review=True,
+                )
+            )
+
+            refresh_known_metadata(store, [message])
+
+            retained = store.list_mail_events()[0]
+            self.assertEqual(retained.kind, "application.denial")
+            self.assertTrue(retained.requires_review)
+
+    def test_oa_and_interview_survive_normal_email_footers(self) -> None:
+        messages = [
+            MailMessageMetadata(
+                "oa",
+                datetime(2026, 8, 25, tzinfo=UTC),
+                "recruiting@example.test",
+                "Complete your coding challenge invitation",
+                "Your assessment link is ready. Unsubscribe from optional recruiting news.",
+            ),
+            MailMessageMetadata(
+                "interview",
+                datetime(2026, 8, 25, tzinfo=UTC),
+                "recruiting@example.test",
+                "Choose an interview time",
+                "Share your interview availability. Unsubscribe from optional recruiting news.",
+            ),
+        ]
+        with TemporaryDirectory() as directory:
+            store = ErgaStore(Path(directory) / "erga.sqlite3")
+            summary = sync_metadata(store, messages)
+            kinds = {event.kind for event in store.list_mail_events()}
+
+        self.assertEqual(summary["application"], 2)
+        self.assertEqual(kinds, {"application.assessment", "application.interview"})
 
     def test_reclassifies_existing_messages_when_rules_improve(self) -> None:
         message = MailMessageMetadata(

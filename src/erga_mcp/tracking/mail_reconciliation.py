@@ -246,6 +246,8 @@ def _rank_candidates(
     event_requisitions = set(event.requisition_ids)
     subject_tokens = _tokens(event.subject)
     subject_role_tokens = _role_tokens(event.subject)
+    receipt_company_tokens = _tokens(event.company_hint)
+    receipt_role_tokens = _role_tokens(event.role_hint)
     thread_matches, reference_matches = _linked_application_ids(store, event)
     candidates: list[MailMatchCandidate] = []
     for application in applications:
@@ -283,6 +285,12 @@ def _rank_candidates(
             provenance.append("event_predates_application")
         else:
             company_tokens = _tokens(application.company)
+            if receipt_company_tokens and (
+                receipt_company_tokens.issubset(company_tokens)
+                or company_tokens.issubset(receipt_company_tokens)
+            ):
+                score += 60
+                provenance.append("receipt_company")
             if company_tokens and company_tokens.issubset(subject_tokens):
                 score += 35
                 provenance.append("company_tokens")
@@ -299,6 +307,10 @@ def _rank_candidates(
                 score += 35
                 provenance.append("sender_domain")
             role_tokens = _role_tokens(application.role)
+            receipt_role_overlap = role_tokens.intersection(receipt_role_tokens)
+            if role_tokens and receipt_role_overlap:
+                score += 25 + 45 * (len(receipt_role_overlap) / len(role_tokens))
+                provenance.append("receipt_role")
             role_overlap = role_tokens.intersection(subject_role_tokens)
             if role_tokens and role_overlap:
                 score += 10 + 20 * (len(role_overlap) / len(role_tokens))

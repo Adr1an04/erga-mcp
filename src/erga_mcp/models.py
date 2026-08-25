@@ -152,6 +152,9 @@ class MailEvent:
     requisition_ids: tuple[str, ...] = ()
     thread_id: str = ""
     reference_ids: tuple[str, ...] = ()
+    company_hint: str = ""
+    role_hint: str = ""
+    receipt_parsed: bool = False
 
 
 @dataclass(frozen=True)

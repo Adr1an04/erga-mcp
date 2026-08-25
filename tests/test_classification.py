@@ -86,6 +86,14 @@ class ClassificationTests(unittest.TestCase):
 
         self.assertEqual(result.kind, "assessment")
 
+    def test_recommended_jobs_footer_does_not_hide_a_confirmation(self) -> None:
+        result = classify_application_message(
+            subject="Application confirmation",
+            preview="We received your application. See recommended jobs in your profile.",
+        )
+
+        self.assertEqual(result.kind, "acknowledgement")
+
     def test_arbitrary_unknown_mail_does_not_create_review_work(self) -> None:
         result = classify_application_message(
             subject="Weekly account summary",
@@ -102,6 +110,18 @@ class ClassificationTests(unittest.TestCase):
         )
 
         self.assertEqual(result.kind, "unknown")
+        self.assertFalse(result.requires_review)
+
+    def test_receipt_status_help_text_is_not_a_rejection(self) -> None:
+        result = classify_application_message(
+            subject="Thank you for your application!",
+            preview=(
+                "Your application is being evaluated. An inactive job may mean the position "
+                "closed, you withdrew, or you were not selected for the role."
+            ),
+        )
+
+        self.assertEqual(result.kind, "acknowledgement")
         self.assertFalse(result.requires_review)
 
 

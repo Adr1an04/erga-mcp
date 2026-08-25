@@ -189,6 +189,9 @@ CREATE TABLE IF NOT EXISTS mail_events (
     requisition_ids_json TEXT NOT NULL DEFAULT '[]',
     thread_id TEXT NOT NULL DEFAULT '',
     reference_ids_json TEXT NOT NULL DEFAULT '[]',
+    company_hint TEXT NOT NULL DEFAULT '',
+    role_hint TEXT NOT NULL DEFAULT '',
+    receipt_parsed INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS mail_reconciliations (
@@ -301,6 +304,13 @@ def _bounded_requisition_id(value: str) -> str:
     return normalized if any(character.isdigit() for character in normalized) else ""
 
 
+def _bounded_mail_hint(value: str, *, limit: int) -> str:
+    normalized = " ".join(value.split())
+    if any(ord(character) < 32 for character in normalized):
+        return ""
+    return normalized[:limit].rstrip()
+
+
 def _safe_mail_signals(event: MailEvent) -> tuple[tuple[str, ...], tuple[str, ...]]:
     urls = tuple(
         sorted({safe for value in event.job_urls if (safe := _canonical_mail_job_url(value))})
@@ -376,6 +386,9 @@ class ErgaStore:
                 ("requisition_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
                 ("thread_id", "TEXT NOT NULL DEFAULT ''"),
                 ("reference_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("company_hint", "TEXT NOT NULL DEFAULT ''"),
+                ("role_hint", "TEXT NOT NULL DEFAULT ''"),
+                ("receipt_parsed", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if name not in mail_event_columns:
                     connection.execute(f"ALTER TABLE mail_events ADD COLUMN {name} {definition}")
@@ -1608,8 +1621,9 @@ class ErgaStore:
                 INSERT INTO mail_events (
                     message_id, received_at, sender, subject, kind, confidence,
                     requires_review, sender_domain, job_urls_json, requisition_ids_json,
-                    thread_id, reference_ids_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    thread_id, reference_ids_json, company_hint, role_hint, receipt_parsed,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(message_id) DO NOTHING
                 """,
                 (
@@ -1633,6 +1647,9 @@ class ErgaStore:
                             )
                         )
                     ),
+                    _bounded_mail_hint(event.company_hint, limit=100),
+                    _bounded_mail_hint(event.role_hint, limit=200),
+                    event.receipt_parsed,
                     _as_text(_now()),
                 ),
             )
@@ -1658,12 +1675,13 @@ class ErgaStore:
                 UPDATE mail_events
                 SET kind = ?, confidence = ?, requires_review = ?, sender_domain = ?,
                     job_urls_json = ?, requisition_ids_json = ?, thread_id = ?,
-                    reference_ids_json = ?
+                    reference_ids_json = ?, company_hint = ?, role_hint = ?, receipt_parsed = ?
                 WHERE message_id = ?
                   AND (
                     kind != ? OR confidence != ? OR requires_review != ? OR
                     sender_domain != ? OR job_urls_json != ? OR requisition_ids_json != ? OR
-                    thread_id != ? OR reference_ids_json != ?
+                    thread_id != ? OR reference_ids_json != ? OR company_hint != ? OR
+                    role_hint != ? OR receipt_parsed != ?
                   )
                 """,
                 (
@@ -1683,6 +1701,9 @@ class ErgaStore:
                             )
                         )
                     ),
+                    _bounded_mail_hint(event.company_hint, limit=100),
+                    _bounded_mail_hint(event.role_hint, limit=200),
+                    event.receipt_parsed,
                     event.message_id,
                     event.kind,
                     event.confidence,
@@ -1700,6 +1721,9 @@ class ErgaStore:
                             )
                         )
                     ),
+                    _bounded_mail_hint(event.company_hint, limit=100),
+                    _bounded_mail_hint(event.role_hint, limit=200),
+                    event.receipt_parsed,
                 ),
             )
             if result.rowcount:
@@ -1732,6 +1756,9 @@ class ErgaStore:
                 ),
                 thread_id=str(row["thread_id"]),
                 reference_ids=tuple(str(value) for value in json.loads(row["reference_ids_json"])),
+                company_hint=str(row["company_hint"]),
+                role_hint=str(row["role_hint"]),
+                receipt_parsed=bool(row["receipt_parsed"]),
             )
             for row in rows
         ]

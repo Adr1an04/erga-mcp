@@ -12,7 +12,11 @@ from pydantic import Field, StrictInt
 
 from erga_mcp.config import ErgaConfig, load_config
 from erga_mcp.integrations.mail.provider import build_mail_provider
-from erga_mcp.integrations.mail.zoho_live import sync_metadata
+from erga_mcp.integrations.mail.zoho_live import (
+    receipt_recovery_message_ids,
+    refresh_known_metadata,
+    sync_metadata,
+)
 from erga_mcp.integrations.obsidian.tracker import (
     import_confirmed_application_tracker_rows,
     reconcile_application_status_tracker_rows,
@@ -652,17 +656,25 @@ def register_workspace_tools(
     @registry.tool("sync_recruiting_mail", annotations=NETWORK_READ_AND_WRITE)
     def sync_recruiting_mail() -> dict[str, object]:
         """Read configured mail page by page, persist local events, and summarize safely."""
-        known_message_ids = {event.message_id for event in store.list_mail_events()}
+        retained_events = store.list_mail_events()
+        known_message_ids = {event.message_id for event in retained_events}
+        recovery_message_ids = receipt_recovery_message_ids(retained_events)
         messages = build_mail_provider(config).fetch_inbox_metadata(
             page_size=100,
             max_messages=1000,
             include_content=config.mail_provider != "gmail",
-            known_message_ids=known_message_ids,
+            known_message_ids=known_message_ids - recovery_message_ids,
         )
         new_messages = [
             message for message in messages if message.message_id not in known_message_ids
         ]
         sync_result = sync_metadata(store, new_messages)
+        refresh_result = refresh_known_metadata(
+            store,
+            [message for message in messages if message.message_id in known_message_ids],
+        )
+        if refresh_result["promoted"] or refresh_result["enriched"]:
+            reconcile_mail_events(store, store.list_mail_events())
         tracker_updates = 0
         tracker_imports = 0
         warnings: list[str] = []
@@ -692,7 +704,11 @@ def register_workspace_tools(
             contacts_projected = 0
             warnings.append("Contact projection was not synchronized; retry locally.")
         created = cast(int, sync_result["created"])
-        recruiting_events = cast(int, sync_result["application"]) + cast(int, sync_result["job"])
+        recruiting_events = (
+            cast(int, sync_result["application"])
+            + cast(int, sync_result["job"])
+            + refresh_result["promoted"]
+        )
         pending_reviews = len(pending_mail_reviews(store))
         message = (
             "📬 **Erga mail sync complete**\n\n"
@@ -708,6 +724,11 @@ def register_workspace_tools(
                 f"{'s' if pending_reviews != 1 else ''} need your review; "
                 "use `/erga-mail-review`."
             )
+        if refresh_result["promoted"]:
+            message += (
+                f"\nRecovered {refresh_result['promoted']} earlier recruiting "
+                f"message{'s' if refresh_result['promoted'] != 1 else ''} from mailbox history."
+            )
         if warnings:
             message += "\n⚠️ " + " ".join(warnings)
         return {
@@ -719,6 +740,8 @@ def register_workspace_tools(
             "tracker_imports": tracker_imports,
             "contacts_projected": contacts_projected,
             "mail_reviews_pending": pending_reviews,
+            "historical_events_promoted": refresh_result["promoted"],
+            "historical_events_enriched": refresh_result["enriched"],
             "warnings": warnings,
             "message": message,
         }

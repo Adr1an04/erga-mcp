@@ -161,6 +161,12 @@ them. Hermes users can open the actionable queue with `/erga-mail-review`, choos
 application, or ignore the message. No mail body is retained by reconciliation, and these controls
 never send email or mutate a remote mailbox.
 
+The scanner treats confirmations, assessments, interviews, offers, and decisions as stages of one
+application lifecycle. It transiently parses supported ATS mail for company, role, and requisition
+identity, retains only those bounded fields, and uses them to keep multiple roles at the same
+company distinct. After classifier upgrades, previously retained misses receive one bounded
+read-only reparse instead of remaining permanently misclassified.
+
 ## Live request experience and color system
 
 Erga acknowledges an accepted request immediately with one live Discord card. For résumé work, the

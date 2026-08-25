@@ -56,10 +56,21 @@ def _company_matches_acknowledgement(company: str, event: MailEvent) -> bool:
     tokens = re.findall(r"[a-z0-9]+", company.casefold())
     if not tokens:
         return False
-    content = f"{event.sender}\n{event.subject}".casefold()
+    content = f"{event.sender}\n{event.subject}\n{event.company_hint}".casefold()
     return all(
         re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", content) for token in tokens
     )
+
+
+def _role_matches_acknowledgement(role: str, event: MailEvent) -> bool:
+    if not event.role_hint:
+        return True
+    expected = set(re.findall(r"[a-z0-9]+", role.casefold()))
+    observed = set(re.findall(r"[a-z0-9]+", event.role_hint.casefold()))
+    stopwords = {"and", "co", "intern", "internship", "of", "the"}
+    expected -= stopwords
+    observed -= stopwords
+    return bool(expected and observed and expected.intersection(observed))
 
 
 def reconcile_confirmed_application_tracker_rows(
@@ -92,6 +103,7 @@ def reconcile_confirmed_application_tracker_rows(
                     event
                     for event in acknowledgements
                     if _company_matches_acknowledgement(cells[0], event)
+                    and _role_matches_acknowledgement(cells[1], event)
                 ),
                 None,
             )
@@ -197,6 +209,11 @@ def _active_cycle_for_received_at(
 
 
 def _company_from_acknowledgement(event: MailEvent) -> str | None:
+    if event.company_hint:
+        try:
+            return _safe_name(event.company_hint)
+        except ValueError:
+            return None
     match = _ACKNOWLEDGEMENT_COMPANY_PATTERN.search(event.subject)
     if match is None:
         return None
@@ -225,7 +242,7 @@ def import_confirmed_application_tracker_rows(
         raise ValueError("active tracker cycles must be Fall YYYY or Spring YYYY")
 
     tracker_dir = tracker_dir.expanduser().resolve()
-    existing_companies: set[tuple[str, str]] = set()
+    existing_applications: set[tuple[str, str, str]] = set()
     for tracker_path in tracker_dir.glob("*.md"):
         text = tracker_path.read_text(encoding="utf-8")
         tracker_cycle = tracker_path.stem.removesuffix(" Application Tracker").removesuffix(
@@ -237,7 +254,9 @@ def import_confirmed_application_tracker_rows(
         for line in text.splitlines()[divider_line + 1 :]:
             cells = _table_cells(line)
             if len(cells) == len(_EXPECTED_TABLE_COLUMNS) and cells[0]:
-                existing_companies.add((tracker_cycle.casefold(), cells[0].casefold()))
+                existing_applications.add(
+                    (tracker_cycle.casefold(), cells[0].casefold(), cells[1].casefold())
+                )
 
     created = 0
     for event in sorted(events, key=lambda item: item.received_at):
@@ -249,8 +268,9 @@ def import_confirmed_application_tracker_rows(
         company = _company_from_acknowledgement(event)
         if cycle is None or company is None:
             continue
-        key = (cycle.casefold(), company.casefold())
-        if key in existing_companies:
+        role = event.role_hint or "Application confirmed by email"
+        key = (cycle.casefold(), company.casefold(), role.casefold())
+        if key in existing_applications:
             continue
         tracker_path = _tracker_path(tracker_dir, cycle)
         text = tracker_path.read_text(encoding="utf-8")
@@ -260,7 +280,7 @@ def import_confirmed_application_tracker_rows(
             continue
         row = [
             company,
-            "Application confirmed by email",
+            role,
             "",
             "Email acknowledgement",
             "Applied",
@@ -275,7 +295,7 @@ def import_confirmed_application_tracker_rows(
         tracker_path.write_text(
             "\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8"
         )
-        existing_companies.add(key)
+        existing_applications.add(key)
         created += 1
     return created
 

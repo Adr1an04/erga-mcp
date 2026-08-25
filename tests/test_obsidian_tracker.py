@@ -356,6 +356,50 @@ class ObsidianTrackerTests(unittest.TestCase):
                 rendered,
             )
 
+    def test_imports_multiple_distinct_roles_for_the_same_company(self) -> None:
+        with TemporaryDirectory() as directory:
+            tracker = Path(directory)
+            tracker_path = tracker / "Fall 2026 Application Tracker.md"
+            tracker_path.write_text(
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n",
+                encoding="utf-8",
+            )
+            events = [
+                MailEvent(
+                    message_id=f"acme-gpu-{index}",
+                    received_at=datetime(2026, 8, 19, index, tzinfo=UTC),
+                    sender="acme-gpu@myworkday.com",
+                    subject="Thank you for your interest in Acme GPU Labs",
+                    kind="application.acknowledgement",
+                    confidence=0.9,
+                    requires_review=False,
+                    company_hint="Acme GPU Labs",
+                    role_hint=role,
+                    requisition_ids=(requisition,),
+                )
+                for index, (role, requisition) in enumerate(
+                    (
+                        ("Machine Learning Systems Intern", "jr9000001"),
+                        ("Systems Software Intern", "jr9000002"),
+                    )
+                )
+            ]
+
+            first = import_confirmed_application_tracker_rows(
+                tracker_dir=tracker, active_cycles=("Fall 2026",), events=events
+            )
+            second = import_confirmed_application_tracker_rows(
+                tracker_dir=tracker, active_cycles=("Fall 2026",), events=events
+            )
+            rendered = tracker_path.read_text(encoding="utf-8")
+
+            self.assertEqual(first, 2)
+            self.assertEqual(second, 0)
+            self.assertIn("| Acme GPU Labs | Machine Learning Systems Intern |", rendered)
+            self.assertIn("| Acme GPU Labs | Systems Software Intern |", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,7 +6,9 @@
 - Local configuration, SQLite state, imports, exports, generated proposals, and user-provided source files are ignored by Git.
 - OAuth refresh tokens and Git tokens belong in the operating-system credential store, never in configuration files, shell history, logs, or repository files.
 - The fixture-only Zoho workflow has no OAuth or network behavior. The live adapter requests only `ZohoMail.messages.READ`, `ZohoMail.folders.READ`, and `ZohoMail.accounts.READ`, and rejects broader or mutating scopes.
-- Mail previews are used only for local classification. The store retains normalized message metadata and classification, not preview/body content.
+- Mail previews and bodies are used transiently for local lifecycle classification. The store retains
+  normalized message metadata, classification, and bounded application identity (company, role,
+  and requisition ID), never preview/body content or tracking query parameters.
 
 ## Managed résumé knowledge
 

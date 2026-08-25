@@ -11,10 +11,68 @@ from unittest.mock import patch
 from erga_mcp.config import DEFAULT_CONFIG
 from erga_mcp.integrations.mail.zoho import MailMessageMetadata
 from erga_mcp.mcp.server import build_server
+from erga_mcp.models import MailEvent
 from erga_mcp.store import ErgaStore
 
 
 class MailSyncMcpTests(unittest.TestCase):
+    def test_recovers_previously_missed_receipt_with_one_bounded_body_fetch(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace('tool_profile = "career"', 'tool_profile = "hermes"')
+                .replace('client_id = ""', 'client_id = "test-client"')
+                .replace('folder = "Job Applications"', 'folder = "Inbox"'),
+                encoding="utf-8",
+            )
+            store = ErgaStore(root / "state" / "erga.sqlite3")
+            message = MailMessageMetadata(
+                message_id="historical-example-software",
+                received_at=datetime(2026, 8, 25, tzinfo=UTC),
+                sender="Example Software Careers <donotreply@email.careers.example.test>",
+                subject="Thank you for your application!",
+                preview="",
+                content=(
+                    "Thank you for taking the time to submit your application for AI Software "
+                    "Engineering Intern - Edge (Job number: 900050373). Unsubscribe"
+                ),
+            )
+            store.record_mail_event(
+                MailEvent(
+                    message_id=message.message_id,
+                    received_at=message.received_at,
+                    sender=message.sender,
+                    subject=message.subject,
+                    kind="other",
+                    confidence=0.0,
+                    requires_review=False,
+                )
+            )
+            with (
+                patch(
+                    "erga_mcp.integrations.mail.provider.refresh_access_token",
+                    return_value="test-token",
+                ),
+                patch(
+                    "erga_mcp.integrations.mail.provider.fetch_all_inbox_metadata",
+                    return_value=[message],
+                ) as fetch,
+            ):
+                result: Any = asyncio.run(
+                    build_server(config_path).call_tool("sync_recruiting_mail", {})
+                )
+            payload = cast(dict[str, Any], result.structured_content)
+            retained = store.list_mail_events()[0]
+
+            self.assertEqual(payload["created"], 0)
+            self.assertEqual(payload["recruiting_events"], 1)
+            self.assertEqual(payload["historical_events_promoted"], 1)
+            self.assertEqual(retained.kind, "application.acknowledgement")
+            self.assertEqual(retained.role_hint, "AI Software Engineering Intern - Edge")
+            self.assertTrue(retained.receipt_parsed)
+            self.assertEqual(fetch.call_args.kwargs["known_message_ids"], set())
+
     def test_projection_failure_reports_sanitized_warning_after_canonical_sync(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

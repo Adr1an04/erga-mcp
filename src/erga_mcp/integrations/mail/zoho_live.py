@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Collection, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -11,6 +12,7 @@ from erga_mcp.models import MailEvent
 from erga_mcp.store import ErgaStore
 from erga_mcp.tracking.classification import classify_application_message
 from erga_mcp.tracking.contacts import record_recruiter_contact_from_mail
+from erga_mcp.tracking.mail_receipts import parse_application_receipt
 from erga_mcp.tracking.mail_reconciliation import reconcile_mail_events, sanitized_mail_signals
 
 _DIRECT_RECRUITER_OUTREACH_MARKERS = (
@@ -48,8 +50,6 @@ def _classify(message: MailMessageMetadata) -> tuple[str, float, bool]:
     content = (
         f"{message.sender}\n{message.subject}\n{message.preview}\n{message.content}".casefold()
     )
-    if any(marker in content for marker in _MARKETING_MARKERS):
-        return "other", 0.0, False
     application = classify_application_message(
         subject=message.subject, preview=f"{message.preview}\n{message.content}"
     )
@@ -59,12 +59,106 @@ def _classify(message: MailMessageMetadata) -> tuple[str, float, bool]:
             application.confidence,
             application.requires_review,
         )
+    if any(marker in content for marker in _MARKETING_MARKERS):
+        return "other", 0.0, False
     direct_outreach = any(marker in content for marker in _DIRECT_RECRUITER_OUTREACH_MARKERS)
     identified_recruiter = any(marker in content for marker in _RECRUITING_IDENTITY_MARKERS)
     role_context = any(marker in content for marker in _ROLE_CONTEXT_MARKERS)
     if direct_outreach or (identified_recruiter and role_context):
         return "job.candidate", 0.7, True
     return "other", 0.0, False
+
+
+def _event_from_message(message: MailMessageMetadata) -> MailEvent:
+    kind, confidence, requires_review = _classify(message)
+    signals = sanitized_mail_signals(
+        sender=message.sender,
+        subject=message.subject,
+        preview=message.preview,
+        content=message.content,
+        thread_id=message.thread_id,
+        reference_ids=message.reference_ids,
+    )
+    receipt = (
+        parse_application_receipt(
+            sender=message.sender,
+            subject=message.subject,
+            preview=message.preview,
+            content=message.content,
+        )
+        if kind.startswith("application.")
+        else None
+    )
+    requisition_ids = set(signals["requisition_ids"])
+    if receipt is not None:
+        requisition_ids.update(receipt.requisition_ids)
+    return MailEvent(
+        message_id=message.message_id,
+        received_at=message.received_at,
+        sender=message.sender,
+        subject=message.subject,
+        kind=kind,
+        confidence=confidence,
+        requires_review=requires_review,
+        sender_domain=signals["sender_domain"],
+        job_urls=signals["job_urls"],
+        requisition_ids=tuple(sorted(requisition_ids)),
+        thread_id=signals["thread_id"],
+        reference_ids=signals["reference_ids"],
+        company_hint=receipt.company if receipt is not None else "",
+        role_hint=receipt.role if receipt is not None else "",
+        receipt_parsed=True,
+    )
+
+
+def refresh_known_metadata(
+    store: ErgaStore, messages: Sequence[MailMessageMetadata]
+) -> dict[str, int]:
+    """Promote retained misses and enrich lifecycle identity without losing prior evidence."""
+    existing_by_id = {event.message_id: event for event in store.list_mail_events()}
+    promoted = 0
+    enriched = 0
+    for message in messages:
+        existing = existing_by_id.get(message.message_id)
+        if existing is None:
+            continue
+        candidate = _event_from_message(message)
+        candidate_is_relevant = candidate.kind != "other"
+        existing_is_relevant = existing.kind != "other"
+        if existing_is_relevant and (
+            not candidate_is_relevant
+            or (candidate.kind != existing.kind and not message.content.strip())
+        ):
+            candidate = replace(
+                candidate,
+                kind=existing.kind,
+                confidence=existing.confidence,
+                requires_review=existing.requires_review,
+            )
+        merged = replace(
+            candidate,
+            job_urls=tuple(sorted(set(existing.job_urls).union(candidate.job_urls))),
+            requisition_ids=tuple(
+                sorted(set(existing.requisition_ids).union(candidate.requisition_ids))
+            ),
+            company_hint=candidate.company_hint or existing.company_hint,
+            role_hint=candidate.role_hint or existing.role_hint,
+        )
+        identity_changed = bool(
+            merged.company_hint != existing.company_hint
+            or merged.role_hint != existing.role_hint
+            or set(merged.requisition_ids) != set(existing.requisition_ids)
+            or set(merged.job_urls) != set(existing.job_urls)
+        )
+        changed = store.update_mail_event_classification(merged)
+        promoted += int(changed and not existing_is_relevant and merged.kind != "other")
+        enriched += int(changed and existing.kind == merged.kind and identity_changed)
+    return {"promoted": promoted, "enriched": enriched}
+
+
+def receipt_recovery_message_ids(events: Sequence[MailEvent]) -> set[str]:
+    """Select each pre-upgrade retained message for exactly one bounded content reparse."""
+    return {event.message_id for event in events if not event.receipt_parsed}
 
 
 def sync_metadata(
@@ -74,24 +168,9 @@ def sync_metadata(
     counts = {"application": 0, "job": 0, "other": 0, "created": 0, "status_transitions": 0}
     alerts: list[dict[str, str | bool]] = []
     for message in messages:
-        kind, confidence, requires_review = _classify(message)
-        event = MailEvent(
-            message_id=message.message_id,
-            received_at=message.received_at,
-            sender=message.sender,
-            subject=message.subject,
-            kind=kind,
-            confidence=confidence,
-            requires_review=requires_review,
-            **sanitized_mail_signals(
-                sender=message.sender,
-                subject=message.subject,
-                preview=message.preview,
-                content=message.content,
-                thread_id=message.thread_id,
-                reference_ids=message.reference_ids,
-            ),
-        )
+        event = _event_from_message(message)
+        kind = event.kind
+        requires_review = event.requires_review
         created = store.record_mail_event(event)
         if not created:
             store.update_mail_event_classification(event)

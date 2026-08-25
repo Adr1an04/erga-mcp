@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,35 @@ from erga_mcp.tracking.contacts import record_recruiter_contact_from_mail
 
 
 class StoreTests(unittest.TestCase):
+    def test_migrates_existing_mail_events_for_bounded_receipt_identity(self) -> None:
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "erga.sqlite3"
+            connection = sqlite3.connect(database)
+            connection.execute(
+                """
+                CREATE TABLE mail_events (
+                    message_id TEXT PRIMARY KEY, received_at TEXT NOT NULL,
+                    sender TEXT NOT NULL, subject TEXT NOT NULL, kind TEXT NOT NULL,
+                    confidence REAL NOT NULL, requires_review INTEGER NOT NULL,
+                    sender_domain TEXT NOT NULL DEFAULT '',
+                    job_urls_json TEXT NOT NULL DEFAULT '[]',
+                    requisition_ids_json TEXT NOT NULL DEFAULT '[]',
+                    thread_id TEXT NOT NULL DEFAULT '',
+                    reference_ids_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            store = ErgaStore(database)
+            store.initialize()
+            connection = sqlite3.connect(database)
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(mail_events)")}
+            connection.close()
+
+            self.assertTrue({"company_hint", "role_hint", "receipt_parsed"}.issubset(columns))
+
     def test_mail_event_timestamp_must_be_timezone_aware(self) -> None:
         with TemporaryDirectory() as directory:
             store = ErgaStore(Path(directory) / "erga.sqlite3")

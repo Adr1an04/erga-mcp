@@ -18,8 +18,8 @@ _DENIAL_MARKERS = (
     "pursue other candidates",
     "selected another candidate",
     "we regret to inform you",
-    "you were not selected",
-    "application was not selected",
+    "we have decided not to proceed",
+    "we won't be proceeding",
 )
 _ASSESSMENT_MARKERS = (
     "hackerrank",
@@ -32,6 +32,10 @@ _ASSESSMENT_MARKERS = (
     "skills assessment",
     "take-home assignment",
     "take home assignment",
+    "coding challenge invitation",
+    "complete your assessment",
+    "complete the assessment",
+    "assessment link",
 )
 _INTERVIEW_MARKERS = (
     "interview invitation",
@@ -46,6 +50,10 @@ _INTERVIEW_MARKERS = (
     "virtual interview",
     "onsite interview",
     "on-site interview",
+    "interview request",
+    "select an interview time",
+    "choose an interview time",
+    "share your interview availability",
 )
 _OFFER_MARKERS = (
     "offer letter",
@@ -75,10 +83,20 @@ _COHERENT_NON_APPLICATION_MARKERS = tuple(
 )
 _ACKNOWLEDGEMENT_MARKERS = (
     "we received your application",
+    "we have received your application",
+    "we've received your application",
     "application received",
+    "application has been received",
+    "application has been submitted",
+    "application was submitted",
+    "careers application is in",
+    "application confirmation",
     "thank you for applying",
+    "thank you for your application",
     "thanks for applying",
     "thank you for your interest in",
+    "thank you for taking the time to submit your application",
+    "we want to confirm that your application",
 )
 
 
@@ -87,8 +105,6 @@ def classify_application_message(*, subject: str, preview: str) -> Classificatio
     normalized_subject = subject.casefold()
     content = f"{subject}\n{preview}".casefold()
     if any(marker in normalized_subject for marker in _STRONG_NON_APPLICATION_SUBJECT_MARKERS):
-        return Classification(kind="unknown", confidence=0.0, requires_review=False)
-    if any(marker in content for marker in _COHERENT_NON_APPLICATION_MARKERS):
         return Classification(kind="unknown", confidence=0.0, requires_review=False)
     if any(marker in content for marker in _DENIAL_MARKERS):
         return Classification(kind="denial", confidence=0.95, requires_review=True)
@@ -100,6 +116,8 @@ def classify_application_message(*, subject: str, preview: str) -> Classificatio
         return Classification(kind="assessment", confidence=0.98, requires_review=True)
     if any(marker in content for marker in _ACKNOWLEDGEMENT_MARKERS):
         return Classification(kind="acknowledgement", confidence=0.9, requires_review=False)
+    if any(marker in content for marker in _COHERENT_NON_APPLICATION_MARKERS):
+        return Classification(kind="unknown", confidence=0.0, requires_review=False)
     if "unsubscribe" in content:
         return Classification(kind="unknown", confidence=0.0, requires_review=False)
     # Unknown mail is not itself actionable. The provider adapter may separately recognize
