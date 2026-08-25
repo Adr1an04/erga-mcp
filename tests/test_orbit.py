@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from erga_mcp.models import Application, AuditEvent
 from erga_mcp.tracking.orbit import (
@@ -14,6 +14,7 @@ from erga_mcp.tracking.orbit import (
     _STATUS_COLORS,
     _TREE_NODE_SPECS,
     _TREE_RIBBON_COLORS,
+    _draw_flow_node,
     build_orbit_snapshot,
     render_orbit_png,
 )
@@ -142,6 +143,29 @@ class OrbitTests(unittest.TestCase):
 
     def test_node_counts_have_a_clear_gap_before_every_label(self) -> None:
         self.assertGreaterEqual(_NODE_LABEL_GAP, 10)
+
+    def test_flow_nodes_square_only_the_edges_connected_to_ribbons(self) -> None:
+        color = "#FE7F7F"
+
+        def corner_pixels(*, incoming: bool, outgoing: bool) -> tuple[object, object]:
+            image = Image.new("RGB", (30, 30), "white")
+            _draw_flow_node(
+                ImageDraw.Draw(image),
+                x=8,
+                y0=5,
+                y1=25,
+                color=color,
+                scale=1,
+                has_incoming=incoming,
+                has_outgoing=outgoing,
+            )
+            return image.getpixel((8, 5)), image.getpixel((22, 5))
+
+        coral = (254, 127, 127)
+        white = (255, 255, 255)
+        self.assertEqual(corner_pixels(incoming=False, outgoing=True), (white, coral))
+        self.assertEqual(corner_pixels(incoming=True, outgoing=True), (coral, coral))
+        self.assertEqual(corner_pixels(incoming=True, outgoing=False), (coral, white))
 
     def test_every_orbit_color_comes_from_the_erga_brand_palette(self) -> None:
         self.assertLessEqual(set(_STATUS_COLORS.values()), _ERGA_ORBIT_PALETTE)

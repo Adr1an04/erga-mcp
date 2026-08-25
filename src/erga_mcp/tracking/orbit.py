@@ -157,7 +157,7 @@ _PRE_APPLICATION_STATUSES = frozenset({"draft", "ready", "researching", "unknown
 _STATUS_AUDIT_ACTIONS = frozenset(
     {"application.status_updated", "application.status_updated_from_mail"}
 )
-_ORBIT_RENDER_VERSION = 6
+_ORBIT_RENDER_VERSION = 7
 
 
 @dataclass(frozen=True)
@@ -771,6 +771,36 @@ def _visual_label(node: OrbitNode) -> str:
     return node.label
 
 
+def _draw_flow_node(
+    draw: ImageDraw.ImageDraw,
+    *,
+    x: float,
+    y0: float,
+    y1: float,
+    color: str,
+    scale: int,
+    has_incoming: bool,
+    has_outgoing: bool,
+) -> None:
+    """Round only exposed node edges so ribbons meet connected edges without notches."""
+    width = 14 * scale
+    radius = 4 * scale
+    left = x * scale
+    top = y0 * scale
+    right = left + width
+    bottom = y1 * scale
+    fill = _hex_color(color)
+    draw.rounded_rectangle(
+        (left, top, right, bottom),
+        radius=radius,
+        fill=fill,
+    )
+    if has_incoming:
+        draw.rectangle((left, top, left + radius, bottom), fill=fill)
+    if has_outgoing:
+        draw.rectangle((right - radius, top, right, bottom), fill=fill)
+
+
 def render_orbit_png(
     snapshot: OrbitSnapshot,
     destination: Path,
@@ -894,10 +924,15 @@ def render_orbit_png(
 
         for node in snapshot.nodes:
             x, y0, y1 = geometry[node.id]
-            draw.rounded_rectangle(
-                (x * scale, y0 * scale, (x + 14) * scale, y1 * scale),
-                radius=4 * scale,
-                fill=_hex_color(node.color),
+            _draw_flow_node(
+                draw,
+                x=x,
+                y0=y0,
+                y1=y1,
+                color=node.color,
+                scale=scale,
+                has_incoming=incoming[node.id] > 0,
+                has_outgoing=outgoing[node.id] > 0,
             )
             count = f"{node.count:,}"
             label = _visual_label(node)
