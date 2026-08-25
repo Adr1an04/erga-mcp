@@ -12,7 +12,7 @@ from erga_mcp.models import MailEvent
 from erga_mcp.store import ErgaStore
 from erga_mcp.tracking.classification import classify_application_message
 from erga_mcp.tracking.contacts import record_recruiter_contact_from_mail
-from erga_mcp.tracking.mail_receipts import parse_application_receipt
+from erga_mcp.tracking.mail_receipts import RECEIPT_PARSER_VERSION, parse_application_receipt
 from erga_mcp.tracking.mail_reconciliation import reconcile_mail_events, sanitized_mail_signals
 
 _DIRECT_RECRUITER_OUTREACH_MARKERS = (
@@ -108,6 +108,7 @@ def _event_from_message(message: MailMessageMetadata) -> MailEvent:
         company_hint=receipt.company if receipt is not None else "",
         role_hint=receipt.role if receipt is not None else "",
         receipt_parsed=True,
+        receipt_parser_version=RECEIPT_PARSER_VERSION,
     )
 
 
@@ -118,17 +119,14 @@ def refresh_known_metadata(
     existing_by_id = {event.message_id: event for event in store.list_mail_events()}
     promoted = 0
     enriched = 0
+    reparsed = 0
     for message in messages:
         existing = existing_by_id.get(message.message_id)
         if existing is None:
             continue
         candidate = _event_from_message(message)
-        candidate_is_relevant = candidate.kind != "other"
         existing_is_relevant = existing.kind != "other"
-        if existing_is_relevant and (
-            not candidate_is_relevant
-            or (candidate.kind != existing.kind and not message.content.strip())
-        ):
+        if existing_is_relevant and candidate.kind != existing.kind and not message.content.strip():
             candidate = replace(
                 candidate,
                 kind=existing.kind,
@@ -151,14 +149,19 @@ def refresh_known_metadata(
             or set(merged.job_urls) != set(existing.job_urls)
         )
         changed = store.update_mail_event_classification(merged)
+        reparsed += int(existing.receipt_parser_version < RECEIPT_PARSER_VERSION)
         promoted += int(changed and not existing_is_relevant and merged.kind != "other")
         enriched += int(changed and existing.kind == merged.kind and identity_changed)
-    return {"promoted": promoted, "enriched": enriched}
+    return {"promoted": promoted, "enriched": enriched, "reparsed": reparsed}
 
 
 def receipt_recovery_message_ids(events: Sequence[MailEvent]) -> set[str]:
-    """Select each pre-upgrade retained message for exactly one bounded content reparse."""
-    return {event.message_id for event in events if not event.receipt_parsed}
+    """Select retained messages once for each deterministic receipt-parser revision."""
+    return {
+        event.message_id
+        for event in events
+        if event.receipt_parser_version < RECEIPT_PARSER_VERSION
+    }
 
 
 def sync_metadata(

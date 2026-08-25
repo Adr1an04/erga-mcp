@@ -192,6 +192,7 @@ CREATE TABLE IF NOT EXISTS mail_events (
     company_hint TEXT NOT NULL DEFAULT '',
     role_hint TEXT NOT NULL DEFAULT '',
     receipt_parsed INTEGER NOT NULL DEFAULT 0,
+    receipt_parser_version INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS mail_reconciliations (
@@ -389,6 +390,7 @@ class ErgaStore:
                 ("company_hint", "TEXT NOT NULL DEFAULT ''"),
                 ("role_hint", "TEXT NOT NULL DEFAULT ''"),
                 ("receipt_parsed", "INTEGER NOT NULL DEFAULT 0"),
+                ("receipt_parser_version", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if name not in mail_event_columns:
                     connection.execute(f"ALTER TABLE mail_events ADD COLUMN {name} {definition}")
@@ -1622,8 +1624,8 @@ class ErgaStore:
                     message_id, received_at, sender, subject, kind, confidence,
                     requires_review, sender_domain, job_urls_json, requisition_ids_json,
                     thread_id, reference_ids_json, company_hint, role_hint, receipt_parsed,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    receipt_parser_version, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(message_id) DO NOTHING
                 """,
                 (
@@ -1650,6 +1652,7 @@ class ErgaStore:
                     _bounded_mail_hint(event.company_hint, limit=100),
                     _bounded_mail_hint(event.role_hint, limit=200),
                     event.receipt_parsed,
+                    max(0, event.receipt_parser_version),
                     _as_text(_now()),
                 ),
             )
@@ -1675,13 +1678,14 @@ class ErgaStore:
                 UPDATE mail_events
                 SET kind = ?, confidence = ?, requires_review = ?, sender_domain = ?,
                     job_urls_json = ?, requisition_ids_json = ?, thread_id = ?,
-                    reference_ids_json = ?, company_hint = ?, role_hint = ?, receipt_parsed = ?
+                    reference_ids_json = ?, company_hint = ?, role_hint = ?, receipt_parsed = ?,
+                    receipt_parser_version = ?
                 WHERE message_id = ?
                   AND (
                     kind != ? OR confidence != ? OR requires_review != ? OR
                     sender_domain != ? OR job_urls_json != ? OR requisition_ids_json != ? OR
                     thread_id != ? OR reference_ids_json != ? OR company_hint != ? OR
-                    role_hint != ? OR receipt_parsed != ?
+                    role_hint != ? OR receipt_parsed != ? OR receipt_parser_version != ?
                   )
                 """,
                 (
@@ -1704,6 +1708,7 @@ class ErgaStore:
                     _bounded_mail_hint(event.company_hint, limit=100),
                     _bounded_mail_hint(event.role_hint, limit=200),
                     event.receipt_parsed,
+                    max(0, event.receipt_parser_version),
                     event.message_id,
                     event.kind,
                     event.confidence,
@@ -1724,6 +1729,7 @@ class ErgaStore:
                     _bounded_mail_hint(event.company_hint, limit=100),
                     _bounded_mail_hint(event.role_hint, limit=200),
                     event.receipt_parsed,
+                    max(0, event.receipt_parser_version),
                 ),
             )
             if result.rowcount:
@@ -1759,6 +1765,7 @@ class ErgaStore:
                 company_hint=str(row["company_hint"]),
                 role_hint=str(row["role_hint"]),
                 receipt_parsed=bool(row["receipt_parsed"]),
+                receipt_parser_version=int(row["receipt_parser_version"]),
             )
             for row in rows
         ]

@@ -60,6 +60,32 @@ class MailReceiptTests(unittest.TestCase):
         self.assertEqual(receipt.company, "Example Entertainment")
         self.assertEqual(receipt.role, "Platform Software Engineering Internship, Spring 2027")
 
+    def test_subject_role_does_not_replace_the_company(self) -> None:
+        receipt = parse_application_receipt(
+            sender="careers@recruitment.example-financial.test",
+            subject=("Thank you for applying to Engineering Internship - Metro, ST - 90001234"),
+            content=(
+                "Thank you for exploring new career opportunities with Example Financial! "
+                "Your application for the position of Engineering Internship - Metro, ST "
+                "has been received."
+            ),
+        )
+
+        self.assertEqual(receipt.company, "Example Financial")
+        self.assertEqual(receipt.role, "Engineering Internship - Metro, ST")
+
+    def test_extracts_company_and_role_from_successful_submission_subject(self) -> None:
+        receipt = parse_application_receipt(
+            sender="talent@example.test",
+            subject=(
+                "You have successfully submitted your Example Computing job application - "
+                "900123 - Software Developer Intern 2027"
+            ),
+        )
+
+        self.assertEqual(receipt.company, "Example Computing")
+        self.assertEqual(receipt.role, "Software Developer Intern 2027")
+
 
 if __name__ == "__main__":
     unittest.main()

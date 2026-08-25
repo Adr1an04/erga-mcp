@@ -68,9 +68,13 @@ class MailSyncMcpTests(unittest.TestCase):
             self.assertEqual(payload["created"], 0)
             self.assertEqual(payload["recruiting_events"], 1)
             self.assertEqual(payload["historical_events_promoted"], 1)
+            self.assertEqual(payload["historical_events_reparsed"], 1)
             self.assertEqual(retained.kind, "application.acknowledgement")
             self.assertEqual(retained.role_hint, "AI Software Engineering Intern - Edge")
             self.assertTrue(retained.receipt_parsed)
+            self.assertEqual(retained.receipt_parser_version, 2)
+            self.assertIn("1 recovered recruiting", payload["message"])
+            self.assertIn("Reparsed 1 stored message", payload["message"])
             self.assertEqual(fetch.call_args.kwargs["known_message_ids"], set())
 
     def test_projection_failure_reports_sanitized_warning_after_canonical_sync(self) -> None:

@@ -39,7 +39,14 @@ class StoreTests(unittest.TestCase):
             columns = {row[1] for row in connection.execute("PRAGMA table_info(mail_events)")}
             connection.close()
 
-            self.assertTrue({"company_hint", "role_hint", "receipt_parsed"}.issubset(columns))
+            self.assertTrue(
+                {
+                    "company_hint",
+                    "role_hint",
+                    "receipt_parsed",
+                    "receipt_parser_version",
+                }.issubset(columns)
+            )
 
     def test_mail_event_timestamp_must_be_timezone_aware(self) -> None:
         with TemporaryDirectory() as directory:

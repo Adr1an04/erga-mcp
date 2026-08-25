@@ -155,6 +155,7 @@ class MailEvent:
     company_hint: str = ""
     role_hint: str = ""
     receipt_parsed: bool = False
+    receipt_parser_version: int = 0
 
 
 @dataclass(frozen=True)

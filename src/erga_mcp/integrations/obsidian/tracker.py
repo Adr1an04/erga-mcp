@@ -25,12 +25,8 @@ _EXPECTED_TABLE_COLUMNS = (
     "contact / link",
 )
 _ACTIVE_CYCLE_PATTERN = re.compile(r"^(Fall|Spring)\s+(\d{4})$", re.IGNORECASE)
-_ACKNOWLEDGEMENT_COMPANY_PATTERN = re.compile(
-    r"\b(?:thank\s+you|thanks)\s+for\s+(?:your\s+)?"
-    r"(?:(?:applying|application)\s+(?:to|at)|interest\s+in)\s+(.+?)(?:[!.,:]|$)",
-    re.IGNORECASE,
-)
 _SOURCE_URL_PATTERN = re.compile(r"https?://[^)\s|]+", re.IGNORECASE)
+_MANAGED_MAIL_SOURCE = "email acknowledgement"
 
 
 def _safe_name(value: str) -> str:
@@ -39,6 +35,15 @@ def _safe_name(value: str) -> str:
     if not cleaned or cleaned in {".", ".."}:
         raise ValueError("company, role, and cycle must contain a safe display name")
     return cleaned
+
+
+def _safe_tracker_identity(value: str, *, limit: int) -> str:
+    cleaned = " ".join(value.split()).strip()
+    if not cleaned or not any(character.isalnum() for character in cleaned):
+        raise ValueError("tracker identity must contain a display name")
+    if any(ord(character) < 32 for character in cleaned):
+        raise ValueError("tracker identity contains control characters")
+    return cleaned[:limit].rstrip()
 
 
 def _table_cell(value: str | None) -> str:
@@ -208,22 +213,6 @@ def _active_cycle_for_received_at(
     )
 
 
-def _company_from_acknowledgement(event: MailEvent) -> str | None:
-    if event.company_hint:
-        try:
-            return _safe_name(event.company_hint)
-        except ValueError:
-            return None
-    match = _ACKNOWLEDGEMENT_COMPANY_PATTERN.search(event.subject)
-    if match is None:
-        return None
-    company = " ".join(match.group(1).split())
-    try:
-        return _safe_name(company)
-    except ValueError:
-        return None
-
-
 def _application_table_end(lines: list[str], divider_line: int) -> int:
     end = divider_line + 1
     while end < len(lines) and _table_cells(lines[end]):
@@ -234,7 +223,7 @@ def _application_table_end(lines: list[str], divider_line: int) -> int:
 def import_confirmed_application_tracker_rows(
     *, tracker_dir: Path, active_cycles: Sequence[str], events: Sequence[MailEvent]
 ) -> int:
-    """Add explicit acknowledgement-only rows for configured current recruiting cycles."""
+    """Project complete acknowledgement identities into canonical managed tracker rows."""
     active_cycles = tuple(" ".join(cycle.split()) for cycle in active_cycles if cycle.strip())
     if not active_cycles:
         return 0
@@ -242,35 +231,46 @@ def import_confirmed_application_tracker_rows(
         raise ValueError("active tracker cycles must be Fall YYYY or Spring YYYY")
 
     tracker_dir = tracker_dir.expanduser().resolve()
-    existing_applications: set[tuple[str, str, str]] = set()
-    for tracker_path in tracker_dir.glob("*.md"):
-        text = tracker_path.read_text(encoding="utf-8")
-        tracker_cycle = tracker_path.stem.removesuffix(" Application Tracker").removesuffix(
-            " Applications"
-        )
-        divider_line = _application_table_divider_line(text.splitlines())
-        if divider_line is None:
-            continue
-        for line in text.splitlines()[divider_line + 1 :]:
-            cells = _table_cells(line)
-            if len(cells) == len(_EXPECTED_TABLE_COLUMNS) and cells[0]:
-                existing_applications.add(
-                    (tracker_cycle.casefold(), cells[0].casefold(), cells[1].casefold())
-                )
-
-    created = 0
+    desired_by_cycle: dict[str, dict[tuple[str, str], list[str]]] = {}
     for event in sorted(events, key=lambda item: item.received_at):
         if event.kind != "application.acknowledgement":
             continue
         cycle = _active_cycle_for_received_at(
             event.received_at.year, event.received_at.month, active_cycles
         )
-        company = _company_from_acknowledgement(event)
-        if cycle is None or company is None:
+        if not event.company_hint or not event.role_hint:
             continue
-        role = event.role_hint or "Application confirmed by email"
-        key = (cycle.casefold(), company.casefold(), role.casefold())
-        if key in existing_applications:
+        try:
+            company = _safe_tracker_identity(event.company_hint, limit=100)
+            role = _safe_tracker_identity(event.role_hint, limit=200)
+        except ValueError:
+            continue
+        if cycle is None:
+            continue
+        desired_by_cycle.setdefault(cycle.casefold(), {}).setdefault(
+            (company.casefold(), role.casefold()),
+            [
+                company,
+                role,
+                "",
+                "Email acknowledgement",
+                "Applied",
+                event.received_at.date().isoformat(),
+                "Await recruiting update.",
+                "",
+            ],
+        )
+
+    changes = 0
+    for cycle in active_cycles:
+        candidates = (
+            tracker_dir / f"{cycle} Application Tracker.md",
+            tracker_dir / f"{cycle} Applications.md",
+        )
+        if (
+            not any(path.is_file() for path in candidates)
+            and cycle.casefold() not in desired_by_cycle
+        ):
             continue
         tracker_path = _tracker_path(tracker_dir, cycle)
         text = tracker_path.read_text(encoding="utf-8")
@@ -278,26 +278,41 @@ def import_confirmed_application_tracker_rows(
         divider_line = _application_table_divider_line(lines)
         if divider_line is None:
             continue
-        row = [
-            company,
-            role,
-            "",
-            "Email acknowledgement",
-            "Applied",
-            event.received_at.date().isoformat(),
-            "Await recruiting update.",
-            "",
+        table_end = _application_table_end(lines, divider_line)
+        existing_rows = [
+            list(cells)
+            for line in lines[divider_line + 1 : table_end]
+            if len(cells := _table_cells(line)) == len(_EXPECTED_TABLE_COLUMNS)
         ]
-        lines.insert(
-            _application_table_end(lines, divider_line),
-            "| " + " | ".join(_table_cell(cell) for cell in row) + " |",
-        )
+        unmanaged = [row for row in existing_rows if row[3].casefold() != _MANAGED_MAIL_SOURCE]
+        managed = [row for row in existing_rows if row[3].casefold() == _MANAGED_MAIL_SOURCE]
+        unmanaged_keys = {(row[0].casefold(), row[1].casefold()) for row in unmanaged}
+        managed_by_key = {(row[0].casefold(), row[1].casefold()): row for row in managed}
+        projected: list[list[str]] = []
+        for key, desired in desired_by_cycle.get(cycle.casefold(), {}).items():
+            if key in unmanaged_keys:
+                continue
+            existing = managed_by_key.get(key)
+            if existing is not None:
+                desired[2] = existing[2]
+                desired[4] = existing[4] or desired[4]
+                desired[5] = existing[5] or desired[5]
+                desired[6] = existing[6] or desired[6]
+                desired[7] = existing[7]
+            projected.append(desired)
+        rebuilt_rows = unmanaged + projected
+        rendered_rows = [
+            "| " + " | ".join(_table_cell(cell) for cell in row) + " |" for row in rebuilt_rows
+        ]
+        previous_rows = lines[divider_line + 1 : table_end]
+        if previous_rows == rendered_rows:
+            continue
+        changes += max(1, len(managed), len(projected))
+        lines[divider_line + 1 : table_end] = rendered_rows
         tracker_path.write_text(
             "\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8"
         )
-        existing_applications.add(key)
-        created += 1
-    return created
+    return changes
 
 
 def _application_table_divider_line(lines: list[str]) -> int | None:

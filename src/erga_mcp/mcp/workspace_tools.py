@@ -51,6 +51,7 @@ from erga_mcp.resumes.sources import resume_source_context as build_resume_sourc
 from erga_mcp.store import ErgaStore
 from erga_mcp.tracking.cards import CardField, CardView
 from erga_mcp.tracking.contact_projection import project_recruiter_contacts
+from erga_mcp.tracking.mail_receipts import RECEIPT_PARSER_VERSION
 from erga_mcp.tracking.mail_reconciliation import (
     mail_reconciliation_card,
     pending_mail_reviews,
@@ -673,18 +674,14 @@ def register_workspace_tools(
             store,
             [message for message in messages if message.message_id in known_message_ids],
         )
-        if refresh_result["promoted"] or refresh_result["enriched"]:
+        if any(refresh_result.values()):
             reconcile_mail_events(store, store.list_mail_events())
         tracker_updates = 0
         tracker_imports = 0
         warnings: list[str] = []
         if config.tracker.enabled and config.tracker.tracker_dir is not None:
             try:
-                tracker_updates = reconcile_application_status_tracker_rows(
-                    tracker_dir=config.tracker.tracker_dir,
-                    applications=store.list_applications(),
-                )
-                tracker_updates += reconcile_confirmed_application_tracker_rows(
+                tracker_updates = reconcile_confirmed_application_tracker_rows(
                     tracker_dir=config.tracker.tracker_dir,
                     events=store.list_mail_events(),
                 )
@@ -692,6 +689,10 @@ def register_workspace_tools(
                     tracker_dir=config.tracker.tracker_dir,
                     active_cycles=config.tracker.active_cycles,
                     events=store.list_mail_events(),
+                )
+                tracker_updates += reconcile_application_status_tracker_rows(
+                    tracker_dir=config.tracker.tracker_dir,
+                    applications=store.list_applications(),
                 )
             except (OSError, RuntimeError, ValueError):
                 warnings.append("Tracker projection was not synchronized; retry locally.")
@@ -704,17 +705,17 @@ def register_workspace_tools(
             contacts_projected = 0
             warnings.append("Contact projection was not synchronized; retry locally.")
         created = cast(int, sync_result["created"])
-        recruiting_events = (
-            cast(int, sync_result["application"])
-            + cast(int, sync_result["job"])
-            + refresh_result["promoted"]
+        new_recruiting_events = cast(int, sync_result["application"]) + cast(
+            int, sync_result["job"]
         )
+        recruiting_events = new_recruiting_events + refresh_result["promoted"]
         pending_reviews = len(pending_mail_reviews(store))
         message = (
             "📬 **Erga mail sync complete**\n\n"
             f"{config.mail_provider.title()} {config.mail_folder} checked: "
-            f"{len(messages)} messages scanned · {created} new events · "
-            f"{recruiting_events} recruiting updates · "
+            f"{len(messages)} messages scanned · {created} newly indexed · "
+            f"{new_recruiting_events} new recruiting · "
+            f"{refresh_result['promoted']} recovered recruiting · "
             f"{tracker_rows_updated} tracker rows updated · "
             f"{contacts_projected} contacts projected."
         )
@@ -724,10 +725,11 @@ def register_workspace_tools(
                 f"{'s' if pending_reviews != 1 else ''} need your review; "
                 "use `/erga-mail-review`."
             )
-        if refresh_result["promoted"]:
+        if refresh_result["reparsed"]:
             message += (
-                f"\nRecovered {refresh_result['promoted']} earlier recruiting "
-                f"message{'s' if refresh_result['promoted'] != 1 else ''} from mailbox history."
+                f"\nReparsed {refresh_result['reparsed']} stored message"
+                f"{'s' if refresh_result['reparsed'] != 1 else ''} with receipt parser "
+                f"v{RECEIPT_PARSER_VERSION}; use `/erga-tracker` to view canonical rows."
             )
         if warnings:
             message += "\n⚠️ " + " ".join(warnings)
@@ -736,12 +738,14 @@ def register_workspace_tools(
             "fetched": len(messages),
             "created": created,
             "recruiting_events": recruiting_events,
+            "new_recruiting_events": new_recruiting_events,
             "tracker_updates": tracker_rows_updated,
             "tracker_imports": tracker_imports,
             "contacts_projected": contacts_projected,
             "mail_reviews_pending": pending_reviews,
             "historical_events_promoted": refresh_result["promoted"],
             "historical_events_enriched": refresh_result["enriched"],
+            "historical_events_reparsed": refresh_result["reparsed"],
             "warnings": warnings,
             "message": message,
         }

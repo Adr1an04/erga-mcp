@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass
 from email.utils import parseaddr
 
+RECEIPT_PARSER_VERSION = 2
+
 
 @dataclass(frozen=True)
 class ApplicationReceipt:
@@ -31,16 +33,37 @@ _ROLE_PATTERNS = (
         re.I,
     ),
     re.compile(r"received\s+your\s+application\s+for\s+the\s+role\s*:\s*(.+?)(?:\s+[.!]|$)", re.I),
+    re.compile(
+        r"(?:received|reviewing)\s+your\s+application\s+for\s+"
+        r"(?:the\s+)?(?:position\s+of\s+)?(.+?)(?:\s+at\s+[A-Z][A-Za-z0-9& .'-]+|[.!]|$)",
+        re.I,
+    ),
     re.compile(r"interest\s+you(?:'|’)ve\s+shown\s+in\s+the\s+(.+?)\s+position\b", re.I),
+    re.compile(r"application\s+for\s+the\s+position\s+of\s+(.+?)\s+has\s+been\s+received", re.I),
     re.compile(r"application\s+for\s+the\s+(.+?)\s+role\s+has\s+been\s+received", re.I),
     re.compile(r"application\s+for\s+(.+?)\s+has\s+been\s+received", re.I),
 )
+_SUBJECT_COMPANY_ROLE_PATTERNS = (
+    re.compile(
+        r"successfully\s+submitted\s+your\s+(.+?)\s+job\s+application\s*-\s*"
+        r"(?:[a-z0-9_-]{3,}\s*-\s*)?(.+)$",
+        re.I,
+    ),
+)
+_SUBJECT_ROLE_PATTERNS = (
+    re.compile(r"(?:thank\s+you|thanks)\s+for\s+applying\s+to\s+(.+)$", re.I),
+)
 _SUBJECT_COMPANY_PATTERNS = (
     re.compile(r"(?:thank\s+you|thanks)\s+for\s+your\s+interest\s+in\s+(.+?)(?:[!.,:]|$)", re.I),
-    re.compile(r"(?:thank\s+you|thanks)\s+for\s+applying\s+(?:to|at)\s+(.+?)(?:[!.,:]|$)", re.I),
+    re.compile(r"(?:thank\s+you|thanks)\s+for\s+applying\s+at\s+(.+?)(?:[!.,:]|$)", re.I),
     re.compile(r"your\s+(.+?)\s+careers\s+application\s+is\s+in(?:[!.,:]|$)", re.I),
+    re.compile(r"your\s+application\s+to\s+the\s+(.+?\s+group)(?:[!.,:]|$)", re.I),
 )
 _BODY_COMPANY_PATTERNS = (
+    re.compile(
+        r"career\s+opportunities\s+with\s+([A-Z][A-Za-z0-9& .'-]{1,80}?)(?:[!.,]|\s+and\b)",
+        re.I,
+    ),
     re.compile(r"interest\s+in\s+joining\s+([A-Z][A-Za-z0-9& .'-]{1,80}?)(?:[!.,]|\s+we\b)", re.I),
     re.compile(
         r"interested\s+in\s+a\s+career\s+at\s+([A-Z][A-Za-z0-9& .'-]{1,80}?)(?:[!.,]|\s+and\b)",
@@ -123,6 +146,8 @@ def _strip_receipt_prefix(value: str, *, company: str, requisitions: tuple[str, 
         normalized = re.sub(rf"^\s*{re.escape(requisition)}\s+", "", normalized, flags=re.I)
     if company:
         normalized = re.sub(rf"^\s*{re.escape(company)}\s+", "", normalized, flags=re.I)
+    normalized = re.sub(r"^\s*(?:the\s+)?(?:position|role)\s+of\s+", "", normalized, flags=re.I)
+    normalized = re.sub(r"^\s*(?:the\s+)?role\s*:\s*", "", normalized, flags=re.I)
     return _bounded_display(normalized, limit=200)
 
 
@@ -130,21 +155,34 @@ def parse_application_receipt(
     *, sender: str, subject: str, preview: str = "", content: str = ""
 ) -> ApplicationReceipt:
     """Extract company, role, and requisition while never returning body or preview text."""
-    plain = _plain_text(f"{preview}\n{content}")
+    body_plain = _plain_text(f"{preview}\n{content}")
+    all_plain = _plain_text(f"{subject}\n{preview}\n{content}")
     requisitions = tuple(
         sorted(
             {
                 match.group(1).casefold()
                 for pattern in _REQUISITION_PATTERNS
-                for match in pattern.finditer(plain)
+                for match in pattern.finditer(all_plain)
                 if any(character.isdigit() for character in match.group(1))
             }
         )
     )[:12]
-    company = _company_hint(sender, subject, plain)
+    company = ""
     role = ""
+    for pattern in _SUBJECT_COMPANY_ROLE_PATTERNS:
+        if match := pattern.search(subject):
+            company = _bounded_display(match.group(1), limit=100)
+            role = _strip_receipt_prefix(match.group(2), company=company, requisitions=requisitions)
+            break
+    company = company or _company_hint(sender, subject, body_plain)
     for pattern in _ROLE_PATTERNS:
-        if match := pattern.search(plain):
+        if match := pattern.search(body_plain):
             role = _strip_receipt_prefix(match.group(1), company=company, requisitions=requisitions)
             break
+    if not role:
+        for pattern in _SUBJECT_ROLE_PATTERNS:
+            if match := pattern.search(subject):
+                candidate = re.sub(r"\s+-\s+\d{6,}\s*$", "", match.group(1))
+                role = _strip_receipt_prefix(candidate, company=company, requisitions=requisitions)
+                break
     return ApplicationReceipt(company=company, role=role, requisition_ids=requisitions)

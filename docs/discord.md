@@ -165,7 +165,11 @@ The scanner treats confirmations, assessments, interviews, offers, and decisions
 application lifecycle. It transiently parses supported ATS mail for company, role, and requisition
 identity, retains only those bounded fields, and uses them to keep multiple roles at the same
 company distinct. After classifier upgrades, previously retained misses receive one bounded
-read-only reparse instead of remaining permanently misclassified.
+read-only reparse instead of remaining permanently misclassified. Mail-created tracker rows are a
+canonical projection rather than an append-only import: only receipts with both a company and role
+are shown, duplicate or obsolete `Email acknowledgement` rows are repaired or removed on sync, and
+rows created from event registrations are excluded. Rows the user created from postings, notes, or
+manual research are never deleted by that cleanup.
 
 ## Live request experience and color system
 

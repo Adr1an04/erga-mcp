@@ -72,11 +72,16 @@ _NON_APPLICATION_MARKERS = (
     "unsubscribe",
 )
 _STRONG_NON_APPLICATION_SUBJECT_MARKERS = (
+    "event confirmation",
+    "event rsvp",
+    "hackathon",
     "job alert",
+    "registration confirmation",
     "recommended jobs",
     "security alert",
     "trial ended",
     "trial has ended",
+    "webinar",
 )
 _COHERENT_NON_APPLICATION_MARKERS = tuple(
     marker for marker in _NON_APPLICATION_MARKERS if marker != "unsubscribe"
@@ -97,6 +102,7 @@ _ACKNOWLEDGEMENT_MARKERS = (
     "thank you for your interest in",
     "thank you for taking the time to submit your application",
     "we want to confirm that your application",
+    "successfully submitted your",
 )
 
 

@@ -283,15 +283,19 @@ class ObsidianTrackerTests(unittest.TestCase):
                     kind="application.acknowledgement",
                     confidence=0.9,
                     requires_review=False,
+                    company_hint="Example Systems",
+                    role_hint="Platform Engineering Intern",
                 ),
                 MailEvent(
-                    message_id="tesla",
+                    message_id="second-current",
                     received_at=datetime(2026, 7, 12, tzinfo=UTC),
-                    sender="noreply@tesla.example",
-                    subject="Adrian, thank you for your interest in Tesla",
+                    sender="noreply@example.test",
+                    subject="We received your application",
                     kind="application.acknowledgement",
                     confidence=0.9,
                     requires_review=False,
+                    company_hint="Example Devices",
+                    role_hint="Systems Software Intern",
                 ),
                 MailEvent(
                     message_id="legacy",
@@ -301,6 +305,8 @@ class ObsidianTrackerTests(unittest.TestCase):
                     kind="application.acknowledgement",
                     confidence=0.9,
                     requires_review=False,
+                    company_hint="Legacy Systems",
+                    role_hint="Software Intern",
                 ),
             ]
 
@@ -312,9 +318,67 @@ class ObsidianTrackerTests(unittest.TestCase):
 
             self.assertEqual(created, 2)
             rendered = fall_tracker.read_text()
-            self.assertIn("| Example Systems | Application confirmed by email |", rendered)
-            self.assertIn("| Tesla | Application confirmed by email |", rendered)
+            self.assertIn("| Example Systems | Platform Engineering Intern |", rendered)
+            self.assertIn("| Example Devices | Systems Software Intern |", rendered)
             self.assertNotIn("Legacy Systems", spring_tracker.read_text())
+
+    def test_rebuilds_managed_rows_and_preserves_user_rows(self) -> None:
+        with TemporaryDirectory() as directory:
+            tracker = Path(directory)
+            tracker_path = tracker / "Fall 2026 Application Tracker.md"
+            tracker_path.write_text(
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| User Company | User Chosen Role | Remote | Saved posting | Researching |  | "
+                "Review requirements. | Note |\n"
+                "| Example Finance Engineering Internship | Application confirmed by email | "
+                " | Email acknowledgement | Applied | 2026-08-03 | Await recruiting update. |  |\n"
+                "| Example Finance Engineering Internship | the position of Engineering "
+                "Internship |  | Email acknowledgement | Applied | 2026-08-03 | Await "
+                "recruiting update. |  |\n"
+                "| Example Hackathon | Application confirmed by email |  | Email "
+                "acknowledgement | Applied | 2026-07-09 | Await recruiting update. |  |\n",
+                encoding="utf-8",
+            )
+            events = [
+                MailEvent(
+                    message_id="valid-receipt",
+                    received_at=datetime(2026, 8, 3, tzinfo=UTC),
+                    sender="careers@example.test",
+                    subject="Application received",
+                    kind="application.acknowledgement",
+                    confidence=0.95,
+                    requires_review=False,
+                    company_hint="Example Financial",
+                    role_hint="Engineering Internship",
+                ),
+                MailEvent(
+                    message_id="non-job-registration",
+                    received_at=datetime(2026, 7, 9, tzinfo=UTC),
+                    sender="events@example.test",
+                    subject="Hackathon registration received",
+                    kind="other",
+                    confidence=0.0,
+                    requires_review=False,
+                ),
+            ]
+
+            first = import_confirmed_application_tracker_rows(
+                tracker_dir=tracker, active_cycles=("Fall 2026",), events=events
+            )
+            second = import_confirmed_application_tracker_rows(
+                tracker_dir=tracker, active_cycles=("Fall 2026",), events=events
+            )
+            rendered = tracker_path.read_text(encoding="utf-8")
+
+            self.assertGreater(first, 0)
+            self.assertEqual(second, 0)
+            self.assertIn("| User Company | User Chosen Role |", rendered)
+            self.assertEqual(rendered.count("| Example Financial | Engineering Internship |"), 1)
+            self.assertNotIn("Application confirmed by email", rendered)
+            self.assertNotIn("the position of", rendered)
+            self.assertNotIn("Example Hackathon", rendered)
 
     def test_marks_only_exactly_matched_acknowledgements_as_applied(self) -> None:
         with TemporaryDirectory() as directory:

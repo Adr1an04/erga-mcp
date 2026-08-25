@@ -12,6 +12,7 @@ from erga_mcp.integrations.mail.zoho_live import (
     fetch_all_inbox_metadata,
     fetch_inbox_metadata,
     format_recruiting_alerts,
+    receipt_recovery_message_ids,
     refresh_known_metadata,
     sync_metadata,
 )
@@ -348,6 +349,66 @@ class LiveZohoSyncTests(unittest.TestCase):
             retained = store.list_mail_events()[0]
             self.assertEqual(retained.kind, "application.denial")
             self.assertTrue(retained.requires_review)
+
+    def test_receipt_parser_revision_refetches_already_parsed_messages_once(self) -> None:
+        legacy = MailEvent(
+            message_id="legacy-parser-result",
+            received_at=datetime(2026, 8, 25, tzinfo=UTC),
+            sender="careers@example.test",
+            subject="Application received",
+            kind="application.acknowledgement",
+            confidence=0.95,
+            requires_review=False,
+            receipt_parsed=True,
+            receipt_parser_version=1,
+        )
+        current = MailEvent(
+            message_id="current-parser-result",
+            received_at=datetime(2026, 8, 25, tzinfo=UTC),
+            sender="careers@example.test",
+            subject="Application received",
+            kind="application.acknowledgement",
+            confidence=0.95,
+            requires_review=False,
+            receipt_parsed=True,
+            receipt_parser_version=2,
+        )
+
+        self.assertEqual(receipt_recovery_message_ids([legacy, current]), {legacy.message_id})
+
+    def test_full_body_reparse_removes_non_job_application_false_positive(self) -> None:
+        message = MailMessageMetadata(
+            "historical-event-registration",
+            datetime(2026, 7, 9, tzinfo=UTC),
+            "events@example.test",
+            "Example Hackathon IX - We received your application!",
+            "",
+            content="Your participant application was received for the coding event.",
+        )
+        with TemporaryDirectory() as directory:
+            store = ErgaStore(Path(directory) / "erga.sqlite3")
+            store.record_mail_event(
+                MailEvent(
+                    message_id=message.message_id,
+                    received_at=message.received_at,
+                    sender=message.sender,
+                    subject=message.subject,
+                    kind="application.acknowledgement",
+                    confidence=0.95,
+                    requires_review=False,
+                    company_hint="Example Hackathon",
+                    role_hint="Application confirmed by email",
+                    receipt_parsed=True,
+                    receipt_parser_version=1,
+                )
+            )
+
+            result = refresh_known_metadata(store, [message])
+            retained = store.list_mail_events()[0]
+
+        self.assertEqual(result["reparsed"], 1)
+        self.assertEqual(retained.kind, "other")
+        self.assertEqual(retained.receipt_parser_version, 2)
 
     def test_oa_and_interview_survive_normal_email_footers(self) -> None:
         messages = [
