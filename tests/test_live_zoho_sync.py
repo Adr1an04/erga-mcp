@@ -258,6 +258,30 @@ class LiveZohoSyncTests(unittest.TestCase):
             self.assertEqual(sync_metadata(store, messages)["created"], 0)
             self.assertEqual(sync_metadata(store, messages)["alerts"], [])
 
+    def test_generic_job_language_and_newsletters_do_not_become_recruiter_leads(self) -> None:
+        messages = [
+            MailMessageMetadata(
+                "generic-position",
+                datetime(2026, 7, 18, tzinfo=UTC),
+                "product@example.com",
+                "Position your team for success",
+                "See the latest product opportunity.",
+            ),
+            MailMessageMetadata(
+                "recruiter-newsletter",
+                datetime(2026, 7, 18, tzinfo=UTC),
+                "recruiter@example.com",
+                "This week's hiring newsletter",
+                "Recommended jobs for you. Unsubscribe here.",
+            ),
+        ]
+        with TemporaryDirectory() as directory:
+            summary = sync_metadata(ErgaStore(Path(directory) / "erga.sqlite3"), messages)
+
+        self.assertEqual(summary["job"], 0)
+        self.assertEqual(summary["other"], 2)
+        self.assertEqual(summary["alerts"], [])
+
     def test_reclassifies_existing_messages_when_rules_improve(self) -> None:
         message = MailMessageMetadata(
             "tesla-1",

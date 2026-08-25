@@ -15,6 +15,37 @@ from erga_mcp.tracking.mail_reconciliation import reconcile_mail_events
 
 
 class MailReconciliationMcpTests(unittest.TestCase):
+    def test_unmatched_history_retries_silently_instead_of_flooding_review_queue(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace('tool_profile = "career"', 'tool_profile = "hermes"'),
+                encoding="utf-8",
+            )
+            store = ErgaStore(root / "state" / "erga.sqlite3")
+            store.record_mail_event(
+                MailEvent(
+                    message_id="historical-without-local-application",
+                    received_at=datetime.now(UTC),
+                    sender="jobs@example.test",
+                    subject="Application received",
+                    kind="application.acknowledgement",
+                    confidence=0.95,
+                    requires_review=False,
+                )
+            )
+            reconcile_mail_events(store, store.list_mail_events())
+
+            listed: Any = asyncio.run(
+                build_server(config_path).call_tool("list_mail_reconciliation_reviews", {})
+            )
+            payload = cast(dict[str, Any], listed.structured_content)
+
+            self.assertEqual(store.list_mail_reconciliations()[0].state, "unmatched")
+            self.assertEqual(payload["pending_count"], 0)
+            self.assertIsNone(payload["review"])
+
     def test_lists_card_and_resolves_explicit_candidate_without_message_content(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

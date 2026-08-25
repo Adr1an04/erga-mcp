@@ -86,6 +86,24 @@ class ClassificationTests(unittest.TestCase):
 
         self.assertEqual(result.kind, "assessment")
 
+    def test_arbitrary_unknown_mail_does_not_create_review_work(self) -> None:
+        result = classify_application_message(
+            subject="Weekly account summary",
+            preview="Here is what happened in your account this week.",
+        )
+
+        self.assertEqual(result.kind, "unknown")
+        self.assertFalse(result.requires_review)
+
+    def test_unfortunately_alone_is_not_a_rejection(self) -> None:
+        result = classify_application_message(
+            subject="Service incident resolved",
+            preview="Unfortunately, your workspace was briefly unavailable.",
+        )
+
+        self.assertEqual(result.kind, "unknown")
+        self.assertFalse(result.requires_review)
+
 
 if __name__ == "__main__":
     unittest.main()

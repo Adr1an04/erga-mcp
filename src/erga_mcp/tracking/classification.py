@@ -14,8 +14,12 @@ _DENIAL_MARKERS = (
     "will not be moving forward",
     "not moving forward",
     "decided not to proceed",
-    "other candidates",
-    "unfortunately",
+    "moving forward with other candidates",
+    "pursue other candidates",
+    "selected another candidate",
+    "we regret to inform you",
+    "you were not selected",
+    "application was not selected",
 )
 _ASSESSMENT_MARKERS = (
     "hackerrank",
@@ -98,4 +102,7 @@ def classify_application_message(*, subject: str, preview: str) -> Classificatio
         return Classification(kind="acknowledgement", confidence=0.9, requires_review=False)
     if "unsubscribe" in content:
         return Classification(kind="unknown", confidence=0.0, requires_review=False)
-    return Classification(kind="unknown", confidence=0.0, requires_review=True)
+    # Unknown mail is not itself actionable. The provider adapter may separately recognize
+    # direct recruiter outreach, but arbitrary inbox text must never become review work merely
+    # because no deterministic application status matched.
+    return Classification(kind="unknown", confidence=0.0, requires_review=False)

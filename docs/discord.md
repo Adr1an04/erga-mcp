@@ -154,11 +154,12 @@ model, LaTeX, and PDF work in the background, so Discord never replaces a valid 
 with its generic expired-control message.
 
 Later high-confidence recruiting mail can advance the canonical record and is mirrored back into
-the tracker. Ambiguous, older, or sensitive messages stay unchanged in a metadata-only review
-queue. Hermes users can open that queue with `/erga-mail-review`, choose a candidate application or
-ignore the message, and use `/erga-mail-review retry` after adding older application records. No
-mail body is retained by the reconciliation record, and these controls never send email or mutate a
-remote mailbox.
+the tracker. Only messages with an actionable but ambiguous candidate match enter the metadata-only
+review queue. Messages with no local application match stay in a silent retry backlog instead of
+inflating the human queue; adding an application or using `/erga-mail-review retry` re-evaluates
+them. Hermes users can open the actionable queue with `/erga-mail-review`, choose a candidate
+application, or ignore the message. No mail body is retained by reconciliation, and these controls
+never send email or mutate a remote mailbox.
 
 ## Live request experience and color system
 

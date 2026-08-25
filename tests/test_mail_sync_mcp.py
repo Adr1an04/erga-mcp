@@ -173,7 +173,9 @@ class MailSyncMcpTests(unittest.TestCase):
         self.assertEqual(payload["recruiting_events"], 1)
         self.assertEqual(payload["tracker_updates"], 3)
         self.assertEqual(payload["tracker_imports"], 2)
+        self.assertEqual(payload["mail_reviews_pending"], 0)
         self.assertIn("Erga mail sync complete", payload["message"])
+        self.assertNotIn("/erga-mail-review", payload["message"])
         self.assertNotIn(message.preview, payload["message"])
         self.assertNotIn(message.subject, payload["message"])
         fetch.assert_called_once_with(

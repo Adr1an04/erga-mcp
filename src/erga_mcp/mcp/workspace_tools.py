@@ -49,6 +49,7 @@ from erga_mcp.tracking.cards import CardField, CardView
 from erga_mcp.tracking.contact_projection import project_recruiter_contacts
 from erga_mcp.tracking.mail_reconciliation import (
     mail_reconciliation_card,
+    pending_mail_reviews,
     reconcile_mail_events,
 )
 from erga_mcp.tracking.mail_reconciliation import (
@@ -397,11 +398,7 @@ def register_workspace_tools(
         annotations=READ_ONLY,
     )
     def list_mail_reconciliation_reviews(review_id: str = "") -> dict[str, object]:
-        pending = [
-            item
-            for item in store.list_mail_reconciliations()
-            if item.state in {"review", "unmatched"}
-        ]
+        pending = pending_mail_reviews(store)
         normalized = review_id.strip()
         selected = next((item for item in pending if item.id == normalized), None)
         if normalized and selected is None:
@@ -431,11 +428,7 @@ def register_workspace_tools(
     )
     def retry_mail_reconciliation() -> dict[str, object]:
         summary = reconcile_mail_events(store, store.list_mail_events())
-        pending = [
-            item
-            for item in store.list_mail_reconciliations()
-            if item.state in {"review", "unmatched"}
-        ]
+        pending = pending_mail_reviews(store)
         result: dict[str, object] = {
             "summary": cast(dict[str, object], json_value(asdict(summary))),
             "pending_count": len(pending),
@@ -700,9 +693,7 @@ def register_workspace_tools(
             warnings.append("Contact projection was not synchronized; retry locally.")
         created = cast(int, sync_result["created"])
         recruiting_events = cast(int, sync_result["application"]) + cast(int, sync_result["job"])
-        pending_reviews = sum(
-            item.state in {"review", "unmatched"} for item in store.list_mail_reconciliations()
-        )
+        pending_reviews = len(pending_mail_reviews(store))
         message = (
             "📬 **Erga mail sync complete**\n\n"
             f"{config.mail_provider.title()} {config.mail_folder} checked: "
@@ -713,8 +704,9 @@ def register_workspace_tools(
         )
         if pending_reviews:
             message += (
-                f"\n{pending_reviews} inbox match"
-                f"{'es' if pending_reviews != 1 else ''} need review; use `/erga-mail-review`."
+                f"\n{pending_reviews} recruiting message"
+                f"{'s' if pending_reviews != 1 else ''} need your review; "
+                "use `/erga-mail-review`."
             )
         if warnings:
             message += "\n⚠️ " + " ".join(warnings)

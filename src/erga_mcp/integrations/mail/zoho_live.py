@@ -13,8 +13,35 @@ from erga_mcp.tracking.classification import classify_application_message
 from erga_mcp.tracking.contacts import record_recruiter_contact_from_mail
 from erga_mcp.tracking.mail_reconciliation import reconcile_mail_events, sanitized_mail_signals
 
-_JOB_MARKERS = ("recruiter", "opportunity", "position", "opening", "hiring")
-_MARKETING_MARKERS = ("free applications", "one tap", "one click", "jobbie")
+_DIRECT_RECRUITER_OUTREACH_MARKERS = (
+    "came across your profile",
+    "found your profile",
+    "reaching out about",
+    "reach out about",
+    "your background caught",
+    "your experience caught",
+    "would like to connect",
+    "interested in speaking with you",
+    "interested in discussing",
+    "would you be interested",
+    "are you interested in",
+    "open to a new role",
+    "open to new opportunities",
+)
+_RECRUITING_IDENTITY_MARKERS = ("recruiter", "recruiting", "talent acquisition", "sourcer")
+_ROLE_CONTEXT_MARKERS = (" role", "position", "opening", "opportunity", "hiring")
+_MARKETING_MARKERS = (
+    "free applications",
+    "job alert",
+    "jobbie",
+    "newsletter",
+    "new jobs available",
+    "new roles available",
+    "one click",
+    "one tap",
+    "recommended jobs",
+    "unsubscribe",
+)
 
 
 def _classify(message: MailMessageMetadata) -> tuple[str, float, bool]:
@@ -32,10 +59,10 @@ def _classify(message: MailMessageMetadata) -> tuple[str, float, bool]:
             application.confidence,
             application.requires_review,
         )
-    content = (
-        f"{message.sender}\n{message.subject}\n{message.preview}\n{message.content}".casefold()
-    )
-    if any(marker in content for marker in _JOB_MARKERS):
+    direct_outreach = any(marker in content for marker in _DIRECT_RECRUITER_OUTREACH_MARKERS)
+    identified_recruiter = any(marker in content for marker in _RECRUITING_IDENTITY_MARKERS)
+    role_context = any(marker in content for marker in _ROLE_CONTEXT_MARKERS)
+    if direct_outreach or (identified_recruiter and role_context):
         return "job.candidate", 0.7, True
     return "other", 0.0, False
 

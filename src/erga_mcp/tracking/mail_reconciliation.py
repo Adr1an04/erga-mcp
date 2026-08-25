@@ -544,6 +544,11 @@ def reconcile_mail_events(
     )
 
 
+def pending_mail_reviews(store: ErgaStore) -> list[MailReconciliation]:
+    """Return only actionable ambiguity; unmatched events retry silently in the background."""
+    return [item for item in store.list_mail_reconciliations() if item.state == "review"]
+
+
 def resolve_mail_reconciliation(
     store: ErgaStore,
     review_id: str,
