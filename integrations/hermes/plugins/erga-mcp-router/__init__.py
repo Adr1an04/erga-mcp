@@ -2584,66 +2584,10 @@ def register(
             return "Erga résumé planning failed: invalid control state."
         user_id = str(interaction.user_id)
         if operation == "generate":
-            if supports_discord_attachments:
-                assert DiscordAttachment is not None
-                assert DiscordCommandResponse is not None
-
-                def retryable_generation_failure(detail: str) -> object:
-                    return DiscordCommandResponse(
-                        text=_fit_discord_content(f"❌ Erga résumé generation failed: {detail}"),
-                        buttons=(
-                            plan_action_button(
-                                label="↻ Retry generation",
-                                plan_id=plan_id,
-                                operation="generate",
-                                owner_user_id=user_id,
-                                style="primary",
-                            ),
-                        ),
-                    )
-
-                try:
-                    result = ctx.dispatch_tool(
-                        tailoring_plan_execute_tool,
-                        {"plan_id": plan_id},
-                    )
-                except Exception as exc:
-                    return retryable_generation_failure(str(exc))
-                error_text = _dispatch_error_text(result)
-                if error_text:
-                    return retryable_generation_failure(error_text)
-                message, pdf = _planned_resume_delivery(result)
-                application_id = _application_id_from_result(result)
-                if pdf is None:
-                    return DiscordCommandResponse(text=message, buttons=())
-                buttons = (
-                    application_status_buttons(
-                        application_id,
-                        resume_version_id=_resume_version_id_from_result(result),
-                        owner_user_id=user_id,
-                    )
-                    if application_id is not None
-                    else ()
-                )
-                prompt = (
-                    "\n\n**Did you submit this application?**\n"
-                    "Confirm it here so Tracker and Orbit use the real stage."
-                    if buttons
-                    else ""
-                )
-                return DiscordCommandResponse(
-                    text=_fit_discord_content(f"{message}{prompt}"),
-                    buttons=buttons,
-                    attachments=(
-                        DiscordAttachment(
-                            path=pdf,
-                            filename=Path(pdf).name,
-                        ),
-                    ),
-                )
             channel_id = str(getattr(interaction, "channel_id", "") or "")
 
             def execute_and_deliver() -> None:
+                button_directive = ""
                 try:
                     result = ctx.dispatch_tool(
                         tailoring_plan_execute_tool,
@@ -2652,17 +2596,53 @@ def register(
                 except Exception as exc:
                     message = f"❌ Erga résumé generation failed: {exc}"
                     pdf = None
+                    completion_buttons = (
+                        plan_action_button(
+                            label="↻ Retry generation",
+                            plan_id=plan_id,
+                            operation="generate",
+                            owner_user_id=user_id,
+                            style="primary",
+                        ),
+                    )
                 else:
                     error_text = _dispatch_error_text(result)
                     if error_text:
                         message = f"❌ Erga résumé generation failed: {error_text}"
                         pdf = None
+                        completion_buttons = (
+                            plan_action_button(
+                                label="↻ Retry generation",
+                                plan_id=plan_id,
+                                operation="generate",
+                                owner_user_id=user_id,
+                                style="primary",
+                            ),
+                        )
                     else:
                         message, pdf = _planned_resume_delivery(result)
+                        application_id = _application_id_from_result(result)
+                        completion_buttons = (
+                            application_status_buttons(
+                                application_id,
+                                resume_version_id=_resume_version_id_from_result(result),
+                                owner_user_id=user_id,
+                            )
+                            if application_id is not None and pdf is not None
+                            else ()
+                        )
+                        if completion_buttons:
+                            message += (
+                                "\n\n**Did you submit this application?**\n"
+                                "Confirm it here so Tracker and Orbit use the real stage."
+                            )
+                if completion_buttons and register_message_buttons is not None:
+                    registered = register_message_buttons(completion_buttons)
+                    button_directive = f"\n[[discord_plugin_buttons:{registered}]]"
                 _deliver_plan_with_retries(
                     deliver_plan,
                     channel_id=channel_id,
-                    message=message,
+                    message=message + button_directive,
                     pdf=pdf,
                     sleep=sleep_for,
                 )
@@ -2672,12 +2652,12 @@ def register(
                 assert DiscordCommandResponse is not None
                 return DiscordCommandResponse(
                     text=(
-                        "⏳ **Generation started**\n"
+                        "⏳ **Generating...**\n"
                         "Erga is using the approved plan and will post the validated PDF here."
                     ),
                     buttons=(),
                 )
-            return "Generation started. Erga will post the validated result here."
+            return "Generating... Erga will post the validated result here."
         arguments = {
             "plan_id": plan_id,
             "operation": operation,

@@ -149,6 +149,10 @@ If local generation fails before a validated PDF exists, the response includes a
 generation** control bound to the same reviewed plan. Failed controls are never the user's only way
 forward.
 
+The **Generate résumé** control acknowledges immediately with **Generating...** and completes the
+model, LaTeX, and PDF work in the background, so Discord never replaces a valid long-running click
+with its generic expired-control message.
+
 Later high-confidence recruiting mail can advance the canonical record and is mirrored back into
 the tracker. Ambiguous, older, or sensitive messages stay unchanged in a metadata-only review
 queue. Hermes users can open that queue with `/erga-mail-review`, choose a candidate application or

@@ -51,7 +51,8 @@ uv run erga setup
 ```
 
 Setup imports a PDF, DOCX, or LaTeX master into private, hash-verified storage and creates a
-standalone editable template. An optional second résumé contributes layout measurements only; its
+standalone editable template. A complete LaTeX master remains the exact visual template; an
+optional second résumé can explicitly override layout measurements only, and its
 wording never becomes evidence. The generated configuration uses the least-privilege `career` MCP
 profile.
 

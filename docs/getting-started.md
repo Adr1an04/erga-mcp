@@ -45,7 +45,9 @@ The wizard separates résumé input into three explicit decisions:
    are allowed, while a candidate that strands only one or two words on its final line is replaced
    by another approved relevant bullet or project before publication.
 
-For a PDF or DOCX master, Erga preserves visual PDF line boundaries, reconstructs semantic
+For a real LaTeX master, Erga uses the approved source itself as the private editable template:
+its preamble, macros, typography, spacing, hierarchy, and inline emphasis remain intact. For a PDF
+or DOCX master, Erga preserves visual PDF line boundaries, reconstructs semantic
 experience/project groups, and generates the private editable template itself. One-page intake then
 searches rendered content budgets locally and keeps the fullest valid page, not whichever amount of
 content an initiating agent happened to select. The minimum fill ratio remains a hard publication
@@ -113,9 +115,10 @@ uv run erga resume template set /absolute/path/to/preferred-resume.pdf \
 ```
 
 Both commands accept PDF, DOCX, or `.tex` input and snapshot it into private local state. The master
-is the sole factual source and never contributes page geometry, typography, spacing, density, or
-section order. A visual template controls section presence, order, density, and project slots, but
-cannot authorize claims. Its observed bullets-per-entry pattern is bounded by the configured
+is the sole factual source. A complete `.tex` master is also the exact visual template unless the
+user explicitly supplies a separate visual override; PDF and DOCX masters require reconstruction.
+A separate visual template controls section presence, order, density, and project slots, but cannot
+authorize claims. Its observed bullets-per-entry pattern is bounded by the configured
 experience/project minimums and maximums, so a sparse reference cannot silently reduce a retained
 role to one bullet. If the approved master itself has fewer bullets than the configured minimum,
 Erga omits that complete entry instead of inventing a claim or failing the intake; adding more
@@ -135,7 +138,8 @@ against Erga's default page-fill threshold.
 replace both sources together.
 
 To discard the configured style/custom template while preserving the approved master and all
-career evidence, regenerate Erga's default Jake-style template:
+career evidence, return to the exact LaTeX master layout (or Erga's reconstructed default for a
+PDF/DOCX master):
 
 ```bash
 uv run erga resume template reset --config ~/.config/erga-mcp/config.toml

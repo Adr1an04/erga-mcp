@@ -23,6 +23,57 @@ from erga_mcp.resumes.template import (
 
 
 class ResumeTemplateTests(unittest.TestCase):
+    def test_real_latex_master_remains_the_exact_visual_template(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_text = r"""\documentclass[letterpaper,11pt]{article}
+\usepackage[margin=0.7in]{geometry}
+\newcommand{\resumeItem}[1]{\item\small{#1}}
+\newcommand{\resumeProjectHeading}[2]{\item[]\textbf{#1}\hfill #2}
+\begin{document}
+\begin{center}\Huge\textbf{Jane Candidate}\end{center}
+\section{Experience}
+\begin{itemize}
+\resumeItem{Implemented \textbf{C\#/.NET APIs} with \textbf{25+ metrics},
+\textbf{8+ health checks}, and \textbf{40\% faster incident detection}.}
+\end{itemize}
+\section{Projects}
+\resumeProjectHeading{Alpha}{Python}
+\resumeItem{Built an approved compiler.}
+\resumeProjectHeading{Beta}{Rust}
+\resumeItem{Built an approved database.}
+\end{document}"""
+            master = ResumeSource(
+                path=root / "master.tex",
+                format="tex",
+                sha256="c" * 64,
+                page_count=None,
+                text=source_text,
+            )
+
+            generated = generate_latex_template(master, data_dir=root / "state")
+
+            template = generated.path.read_text(encoding="utf-8")
+            metadata = json.loads(generated.metadata_path.read_text(encoding="utf-8"))
+            self.assertIn(source_text, template)
+            self.assertIn(r"\usepackage[margin=0.7in]{geometry}", template)
+            self.assertIn(r"Implemented \textbf{C\#/.NET APIs} with \textbf{25+ metrics}", template)
+            self.assertNotIn(r"\usepackage[margin=0.50in]{geometry}", template)
+            self.assertEqual(metadata["styling_source"], "master-latex")
+            self.assertTrue(metadata["master_latex_preserved"])
+            self.assertEqual(generated.profile.project_count, 2)
+
+            proposal = create_automatic_resume_proposal(
+                resume_path=generated.path,
+                output_dir=root / "proposal",
+                job_description="C# .NET APIs incident detection",
+                evidence=[],
+                editable_sections=("Experience",),
+                max_pages=0,
+            ).proposal.proposed_tex_path.read_text(encoding="utf-8")
+            self.assertIn(r"Implemented \textbf{C\#/.NET APIs} with \textbf{25+ metrics}", proposal)
+            self.assertIn(r"\usepackage[margin=0.7in]{geometry}", proposal)
+
     def test_default_jake_style_is_independent_of_master_layout(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -193,7 +244,7 @@ class ResumeTemplateTests(unittest.TestCase):
             generated = generate_latex_template(source, data_dir=root / "state")
             template = generated.path.read_text(encoding="utf-8")
 
-            self.assertIn("% Erga semantic resume template version: 18", template)
+            self.assertIn("% Erga semantic resume template version: 19", template)
             self.assertIn(r"\resumeEducationHeading{Example University}{Orlando, FL}", template)
             self.assertIn(r"\resumeEducationDetail{Bachelor of Science}{May 2027}", template)
             self.assertIn(

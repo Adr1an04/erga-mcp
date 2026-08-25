@@ -331,12 +331,27 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         plugins.DiscordButton = Button
         plugins.DiscordCommandResponse = Response
         plugins.DiscordAttachment = Attachment
+        registered_buttons: list[tuple[Any, ...]] = []
+
+        def register_message_buttons(buttons: tuple[Any, ...]) -> str:
+            registered_buttons.append(buttons)
+            return f"buttons-{len(registered_buttons)}"
+
+        plugins.register_discord_message_buttons = register_message_buttons
         hermes_cli = ModuleType("hermes_cli")
         hermes_cli.__version__ = "0.18.2"
         hermes_cli.plugins = plugins
+        callbacks: list[Any] = []
+        deliveries: list[tuple[str, str, str | None]] = []
 
         with patch.dict(sys.modules, {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins}):
-            self.router.register(context)
+            self.router.register(
+                context,
+                background_runner=callbacks.append,
+                plan_delivery=lambda channel, message, pdf: deliveries.append(
+                    (channel, message, pdf)
+                ),
+            )
             first = context.commands["intake-job"]("https://jobs.example.test/engineer")
             first_click = type(
                 "Interaction",
@@ -362,12 +377,13 @@ class HermesJobUrlRouterTests(unittest.TestCase):
                 {"payload": generate.payload, "user_id": "42", "channel_id": "123"},
             )()
             generating = context.discord_button_handlers["erga.plan.action"](generate_click)
+            callbacks.pop(0)()
             applied = context.discord_button_handlers["erga.application.status"](
                 type(
                     "Interaction",
                     (),
                     {
-                        "payload": generating.buttons[0].payload,
+                        "payload": registered_buttons[0][0].payload,
                         "user_id": "42",
                         "channel_id": "123",
                     },
@@ -381,10 +397,14 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertIn("Question 2 of 2", second.text)
         self.assertIn("Review before generation", review.text)
         self.assertIn("Robotics, Platform, Tooling", review.text)
-        self.assertIn("Did you submit this application?", generating.text)
-        self.assertEqual(generating.attachments[0].path, str(pdf_path.resolve()))
+        self.assertIn("Generating...", generating.text)
+        self.assertEqual(generating.attachments, ())
+        self.assertEqual(generating.buttons, ())
+        self.assertEqual(deliveries[0][0], "123")
+        self.assertIn("Did you submit this application?", deliveries[0][1])
+        self.assertEqual(deliveries[0][2], str(pdf_path.resolve()))
         self.assertEqual(
-            [button.label for button in generating.buttons],
+            [button.label for button in registered_buttons[0]],
             [
                 "✅ Applied with this résumé",
                 "Applied another way",
@@ -480,38 +500,57 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         plugins.DiscordButton = Button
         plugins.DiscordCommandResponse = Response
         plugins.DiscordAttachment = Attachment
+        registered_buttons: list[tuple[Any, ...]] = []
+
+        def register_message_buttons(buttons: tuple[Any, ...]) -> str:
+            registered_buttons.append(buttons)
+            return f"buttons-{len(registered_buttons)}"
+
+        plugins.register_discord_message_buttons = register_message_buttons
         hermes_cli = ModuleType("hermes_cli")
         hermes_cli.__version__ = "0.18.2"
         hermes_cli.plugins = plugins
+        callbacks: list[Any] = []
+        deliveries: list[tuple[str, str, str | None]] = []
 
         with patch.dict(sys.modules, {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins}):
-            self.router.register(context)
+            self.router.register(
+                context,
+                background_runner=callbacks.append,
+                plan_delivery=lambda channel, message, pdf: deliveries.append(
+                    (channel, message, pdf)
+                ),
+            )
             review = context.commands["intake-job"]("https://jobs.example.test/retry")
             self.assertIn("select the strongest evidence-backed set", review.text)
             generate = next(button for button in review.buttons if "Generate" in button.label)
-            failed = context.discord_button_handlers["erga.plan.action"](
+            started = context.discord_button_handlers["erga.plan.action"](
                 type(
                     "Interaction",
                     (),
                     {"payload": generate.payload, "user_id": "42", "channel_id": "123"},
                 )()
             )
+            callbacks.pop(0)()
             retried = context.discord_button_handlers["erga.plan.action"](
                 type(
                     "Interaction",
                     (),
                     {
-                        "payload": failed.buttons[0].payload,
+                        "payload": registered_buttons[0][0].payload,
                         "user_id": "42",
                         "channel_id": "123",
                     },
                 )()
             )
+            callbacks.pop(0)()
 
-        self.assertIn("temporary renderer failure", failed.text)
-        self.assertEqual([button.label for button in failed.buttons], ["↻ Retry generation"])
-        self.assertIn("second temporary renderer failure", retried.text)
-        self.assertNotIn("no longer available", retried.text)
+        self.assertIn("Generating...", started.text)
+        self.assertIn("temporary renderer failure", deliveries[0][1])
+        self.assertEqual([button.label for button in registered_buttons[0]], ["↻ Retry generation"])
+        self.assertIn("Generating...", retried.text)
+        self.assertIn("second temporary renderer failure", deliveries[1][1])
+        self.assertNotIn("no longer available", deliveries[1][1])
         self.assertEqual(
             context.calls[-2:],
             [

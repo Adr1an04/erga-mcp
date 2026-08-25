@@ -19,8 +19,9 @@ portfolio_roots = []
 
 [resume]
 # Configure these per template. Bullet character limits may be zero to disable that constraint.
-# The master is approved factual knowledge; the reference contributes layout metadata only.
-# template_path may be omitted; Erga generates a private standalone LaTeX template from the master.
+# The master is approved factual knowledge. A real LaTeX master also remains the exact visual
+# template; PDF/DOCX masters use a reconstructed template unless a reference supplies layout.
+# The optional reference contributes layout metadata only.
 master_path = ""
 template_path = ""
 reference_path = ""
