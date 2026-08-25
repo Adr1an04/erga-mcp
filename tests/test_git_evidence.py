@@ -114,7 +114,7 @@ class GitEvidenceCliTests(unittest.TestCase):
 
             scan_code, scan = self._run(["git", "scan", str(repo), "--config", str(config_path)])
             research_code, drafts = self._run(["git", "research", "--config", str(config_path)])
-            _, status = self._run(["status", "--config", str(config_path)])
+            _, status = self._run(["status", "--config", str(config_path), "--json"])
 
             self.assertEqual(scan_code, 0)
             self.assertEqual(research_code, 0)
@@ -280,7 +280,7 @@ class GitEvidenceCliTests(unittest.TestCase):
                 ]
             )
             _, drafts = self._run(["git", "research", "--config", str(config_path)])
-            _, status = self._run(["status", "--config", str(config_path)])
+            _, status = self._run(["status", "--config", str(config_path), "--json"])
 
             self.assertEqual(code, 0)
             self.assertEqual(report["repositories_scanned"], 1)
@@ -338,7 +338,7 @@ class GitEvidenceCliTests(unittest.TestCase):
             save_code, saved = self._run(
                 ["git", "review", "save", str(draft["id"]), "--config", str(config_path)]
             )
-            _, status = self._run(["status", "--config", str(config_path)])
+            _, status = self._run(["status", "--config", str(config_path), "--json"])
 
             self.assertEqual(code, 0)
             self.assertEqual(draft["source"], "manual")

@@ -16,6 +16,12 @@ from erga_mcp.portfolio.inventory import (
 )
 from erga_mcp.portfolio.skills import explicit_skills_in_texts
 from erga_mcp.resumes.artifacts import latex_to_text, replace_section_contents, resume_item_texts
+from erga_mcp.resumes.bullet_editor import analyze_bullet_editorially
+from erga_mcp.resumes.bullet_graph import (
+    EvidenceBulletGraph,
+    align_bullet_to_graph,
+    build_evidence_bullet_graph,
+)
 from erga_mcp.resumes.quality import (
     build_project_identity_profile,
     bullet_semantic_overlap,
@@ -735,6 +741,7 @@ def _submission_schema(
                         "type": "object",
                         "properties": {
                             "text": text_schema,
+                            "graph_path_id": {"type": "string"},
                             "evidence_ids": {
                                 "type": "array",
                                 "minItems": 1,
@@ -772,23 +779,39 @@ def _submission_schema(
 
 def _variant_score(
     candidates: tuple[ProjectCandidate, ...], job_description: str
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int, int, int]:
     report = portfolio_quality_report(candidates)
+    editorial_scores = [
+        analyze_bullet_editorially(latex_to_text(bullet)).score
+        for candidate in candidates
+        for bullet in resume_item_texts(candidate.latex)
+    ]
+    editorial_average = (
+        round(sum(editorial_scores) / len(editorial_scores)) if editorial_scores else 0
+    )
     role_terms = set(_WORD.findall(job_description.casefold()))
     role_matches = sum(
         len(role_terms & set(profile.identity_terms)) for profile in report.project_profiles
     )
     # Quality is a floor and not a trump card: once evidence gates pass, role fit carries the
-    # largest weight, followed by master-like copy and a complementary project story.
+    # largest weight, followed by master-like copy, editorial structure, and a complementary
+    # project story.
     total = min(
         100,
         round(
-            0.45 * min(100, role_matches * 12)
-            + 0.35 * report.average_quality_score
-            + 0.20 * report.differentiation_score
+            0.40 * min(100, role_matches * 12)
+            + 0.25 * report.average_quality_score
+            + 0.20 * editorial_average
+            + 0.15 * report.differentiation_score
         ),
     )
-    return (total, report.average_quality_score, role_matches, report.differentiation_score)
+    return (
+        total,
+        editorial_average,
+        report.average_quality_score,
+        role_matches,
+        report.differentiation_score,
+    )
 
 
 def _metric_provenance(candidates: tuple[ProjectCandidate, ...]) -> list[dict[str, object]]:
@@ -875,6 +898,7 @@ def _validate_submission(
     *,
     candidate_by_id: dict[str, ProjectCandidate],
     source_text_by_project: dict[str, dict[str, str]],
+    evidence_graph_by_project: dict[str, EvidenceBulletGraph],
     allowed_ids_by_project: dict[str, frozenset[str]],
     quantitative_tokens_by_project: dict[str, frozenset[str]],
     master_quantitative_coverage: int,
@@ -917,6 +941,7 @@ def _validate_submission(
                 raise ValueError("each AI-authored bullet must be an object")
             text = raw_bullet.get("text")
             raw_evidence_ids = raw_bullet.get("evidence_ids")
+            raw_graph_path_id = raw_bullet.get("graph_path_id")
             if not isinstance(text, str) or not " ".join(text.split()):
                 raise ValueError("AI-authored bullet text must be non-empty")
             text = " ".join(text.split())
@@ -1083,9 +1108,37 @@ def _validate_submission(
                 raise ValueError(
                     f"AI-authored lead verb {words[0]!r} is stronger than its cited evidence"
                 )
+            if raw_graph_path_id is not None and not isinstance(raw_graph_path_id, str):
+                raise ValueError("AI-authored graph_path_id must be a string when supplied")
+            graph_alignment = align_bullet_to_graph(
+                text,
+                evidence_ids,
+                evidence_graph_by_project[project_id],
+                requested_path_id=raw_graph_path_id,
+            )
+            if not graph_alignment.passed:
+                raise ValueError(
+                    "AI-authored bullet does not follow one connected evidence graph path "
+                    f"[{', '.join(graph_alignment.issue_codes)}]"
+                )
+            editorial = analyze_bullet_editorially(
+                text,
+                supporting_text=supporting_text,
+                maximum_characters=bullet_max_chars,
+            )
+            if not editorial.passed:
+                codes = ", ".join(item.code for item in editorial.issues) or "quality.low"
+                raise ValueError(
+                    "AI-authored bullet failed editorial validation "
+                    f"[{codes}]; score={editorial.score}; {editorial.repair_brief()}"
+                )
             used_leads.add(lead)
             rendered_bullets.append((text, evidence_ids))
+        # Quantitative evidence is a useful quality signal, not a mandate to turn every bullet
+        # into a metric. When the master establishes a quantified style, retain at least one
+        # supported quantitative bullet per project and let relevance/specificity own the rest.
         required_quantified_bullets = min(
+            1,
             len(raw_bullets),
             (len(raw_bullets) * master_quantitative_coverage + 99) // 100,
         )
@@ -1184,10 +1237,12 @@ async def draft_evidence_backed_projects(
     contexts: list[dict[str, object]] = []
     candidate_by_id: dict[str, ProjectCandidate] = {}
     source_text_by_project: dict[str, dict[str, str]] = {}
+    evidence_graph_by_project: dict[str, EvidenceBulletGraph] = {}
     allowed_ids_by_project: dict[str, frozenset[str]] = {}
     quantitative_tokens_by_project: dict[str, frozenset[str]] = {}
     master_quantitative_coverage = _master_project_quantitative_coverage(resume_path)
     minimum_required_quantified_bullets = min(
+        1,
         resolved_minimum_bullets,
         (resolved_minimum_bullets * master_quantitative_coverage + 99) // 100,
     )
@@ -1206,6 +1261,8 @@ async def draft_evidence_backed_projects(
             continue
         candidate_by_id[candidate.id] = candidate
         source_text_by_project[candidate.id] = scoped_text
+        evidence_graph = build_evidence_bullet_graph(candidate.id, sources)
+        evidence_graph_by_project[candidate.id] = evidence_graph
         allowed_ids_by_project[candidate.id] = allowed_ids
         quantitative_tokens_by_project[candidate.id] = quantitative_tokens
         raw_repository_reports = report.get("repositories")
@@ -1244,6 +1301,7 @@ async def draft_evidence_backed_projects(
                 "quality_metric_sources": quality_metric_sources,
                 "meets_master_metric_requirement": True,
                 "sources": sources,
+                "evidence_graph": evidence_graph.as_prompt_dict(),
             }
         )
     if len(contexts) < project_count:
@@ -1325,7 +1383,11 @@ async def draft_evidence_backed_projects(
         "support up to the maximum; order each project's bullets from strongest and most "
         "role-relevant to least essential, and never add generic filler merely to reach the "
         "maximum. Every "
-        "bullet must cite only evidence IDs supplied for that same project. You may synthesize "
+        "bullet must cite only evidence IDs supplied for that same project. Build each bullet "
+        "bottom-up from one evidence_graph path: choose its object first, then attach only the "
+        "connected method, scope, proof, and outcome nodes it supports, choose the action last, "
+        "and return that path's graph_path_id when possible. Never merge disconnected paths. "
+        "You may synthesize "
         "and reorder supported facts, but every factual content term must appear in a cited "
         "source; only the lead action verb and connective grammar may be new. Never invent a "
         "metric, technology, result, scale, ownership claim, or implementation detail. Preserve "
@@ -1411,6 +1473,7 @@ async def draft_evidence_backed_projects(
                 submission,
                 candidate_by_id=candidate_by_id,
                 source_text_by_project=source_text_by_project,
+                evidence_graph_by_project=evidence_graph_by_project,
                 allowed_ids_by_project=allowed_ids_by_project,
                 quantitative_tokens_by_project=quantitative_tokens_by_project,
                 master_quantitative_coverage=master_quantitative_coverage,
@@ -1440,19 +1503,67 @@ async def draft_evidence_backed_projects(
     drafted = variants[selected_index]
     quality_report = portfolio_quality_report(drafted).as_dict()
     quality_report["metric_provenance"] = _metric_provenance(drafted)
+    quality_report["editorial_validation"] = [
+        {
+            "project_id": candidate.id,
+            "bullets": [
+                analyze_bullet_editorially(
+                    latex_to_text(bullet),
+                    supporting_text="\n".join(
+                        source_text_by_project[candidate.id][evidence_id]
+                        for evidence_id in evidence_ids
+                    ),
+                    maximum_characters=bullet_max_chars,
+                ).as_dict()
+                for bullet, evidence_ids in zip(
+                    resume_item_texts(candidate.latex),
+                    candidate.bullet_evidence_ids,
+                    strict=True,
+                )
+            ],
+        }
+        for candidate in drafted
+    ]
+    quality_report["evidence_graph_alignment"] = [
+        {
+            "project_id": candidate.id,
+            "graph": {
+                "node_count": len(evidence_graph_by_project[candidate.id].nodes),
+                "edge_count": len(evidence_graph_by_project[candidate.id].edges),
+                "path_count": len(evidence_graph_by_project[candidate.id].paths),
+            },
+            "bullets": [
+                align_bullet_to_graph(
+                    latex_to_text(bullet),
+                    evidence_ids,
+                    evidence_graph_by_project[candidate.id],
+                ).as_dict()
+                for bullet, evidence_ids in zip(
+                    resume_item_texts(candidate.latex),
+                    candidate.bullet_evidence_ids,
+                    strict=True,
+                )
+            ],
+        }
+        for candidate in drafted
+    ]
     quality_report["variant_selection"] = {
         "evaluated_count": len(variants),
         "selected_index": variant_source_indices[selected_index],
         "rejected_count": len(rejections),
         "rejections": rejections,
-        "scoring": "45% role relevance + 35% approved-copy quality + 20% differentiation",
+        "scoring": (
+            "40% role relevance + 25% approved-copy quality + 20% deterministic editorial "
+            "quality + 15% differentiation"
+        ),
         "scores": [
             {
                 "source_index": variant_source_indices[index],
                 "total": score[0],
-                "average_quality": score[1],
-                "role_term_matches": score[2],
-                "differentiation": score[3],
+                "editorial_average": score[1],
+                "average_quality": score[2],
+                "role_term_matches": score[3],
+                "differentiation": score[4],
             }
             for index, score in enumerate(scored_variants)
         ],

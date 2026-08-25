@@ -400,7 +400,7 @@ folder = "Recruiting"
         self.assertIn("90 / 105 / 120 characters", review)
         self.assertIn("Obsidian: not set up", review)
         self.assertIn("You can cancel now with no changes", review)
-        self.assertIn("No Obsidian installation", report)
+        self.assertIn("résumé source is private", report)
         self.assertNotIn("token", json.dumps(plan).casefold())
         self.assertIsNone(plan["vault_mode"])
 

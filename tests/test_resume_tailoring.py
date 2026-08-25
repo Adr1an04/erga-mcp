@@ -239,7 +239,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 31)
+        self.assertEqual(TAILORING_VERSION, 32)
 
     def test_semantic_layout_gate_rejects_flattened_generated_resume(self) -> None:
         flattened = r"""
@@ -513,6 +513,9 @@ Synthetic University
             self.assertEqual(python_claim["evidence_ids"], ["ev_python"])
             self.assertEqual(python_claim["source_kind"], "approved_evidence")
             self.assertFalse(python_claim["text_changed"])
+            editorial = report["constraints"]["editorial_validation"]
+            self.assertGreater(len(editorial["bullets"]), 0)
+            self.assertIn("average_score", editorial)
             self.assertEqual(len(report["skills"]), 8)
             self.assertGreater(result.proposal.diff_path.stat().st_size, 0)
             self.assertEqual(source.read_text(encoding="utf-8"), _TEMPLATE)

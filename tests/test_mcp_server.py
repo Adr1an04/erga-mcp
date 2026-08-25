@@ -830,6 +830,8 @@ Bottom of the approved master template.
             )
             self.assertIn("bullet_quality", result.reports[0])
             self.assertIn("portfolio_quality", result.reports[0])
+            self.assertIn("evidence_graph_alignment", result.reports[0])
+            self.assertIn("editorial_validation", result.reports[0])
             self.assertEqual(
                 [call.kwargs["bullet_max_chars"] for call in draft.await_args_list],
                 [116, 106],
@@ -1785,7 +1787,7 @@ Bottom of the approved master template.
                 "\\section{Experience}\nexisting\n", encoding="utf-8"
             )
             evidence = ErgaStore(root / "state" / "erga.sqlite3").add_evidence(
-                source_ref="approved", text="Verified outcome", approved=True
+                source_ref="approved", text="Too short", approved=True
             )
             server = build_server(config_path)
 
@@ -2553,7 +2555,8 @@ Bottom of the approved master template.
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
             self.assertTrue(result["tailoring_meaningful_change"])
             self.assertEqual(result["tailoring_changed_sections"], ["Experience"])
-            self.assertEqual(result["tailoring_version"], 31)
+            self.assertEqual(result["tailoring_version"], 32)
+            self.assertEqual(result["readiness"], "ready")
             self.assertEqual(result["git_project_research"], [])
             self.assertIsInstance(result["application_id"], str)
             self.assertTrue(result["generated_resume_version_id"].startswith("resume_"))
@@ -2566,7 +2569,7 @@ Bottom of the approved master template.
                 (Path(result["package_dir"]) / "package.json").read_text(encoding="utf-8")
             )
             self.assertTrue(manifest["tailoring"]["meaningful_change"])
-            self.assertEqual(manifest["tailoring"]["version"], 31)
+            self.assertEqual(manifest["tailoring"]["version"], 32)
             self.assertEqual(
                 manifest["generated_resume_version_id"], result["generated_resume_version_id"]
             )
@@ -2640,7 +2643,7 @@ Bottom of the approved master template.
             )
             manifest = json.loads((repaired / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["legacy_backup"], "legacy-backup")
-            self.assertEqual(manifest["tailoring"]["version"], 31)
+            self.assertEqual(manifest["tailoring"]["version"], 32)
             self.assertIn("Legacy package preserved", result["integration_warnings"][-1])
 
     def test_compile_rejects_a_pdf_over_the_configured_page_cap(self) -> None:
@@ -2879,6 +2882,7 @@ Bottom of the approved master template.
             self.assertEqual(first["package_dir"], second["package_dir"])
             self.assertTrue(second["reused"])
             self.assertEqual(second["validation"]["returncode"], 1)
+            self.assertEqual(second["readiness"], "needs_attention")
             fetch.assert_called_once()
 
     def test_failed_staging_does_not_claim_the_final_slug_and_retry_succeeds(self) -> None:

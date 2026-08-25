@@ -4,6 +4,7 @@ import argparse
 import getpass
 import json
 import os
+import secrets
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict
@@ -11,9 +12,11 @@ from pathlib import Path
 from typing import cast
 
 from erga_mcp.applications.discovery import discover_job_research
-from erga_mcp.applications.identity import job_identity
+from erga_mcp.applications.identity import job_identity, posting_identifier, slug_with_identifier
+from erga_mcp.applications.intake import fetch_job_snapshot, select_relevant_evidence
 from erga_mcp.applications.lookup import select_tracked_application
-from erga_mcp.config import DEFAULT_CONFIG, DEFAULT_CONFIG_PATH, load_config
+from erga_mcp.applications.research import analyze_job_snapshot, official_job_text
+from erga_mcp.config import DEFAULT_CONFIG, DEFAULT_CONFIG_PATH, ErgaConfig, load_config
 from erga_mcp.integrations.discord.bridge import (
     ErgaUpdateError,
     connect_discord_bridge,
@@ -28,6 +31,7 @@ from erga_mcp.integrations.discord.bridge import (
 from erga_mcp.integrations.discord.setup import (
     collect_optional_discord,
     configure_discord_interactive,
+    render_discord_setup_report,
 )
 from erga_mcp.integrations.hermes import (
     install_hermes_monitor_scripts,
@@ -38,7 +42,6 @@ from erga_mcp.integrations.hermes import (
 from erga_mcp.integrations.hosts import (
     SUPPORTED_HOSTS,
     HostName,
-    collect_connection_workspace,
     collect_optional_hosts,
     configure_hosts,
 )
@@ -95,6 +98,7 @@ from erga_mcp.portfolio.git_evidence import (
     validate_worktree,
 )
 from erga_mcp.portfolio.github import discover_github_projects
+from erga_mcp.portfolio.inventory import load_project_inventory
 from erga_mcp.portfolio.roots import update_portfolio_roots
 from erga_mcp.portfolio.skill_inventory import parse_skill_seed_csv
 from erga_mcp.portfolio.skills import (
@@ -111,6 +115,7 @@ from erga_mcp.resumes.artifacts import (
 from erga_mcp.resumes.cover_letter import create_cover_letter_proposal, load_style_context
 from erga_mcp.resumes.cover_letter_settings import as_json as cover_letter_settings_as_json
 from erga_mcp.resumes.cover_letter_settings import update_settings as update_cover_letter_settings
+from erga_mcp.resumes.outcomes import build_resume_outcome_report
 from erga_mcp.resumes.settings import as_json as resume_settings_as_json
 from erga_mcp.resumes.settings import update_settings
 from erga_mcp.resumes.sources import (
@@ -119,6 +124,7 @@ from erga_mcp.resumes.sources import (
     resume_source_context,
     snapshot_resume_source,
 )
+from erga_mcp.resumes.tailoring import create_automatic_resume_proposal
 from erga_mcp.resumes.template import ensure_resume_template, reset_resume_template
 from erga_mcp.store import ErgaStore
 from erga_mcp.tracking.contact_projection import project_recruiter_contacts
@@ -130,17 +136,54 @@ from erga_mcp.tracking.settings import build_settings_card
 
 
 def _config_argument(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help=argparse.SUPPRESS,
+    )
+
+
+def _welcome_text() -> str:
+    return """Welcome to Erga — your private career assistant.
+
+First time here?
+  1. Run: erga setup
+  2. Choose Discord during setup
+  3. In Discord, say: Tailor my résumé for this job: <paste link>
+
+Already set up?
+  • Start Discord: erga discord start
+  • Tailor from this computer: erga tailor <job link>
+  • Check setup: erga status
+
+Erga creates reviewable drafts. It never applies, submits, or messages anyone for you."""
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="erga",
-        description=(
-            "Local-first recruiting workflow tools. No external actions are performed by default."
-        ),
+        description="Your private career assistant. Start with `erga setup`.",
     )
-    subcommands = parser.add_subparsers(dest="command", required=True)
+    subcommands = parser.add_subparsers(dest="command")
+
+    tailor = subcommands.add_parser(
+        "tailor",
+        help="tailor your résumé for a job link and check the finished PDF",
+    )
+    tailor.add_argument("job_url", help="the public job-posting link")
+    _config_argument(tailor)
+    tailor.add_argument(
+        "--output-dir",
+        type=Path,
+        help="advanced: override Erga's automatic private output folder",
+    )
+    tailor.add_argument(
+        "--validate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="check the finished PDF (enabled by default)",
+    )
 
     init = subcommands.add_parser(
         "init", help="create a local non-secret configuration and database"
@@ -149,7 +192,7 @@ def _parser() -> argparse.ArgumentParser:
 
     setup = subcommands.add_parser(
         "setup",
-        help="configure Erga's private career state, resume knowledge, tracking, and MCP core",
+        help="guided setup for your résumé, private workspace, and Discord",
     )
     _config_argument(setup)
     setup.add_argument("--vault", type=Path)
@@ -161,7 +204,7 @@ def _parser() -> argparse.ArgumentParser:
 
     uninstall = subcommands.add_parser(
         "uninstall",
-        help="remove Erga-owned state, credentials, bridges, and recorded MCP connections",
+        help="remove Erga-owned local data, credentials, and connections",
     )
     _config_argument(uninstall)
     uninstall.add_argument(
@@ -184,7 +227,7 @@ def _parser() -> argparse.ArgumentParser:
 
     connect_host = subcommands.add_parser(
         "connect",
-        help="optionally connect zero, one, or multiple MCP coding hosts to Erga",
+        help="advanced: connect Erga to local AI apps",
     )
     _config_argument(connect_host)
     connect_host.add_argument(
@@ -204,7 +247,7 @@ def _parser() -> argparse.ArgumentParser:
 
     discord_bridge = subcommands.add_parser(
         "discord",
-        help="optionally configure and run a private Discord bridge",
+        help="connect and run your private Discord assistant",
     )
     discord_commands = discord_bridge.add_subparsers(
         dest="discord_command",
@@ -212,10 +255,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     discord_configure = discord_commands.add_parser(
         "configure",
-        help="choose one replaceable coding backend and configure the Discord bridge",
+        help="guided Discord connection",
     )
     _config_argument(discord_configure)
-    discord_configure.add_argument("--project-dir", type=Path, default=Path.cwd())
+    discord_configure.add_argument(
+        "--project-dir",
+        type=Path,
+        default=Path.cwd(),
+        help=argparse.SUPPRESS,
+    )
+    discord_configure.add_argument(
+        "--advanced",
+        action="store_true",
+        help="show runtime and workspace choices for maintainers",
+    )
+    discord_configure.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
     for name, help_text in (
         ("run", "run the configured Discord bridge in the foreground"),
         ("connect", "reconnect using the existing Discord and coding-host setup"),
@@ -226,23 +280,29 @@ def _parser() -> argparse.ArgumentParser:
     ):
         discord_command = discord_commands.add_parser(name, help=help_text)
         _config_argument(discord_command)
+        if name in {"connect", "start", "status", "stop", "set-token"}:
+            discord_command.add_argument(
+                "--json",
+                action="store_true",
+                help="print machine-readable runtime details",
+            )
 
-    status = subcommands.add_parser("status", help="show local pipeline counts")
+    status = subcommands.add_parser("status", help="show what is ready and what to do next")
     _config_argument(status)
+    status.add_argument("--json", action="store_true", help="print machine-readable counts")
     tracker = subcommands.add_parser("tracker", help="inspect local application tracking")
-    tracker_commands = tracker.add_subparsers(dest="tracker_command", required=True)
+    _config_argument(tracker)
+    tracker_commands = tracker.add_subparsers(dest="tracker_command")
     tracker_orbit = tracker_commands.add_parser(
         "orbit", help="render the aggregate Erga Orbit application-flow image"
     )
     _config_argument(tracker_orbit)
     tracker_orbit.add_argument("--cycle", default="")
     tracker_orbit.add_argument("--output", type=Path)
-    doctor = subcommands.add_parser("doctor", help="check core and optional local capabilities")
+    doctor = subcommands.add_parser("doctor", help="run advanced local diagnostics")
     _config_argument(doctor)
 
-    onboarding = subcommands.add_parser(
-        "onboarding", help="review and update local onboarding inventory"
-    )
+    onboarding = subcommands.add_parser("onboarding", help="review and update guided setup")
     onboarding_commands = onboarding.add_subparsers(dest="onboarding_command", required=True)
     onboarding_status = onboarding_commands.add_parser(
         "status", help="show the shared onboarding completion card"
@@ -274,7 +334,7 @@ def _parser() -> argparse.ArgumentParser:
         if action != "list":
             root_command.add_argument("root", type=Path)
 
-    settings = subcommands.add_parser("settings", help="show a redacted local settings card")
+    settings = subcommands.add_parser("settings", help="show private setup status")
     _config_argument(settings)
     settings.add_argument("--json", action="store_true")
     keryx = subcommands.add_parser(
@@ -301,7 +361,7 @@ def _parser() -> argparse.ArgumentParser:
     keryx_search.add_argument("--location", default="")
     keryx_search.add_argument("--limit", type=int, default=20)
 
-    evidence = subcommands.add_parser("evidence", help="manage local evidence records")
+    evidence = subcommands.add_parser("evidence", help="advanced: manage approved career facts")
     evidence_commands = evidence.add_subparsers(dest="evidence_command", required=True)
     evidence_add = evidence_commands.add_parser("add", help="add local career evidence")
     _config_argument(evidence_add)
@@ -309,7 +369,9 @@ def _parser() -> argparse.ArgumentParser:
     evidence_add.add_argument("--text", required=True)
     evidence_add.add_argument("--approved", action="store_true")
 
-    git = subcommands.add_parser("git", help="scan local git worktrees for reviewable evidence")
+    git = subcommands.add_parser(
+        "git", help="advanced: find reviewable experience in local projects"
+    )
     git_commands = git.add_subparsers(dest="git_command", required=True)
     git_scan = git_commands.add_parser(
         "scan", help="scan bounded new commits into unapproved candidates"
@@ -453,7 +515,9 @@ def _parser() -> argparse.ArgumentParser:
     zoho_sync.add_argument("--client-id", required=True)
     zoho_sync.add_argument("--limit", type=int, default=20)
 
-    resume = subcommands.add_parser("resume", help="create reviewable local resume proposals")
+    resume = subcommands.add_parser(
+        "resume", help="advanced résumé controls; normal use is `erga tailor`"
+    )
     resume_commands = resume.add_subparsers(dest="resume_command", required=True)
     resume_propose = resume_commands.add_parser(
         "propose", help="create a local proposal without modifying or syncing the source"
@@ -471,6 +535,27 @@ def _parser() -> argparse.ArgumentParser:
     resume_tailor.add_argument("--latex-content", required=True)
     resume_tailor.add_argument("--output-dir", type=Path, required=True)
     resume_tailor.add_argument("--evidence-id", action="append", default=[])
+    resume_tailor_job = resume_commands.add_parser(
+        "tailor-job",
+        help="fetch a job posting and create a complete deterministic evidence-backed proposal",
+    )
+    _config_argument(resume_tailor_job)
+    resume_tailor_job.add_argument("--job-url", required=True)
+    resume_tailor_job.add_argument(
+        "--output-dir",
+        type=Path,
+        help="advanced: override Erga's automatic private output folder",
+    )
+    resume_tailor_job.add_argument(
+        "--validate",
+        action="store_true",
+        help="check that the finished PDF opens and meets your layout settings",
+    )
+    resume_insights = resume_commands.add_parser(
+        "insights",
+        help="show local directional signals from explicitly used résumé versions and outcomes",
+    )
+    _config_argument(resume_insights)
     resume_validate = resume_commands.add_parser(
         "validate",
         help="compile an explicitly selected local proposal without remote synchronization",
@@ -650,7 +735,7 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     monitor = subcommands.add_parser(
-        "monitor", help="prepare deterministic Hermes scheduled-monitor runners"
+        "monitor", help="advanced: prepare scheduled background checks"
     )
     monitor_commands = monitor.add_subparsers(dest="monitor_command", required=True)
     monitor_install = monitor_commands.add_parser(
@@ -701,6 +786,7 @@ def _initialize(config_path: Path) -> int:
         _set_owner_only_permissions(database_path, 0o600)
     print(f"Created local configuration: {config.config_path}")
     print(f"Created local data directory: {config.data_dir}")
+    print("Next: run `erga setup` to add your résumé and connect Discord.")
     return 0
 
 
@@ -713,6 +799,60 @@ def _store_for(config_path: Path) -> ErgaStore:
 
 def _print_json(value: object) -> None:
     print(json.dumps(value, default=str, sort_keys=True))
+
+
+def _render_human_status(config: ErgaConfig, store: ErgaStore) -> str:
+    resume_ready = config.resume.master_path is not None
+    try:
+        discord = discord_status(config.config_path)
+    except (OSError, RuntimeError, ValueError):
+        discord = {"configured": False, "running": False, "ready": False}
+    if discord.get("ready"):
+        discord_line = "✓ Discord is online"
+    elif discord.get("configured"):
+        discord_line = "! Discord is connected but offline"
+    else:
+        discord_line = "! Discord is not connected"
+    applications = store.list_applications()
+    approved = sum(item.approved for item in store.list_evidence())
+    lines = [
+        "Erga status",
+        "",
+        "✓ Private workspace is ready",
+        "✓ Résumé is ready" if resume_ready else "! Résumé needed",
+        discord_line,
+        f"{'✓' if approved else '○'} Career evidence: {approved} approved",
+        f"○ Applications tracked: {len(applications)}",
+        "",
+        "Next:",
+    ]
+    if not resume_ready:
+        lines.append("  Run `erga setup` to add your résumé.")
+    elif not discord.get("configured"):
+        lines.append("  Run `erga discord configure` to connect Discord.")
+    elif not discord.get("ready"):
+        lines.append("  Run `erga discord start` to bring Erga online.")
+    else:
+        lines.append("  In Discord, send `help` or paste a job link.")
+    lines.append("Nothing is sent or submitted without your action.")
+    return "\n".join(lines)
+
+
+def _render_discord_runtime(report: dict[str, object], *, action: str = "") -> str:
+    if action == "stop" and not report.get("running"):
+        return "Discord is offline. Your private Erga data is unchanged."
+    if report.get("ready"):
+        return (
+            "Discord is connected and Erga is online.\n\n"
+            "Open Discord and send:\n"
+            "  Tailor my résumé for this job: <paste link>\n\n"
+            "Send `help` in Discord for more examples."
+        )
+    if report.get("running"):
+        return "Discord is starting. Run `erga discord status` again in a moment."
+    if report.get("configured"):
+        return "Discord is connected but offline. Start it with `erga discord start`."
+    return "Discord is not connected yet. Run `erga discord configure`."
 
 
 def _update_runtime(*, config_path: Path, scheduled: bool, hermes_home: Path) -> dict[str, object]:
@@ -795,6 +935,13 @@ def _render_application_notes(application: Application, package_dir: Path | None
 
 def main(arguments: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(arguments)
+    if args.command is None:
+        print(_welcome_text())
+        return 0
+    friendly_tailor = args.command == "tailor"
+    if friendly_tailor:
+        args.command = "resume"
+        args.resume_command = "tailor-job"
     if args.command == "update":
         try:
             update_report = _update_runtime(
@@ -851,34 +998,15 @@ def main(arguments: Sequence[str] | None = None) -> int:
             print(f"Setup could not continue: {error}", file=sys.stderr)
             return 1
         print(render_core_setup_report(report))
-        optional_hosts = collect_optional_hosts()
-        if optional_hosts:
-            try:
-                connection_workspace = collect_connection_workspace(default=Path.cwd())
-                _print_json(
-                    configure_hosts(
-                        optional_hosts,
-                        project_dir=connection_workspace,
-                        config_path=args.config,
-                        write=True,
-                    )
-                )
-            except RuntimeError as error:
-                print(str(error))
-                return 0
-            except (FileNotFoundError, NotADirectoryError, OSError, ValueError) as error:
-                print(
-                    f"Erga's core remains ready, but the optional host connection failed: {error}",
-                    file=sys.stderr,
-                )
-                return 1
         try:
             if collect_optional_discord():
-                _print_json(
-                    configure_discord_interactive(
-                        config_path=args.config,
-                        default_project_dir=Path.cwd(),
-                    ).as_json()
+                print(
+                    render_discord_setup_report(
+                        configure_discord_interactive(
+                            config_path=args.config,
+                            default_project_dir=Path.cwd(),
+                        )
+                    )
                 )
         except WizardCancelled as error:
             print(str(error))
@@ -891,7 +1019,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             ValueError,
         ) as error:
             print(
-                f"Erga's core remains ready, but the optional Discord connection failed: {error}",
+                f"Erga's private workspace is ready, but Discord setup failed: {error}",
                 file=sys.stderr,
             )
             return 1
@@ -924,29 +1052,45 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if args.command == "discord":
         try:
             if args.discord_command == "configure":
-                _print_json(
-                    configure_discord_interactive(
-                        config_path=args.config,
-                        default_project_dir=args.project_dir,
-                    ).as_json()
+                discord_setup_report = configure_discord_interactive(
+                    config_path=args.config,
+                    default_project_dir=args.project_dir,
+                    advanced=args.advanced,
                 )
+                if args.json:
+                    _print_json(discord_setup_report.as_json())
+                else:
+                    print(render_discord_setup_report(discord_setup_report))
                 return 0
             if args.discord_command == "run":
                 return run_discord_bridge(args.config)
             if args.discord_command == "connect":
-                _print_json(connect_discord_bridge(args.config))
+                discord_runtime_report = connect_discord_bridge(args.config)
             elif args.discord_command == "start":
-                _print_json(start_discord_bridge(args.config))
+                discord_runtime_report = start_discord_bridge(args.config)
             elif args.discord_command == "stop":
-                _print_json(stop_discord_bridge(args.config))
+                discord_runtime_report = stop_discord_bridge(args.config)
             elif args.discord_command == "set-token":
                 token = getpass.getpass(
                     "Discord bot token (stored only in the OS credential store): "
                 )
                 store_discord_token(args.config, token)
-                _print_json({"stored": "OS credential store"})
+                if args.json:
+                    _print_json({"stored": "OS credential store"})
+                else:
+                    print("Discord token updated securely. Start Erga with `erga discord start`.")
+                return 0
             else:
-                _print_json(discord_status(args.config))
+                discord_runtime_report = discord_status(args.config)
+            if args.json:
+                _print_json(discord_runtime_report)
+            else:
+                print(
+                    _render_discord_runtime(
+                        discord_runtime_report,
+                        action=args.discord_command,
+                    )
+                )
             return 0
         except WizardCancelled as error:
             print(str(error))
@@ -1051,7 +1195,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             if args.json:
                 _print_json(card.as_dict())
             else:
-                print(card.as_text())
+                print(_render_human_status(config, store))
             return 0
         if args.onboarding_command == "skills":
             action = args.onboarding_skill_command
@@ -1089,21 +1233,37 @@ def main(arguments: Sequence[str] | None = None) -> int:
         _print_json([str(root) for root in roots])
         return 0
     if args.command == "settings":
-        card = build_settings_card(load_config(args.config), store)
+        config = load_config(args.config)
+        card = build_settings_card(config, store)
         if args.json:
             _print_json(card.as_dict())
         else:
-            print(card.as_text())
+            print(_render_human_status(config, store))
         return 0
     if args.command == "status":
-        _print_json(
-            {
-                "applications": len(store.list_applications()),
-                "audit_events": len(store.audit_events()),
-                "evidence": len(store.list_evidence()),
-                "mail_events": len(store.list_mail_events()),
-            }
-        )
+        config = load_config(args.config)
+        counts = {
+            "applications": len(store.list_applications()),
+            "audit_events": len(store.audit_events()),
+            "evidence": len(store.list_evidence()),
+            "mail_events": len(store.list_mail_events()),
+        }
+        if args.json:
+            _print_json(counts)
+        else:
+            print(_render_human_status(config, store))
+        return 0
+    if args.command == "tracker" and args.tracker_command is None:
+        applications = store.list_applications()
+        if not applications:
+            print(
+                "No applications tracked yet.\n\n"
+                "In Discord, say: Track this job for me: <paste link>"
+            )
+        else:
+            print(f"Applications tracked: {len(applications)}")
+            for application in applications:
+                print(f"  • {application.company} — {application.role} ({application.status})")
         return 0
     if args.command == "tracker" and args.tracker_command == "orbit":
         config = load_config(args.config)
@@ -1609,6 +1769,120 @@ def main(arguments: Sequence[str] | None = None) -> int:
             bullet_max_chars=settings.bullet_max_chars,
         )
         _print_json(asdict(proposal))
+        return 0
+    if args.command == "resume" and args.resume_command == "tailor-job":
+        config = load_config(args.config)
+        settings = config.resume
+        if settings.template_path is None and settings.master_path is None:
+            raise ValueError(
+                "Before Erga can tailor a résumé, add the résumé you want it to use with "
+                "`erga setup`. Erga copies it into private local storage and never changes "
+                "the original."
+            )
+        if settings.template_path is None:
+            ensure_resume_template(args.config)
+            settings = load_config(args.config).resume
+        if settings.template_path is None:
+            raise ValueError("resume template could not be generated from the approved master")
+        snapshot = fetch_job_snapshot(args.job_url)
+        research = analyze_job_snapshot(snapshot, job_url=args.job_url)
+        output_dir = args.output_dir or (
+            settings.output_root
+            / "tailored"
+            / slug_with_identifier(
+                f"{research.company}-{research.role}-{posting_identifier(args.job_url)}",
+                secrets.token_hex(4),
+            )
+        )
+        resume_approved = tuple(item for item in store.list_evidence() if item.approved)
+        selected = select_relevant_evidence(
+            snapshot,
+            resume_approved,
+            role_profile=research.role_profile,
+        )
+        tailoring_context = "\n".join(
+            (
+                research.company,
+                research.role,
+                *research.highlights,
+                *research.responsibilities,
+                *research.qualifications,
+                *research.skills,
+                official_job_text(snapshot),
+            )
+        )
+        resume_candidates = (
+            load_project_inventory(settings.project_inventory_path, resume_approved)
+            if settings.project_inventory_path is not None
+            else ()
+        )
+        automatic = create_automatic_resume_proposal(
+            resume_path=settings.template_path,
+            output_dir=output_dir,
+            job_description=tailoring_context,
+            evidence=list(resume_approved),
+            editable_sections=settings.editable_sections,
+            bullet_min_chars=settings.bullet_min_chars,
+            bullet_target_chars=settings.bullet_target_chars,
+            bullet_max_chars=settings.bullet_max_chars,
+            project_candidates=resume_candidates,
+            project_count=settings.project_count,
+            require_unique_lead_verbs=settings.require_unique_lead_verbs,
+            minimum_page_fill_ratio=settings.minimum_page_fill_ratio,
+            max_pages=settings.max_pages,
+        )
+        validation = (
+            asdict(
+                validate_latex_proposal(
+                    automatic.proposal.proposed_tex_path,
+                    latexmk=Path(settings.latexmk),
+                )
+            )
+            if args.validate
+            else None
+        )
+        tailoring_result = {
+            **asdict(automatic.proposal),
+            "company": research.company,
+            "role": research.role,
+            "selected_evidence_ids": [item.id for item in selected],
+            "meaningful_change": automatic.meaningful_change,
+            "changed_sections": list(automatic.changed_sections),
+            "fallback_reason": automatic.fallback_reason,
+            "role_profile": (
+                research.role_profile.as_dict() if research.role_profile is not None else None
+            ),
+            "validation": validation,
+        }
+        if friendly_tailor:
+            validation_ok = isinstance(validation, dict) and validation.get("returncode") == 0
+            print(
+                "\n".join(
+                    (
+                        "Résumé draft complete." if validation_ok else "Résumé draft created.",
+                        f"Job: {research.role} at {research.company}",
+                        f"Draft: {automatic.proposal.proposed_tex_path}",
+                        (
+                            f"PDF: {automatic.proposal.proposed_tex_path.with_suffix('.pdf')}"
+                            if validation_ok
+                            else "PDF check: needs attention; the draft is still reviewable"
+                        ),
+                        f"Changes: {', '.join(automatic.changed_sections) or 'none needed'}",
+                        "Nothing was sent or submitted.",
+                    )
+                )
+            )
+        else:
+            _print_json(tailoring_result)
+        return 0
+    if args.command == "resume" and args.resume_command == "insights":
+        config = load_config(args.config)
+        _print_json(
+            build_resume_outcome_report(
+                applications=store.list_applications(),
+                output_root=config.resume.output_root,
+            )
+        )
         return 0
     if args.command == "resume" and args.resume_command == "propose":
         proposal = create_resume_proposal(

@@ -27,18 +27,16 @@ Message Content Intent, and invite it with only:
 - Attach Files
 - Read Message History
 
-Then run:
+Then run the guided connection:
 
 ```bash
-uv run erga discord configure \
-  --config ~/.config/erga-mcp/config.toml \
-  --project-dir /absolute/path/to/project
+uv run erga discord configure --config ~/.config/erga-mcp/config.toml
 ```
 
-The wizard asks which local coding CLI should execute unattended Discord turns. Presets cover
-Codex, Claude Code, OpenCode, OpenCode V2, Gemini CLI, Cursor Agent, and GitHub Copilot CLI. The
-advanced custom option accepts an executable and a JSON argument array, runs it without a shell,
-and requires a `{prompt}` placeholder. `{project_dir}` and `{output_path}` are also available.
+The normal wizard auto-detects a supported signed-in local AI app, verifies that it can reply, and
+uses the current Erga folder. Users never enter commands, argument arrays, or assistant protocol
+settings. If several signed-in apps are available, the wizard asks which account to use. Runtime
+and custom executable controls remain available only through `--advanced` for maintainers.
 
 This backend selection belongs only to Discord. You can use no other coding assistant, connect
 several through `erga connect`, or replace the Discord backend later.
@@ -83,6 +81,11 @@ Direct messages from trusted users are accepted. Server messages require an expl
 unless the owner knowingly disables that safeguard during configuration. Bot-authored messages
 are always ignored, only one backend turn runs at a time, incoming content is bounded, and long
 responses are split below Discord's message limit.
+
+Once connected, no command vocabulary is required. A user can send `help`, paste a job link, or say
+“Tailor my résumé for this job: <link>”. Erga shows plain-language progress, attaches only a PDF
+that passed its checks, and repeats that nothing was submitted. A bare job link defaults to résumé
+tailoring unless the message clearly asks for research, summarization, or tracking instead.
 
 ### Update from Discord
 

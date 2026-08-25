@@ -164,7 +164,18 @@ weakening SSRF controls. Stored snapshots retain visible posting text and bounde
 metadata while removing executable scripts, styles, navigation, and page chrome. Imported page text
 remains data and is never evaluated as an instruction.
 
-Obsidian import is read-only, requires an explicitly configured vault root, rejects paths outside that root, and creates unapproved evidence candidates. New résumé claims may reference approved evidence only. When MCP client sampling is enabled, automatic job tailoring may synthesize project-bullet wording from bounded approved bullets and authenticated authored-Git evidence. Every bullet must cite project-scoped evidence IDs. Server-side checks reject unsupported numbers, evidence from another project, raw Git accounting prose, duplicate lead verbs, unsafe LaTeX, character overflow, and rendered line overflow. Sampling receives no ambient MCP context. Clients can disable sampling and retain deterministic approved-copy tailoring.
+Obsidian import is read-only, requires an explicitly configured vault root, rejects paths outside that root, and creates unapproved evidence candidates. New résumé claims may reference approved evidence only. Manual section proposals must map every authored bullet to one materially supporting supplied evidence record; numbers and explicit technologies must occur in that same record. When MCP client sampling is enabled, automatic job tailoring may synthesize project-bullet wording from bounded approved bullets and authenticated authored-Git evidence. Every bullet must cite project-scoped evidence IDs. Server-side checks reject unsupported numbers, evidence from another project, raw Git accounting prose, unsafe LaTeX, character overflow, and rendered line overflow. Optional lead-verb uniqueness is enforced when configured. Sampling receives no ambient MCP context. Clients can disable sampling and retain deterministic approved-copy tailoring.
+
+Editorial validation is independent from evidence validation. Deterministic parsing rejects weak
+participation language, tacked-on accomplishments, generic or unverifiable impact language, and
+missing action/scope/implementation/proof structure without treating version numbers or calendar
+years as impact. It never manufactures a metric; specific functional proof may satisfy the quality
+gate when approved evidence contains no measured outcome.
+
+The evidence-to-bullet graph is project-scoped and built only from the same bounded approved sources
+already authorized for generation. Its typed nodes expose no additional data. Graph edges connect
+claims only through shared subjects or explicit references, and server-side alignment prevents a
+model from combining facts from disconnected components.
 
 ## Human authority
 

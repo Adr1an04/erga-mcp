@@ -233,8 +233,8 @@ def collect_core_setup_selections(
     """Collect and review core choices before writing any local state."""
     questionary.print("\nErga Setup", style="bold fg:#7c5cff")
     questionary.print(
-        "Set up Erga's private state, resume knowledge, application tracking, and local MCP "
-        "server.\nObsidian, coding assistants, and chat bridges are optional additions.",
+        "Set up your private career workspace, résumé knowledge, and application tracking.\n"
+        "At the end, Erga can connect to Discord so you can use normal conversation from then on.",
         style="fg:#aaaaaa",
     )
     questionary.print(
@@ -599,14 +599,14 @@ def render_core_setup_review(selections: CoreSetupSelections) -> str:
             "  Application tracking: a private local database",
             f"  Obsidian: {obsidian}",
             "  Skill inventory: " + (selections.skill_seed_csv or "not configured"),
-            "  Git roots: "
+            "  Project folders: "
             + (
                 ", ".join(str(root) for root in selections.portfolio_roots)
                 if selections.portfolio_roots
                 else "not configured"
             ),
             "",
-            "Not being connected: coding AI, Discord, Keryx, mail, or any model API key.",
+            "Discord, mail, and other optional connections are not changed yet.",
             "You can change these settings later. You can cancel now with no changes.",
         ]
     )
@@ -833,7 +833,7 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         "Generated private LaTeX resume template",
         "Template-derived section and content profile",
         "Required project inventory with approved per-bullet evidence",
-        "Client-neutral local MCP profile",
+        "Private local assistant connection",
     ]
     if managed_style is not None:
         completed.append("Managed resume style preference")
@@ -882,12 +882,11 @@ def render_core_setup_report(report: CoreSetupReport) -> str:
     return "\n".join(
         [
             "",
-            "Erga's local core is ready.",
+            "Erga's private workspace is ready.",
             "",
             *[f"  [ok] {item}" for item in report.completed],
             "",
-            "No Obsidian installation, coding-AI subscription, Discord bot, or model API key "
-            "was required.",
+            "Your résumé source is private and the original was not changed.",
             "",
             "Next:",
             *[f"  {index}. {step}" for index, step in enumerate(report.next_steps, start=1)],

@@ -442,8 +442,9 @@ class AIResumeTailoringTests(unittest.TestCase):
         self.assertEqual(session.calls[0]["include_context"], "none")
         bullet_schema = session.calls[0]["tools"][0].input_schema["properties"]["projects"][
             "items"
-        ]["properties"]["bullets"]["items"]["properties"]["text"]
-        self.assertEqual(bullet_schema["maxLength"], 116)
+        ]["properties"]["bullets"]["items"]["properties"]
+        self.assertEqual(bullet_schema["text"]["maxLength"], 116)
+        self.assertEqual(bullet_schema["graph_path_id"], {"type": "string"})
         messages = session.messages[0]
         assert isinstance(messages, list)
         prompt = json.loads(messages[0].text)
@@ -453,6 +454,11 @@ class AIResumeTailoringTests(unittest.TestCase):
         self.assertIn("identity_profile", prompt["projects"][0])
         self.assertIn("metric_categories", prompt["projects"][0]["identity_profile"])
         self.assertIn("portfolio_differentiators", prompt["projects"][0])
+        evidence_graph = prompt["projects"][0]["evidence_graph"]
+        self.assertEqual(evidence_graph["project_id"], "api-platform")
+        self.assertGreater(len(evidence_graph["nodes"]), 0)
+        self.assertGreater(len(evidence_graph["paths"]), 0)
+        self.assertEqual(evidence_graph["paths"][0]["assembly_order"][0], "object")
         self.assertIn("performance", prompt["preferred_metric_categories"])
         self.assertTrue(prompt["projects"][0]["git_engineering_signals"][0]["has_test_changes"])
         self.assertFalse(
@@ -463,12 +469,15 @@ class AIResumeTailoringTests(unittest.TestCase):
         self.assertNotIn("implementation files", json.dumps(prompt))
         self.assertIn("verified_git_functional_scope_evidence", json.dumps(prompt))
         self.assertEqual(prompt["master_project_quantitative_coverage_percent"], 100)
-        self.assertEqual(prompt["required_quantified_bullets_per_project_at_minimum"], 2)
+        self.assertEqual(prompt["required_quantified_bullets_per_project_at_minimum"], 1)
         provenance = result.quality_report["metric_provenance"]
         self.assertEqual(provenance[0]["value"], "100")
         self.assertEqual(provenance[0]["unit"], "users")
         self.assertEqual(provenance[0]["evidence_ids"], ["ev_api"])
         self.assertEqual(provenance[0]["basis"], "approved_exact_numeric_token")
+        graph_quality = result.quality_report["evidence_graph_alignment"][0]
+        self.assertGreater(graph_quality["graph"]["node_count"], 0)
+        self.assertTrue(all(item["passed"] for item in graph_quality["bullets"]))
 
     def test_explicit_style_preferences_are_run_scoped_and_contain_no_personal_facts(self) -> None:
         result, session = self._draft(
@@ -1264,6 +1273,63 @@ class AIResumeTailoringTests(unittest.TestCase):
                                 },
                                 {
                                     "text": "Validated API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                }
+            )
+
+    def test_rejects_a_factually_supported_bullet_with_a_tacked_on_claim(self) -> None:
+        with self.assertRaisesRegex(ValueError, "cohesion.tacked_claim"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Engineered a Python API serving 100 users; built "
+                                        "authenticated request handling."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": (
+                                        "Validated 20 API routes covering request validation and "
+                                        "failures."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                }
+            )
+
+    def test_rejects_a_model_selected_graph_path_that_does_not_exist(self) -> None:
+        with self.assertRaisesRegex(ValueError, "graph.unknown_path"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Engineered a Python API serving 100 users with "
+                                        "authenticated requests."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                    "graph_path_id": "bg_not_real",
+                                },
+                                {
+                                    "text": (
+                                        "Validated 20 API routes covering request validation and "
+                                        "failures."
+                                    ),
                                     "evidence_ids": ["ev_api"],
                                 },
                             ],

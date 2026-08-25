@@ -46,6 +46,20 @@ class DiscordSetupReport:
         return asdict(self)
 
 
+def render_discord_setup_report(report: DiscordSetupReport) -> str:
+    state = "online" if report.running else "configured"
+    lines = [
+        f"\nDiscord is {state}.",
+        f"Trusted Discord accounts: {report.authorized_identities}",
+        "Your bot token is stored only in the OS credential store.",
+        "",
+        "Next:",
+    ]
+    lines.extend(f"  • {step}" for step in report.next_steps)
+    lines.append("Erga never applies, submits, or messages anyone for you.")
+    return "\n".join(lines)
+
+
 def _required(value: object) -> object:
     if value is None:
         raise WizardCancelled("Discord configuration cancelled; Erga's core remains ready.")
@@ -118,14 +132,47 @@ def discord_runtime_installed() -> bool:
     return importlib.util.find_spec("discord") is not None
 
 
+def detected_discord_backends() -> tuple[tuple[DiscordBackendName, Path], ...]:
+    """Find supported local AI sign-ins without asking users about runtime plumbing."""
+    detected: list[tuple[DiscordBackendName, Path]] = []
+    for name in PRESET_DISCORD_BACKENDS:
+        try:
+            detected.append((name, resolve_backend_command(name)))
+        except FileNotFoundError:
+            continue
+    return tuple(detected)
+
+
+def first_ready_discord_backend(
+    candidates: tuple[tuple[DiscordBackendName, Path], ...],
+    *,
+    project_dir: Path,
+) -> tuple[tuple[DiscordBackendName, Path] | None, str]:
+    """Choose the first runtime that completes a real reply check, not merely a PATH lookup."""
+    last_detail = "no supported AI app was detected"
+    for backend, command in candidates:
+        verified, detail = verify_backend_login(
+            DiscordBridgeSettings(
+                backend=backend,
+                backend_command=str(command),
+                project_dir=project_dir,
+                allowed_user_ids=(1,),
+            )
+        )
+        if verified:
+            return (backend, command), detail
+        last_detail = detail
+    return None, last_detail
+
+
 def collect_optional_discord() -> bool:
-    """Offer Discord only after the provider-neutral core has completed."""
+    """Offer the normal conversational interface after the private workspace is ready."""
     selected = questionary.confirm(
-        "Add the optional Discord bridge now?",
-        default=False,
+        "Connect Erga to Discord now?",
+        default=True,
     ).ask()
     if selected is None:
-        raise WizardCancelled("Optional connection setup cancelled; Erga's core remains ready.")
+        raise WizardCancelled("Discord setup skipped; your private Erga workspace is ready.")
     return bool(selected)
 
 
@@ -133,31 +180,41 @@ def configure_discord_interactive(
     *,
     config_path: Path,
     default_project_dir: Path,
+    advanced: bool = False,
 ) -> DiscordSetupReport:
-    """Configure one replaceable Discord execution backend without changing Erga's core."""
-    questionary.print("\nOptional Discord bridge", style="bold fg:#7c5cff")
+    """Configure private Discord access while hiding replaceable runtime plumbing by default."""
+    questionary.print("\nConnect Erga to Discord", style="bold fg:#7c5cff")
     questionary.print(
-        "Discord is only another way to reach Erga. It needs one local coding CLI for "
-        "unattended replies, but that choice does not become Erga's core or restrict which "
-        "other assistants you connect.",
+        "After this one-time setup, you can talk to Erga normally in Discord. "
+        "Only the Discord accounts you approve below can use it.",
         style="fg:#aaaaaa",
     )
-    backend = cast(
-        DiscordBackendName,
-        _required(
-            questionary.select(
-                "Which installed coding CLI should power Discord replies?",
-                choices=[
-                    *[
-                        Choice(DISCORD_BACKENDS[name].label, value=name)
-                        for name in PRESET_DISCORD_BACKENDS
+    detected = detected_discord_backends()
+    if advanced:
+        backend = cast(
+            DiscordBackendName,
+            _required(
+                questionary.select(
+                    "Advanced: choose the local AI runtime:",
+                    choices=[
+                        *[
+                            Choice(DISCORD_BACKENDS[name].label, value=name)
+                            for name in PRESET_DISCORD_BACKENDS
+                        ],
+                        Choice(DISCORD_BACKENDS["custom"].label, value="custom"),
                     ],
-                    Choice(DISCORD_BACKENDS["custom"].label, value="custom"),
-                ],
-                use_shortcuts=True,
-            ).ask()
-        ),
-    )
+                    use_shortcuts=True,
+                ).ask()
+            ),
+        )
+    elif not detected:
+        raise FileNotFoundError(
+            "Erga could not find a supported signed-in AI app on this computer. Install and "
+            "sign in to Codex/ChatGPT, Claude Code, Cursor, Gemini CLI, GitHub Copilot CLI, or "
+            "OpenCode, then run `erga discord configure` again."
+        )
+    else:
+        backend = detected[0][0]
 
     explicit_command: Path | None = None
     custom_arguments: tuple[str, ...] = ()
@@ -184,17 +241,19 @@ def configure_discord_interactive(
 
     # Resolve the optional executable before asking for a token or Discord identity.
     backend_command = resolve_backend_command(backend, explicit_command)
-    project_dir = normalize_dropped_path(
-        str(
-            _required(
-                questionary.text(
-                    "Project workspace for Discord-powered Erga tasks:",
-                    default=str(default_project_dir.expanduser().absolute()),
-                    validate=_existing_directory,
-                ).ask()
+    project_dir = default_project_dir.expanduser().absolute()
+    if advanced:
+        project_dir = normalize_dropped_path(
+            str(
+                _required(
+                    questionary.text(
+                        "Advanced: local workspace for Erga tasks:",
+                        default=str(project_dir),
+                        validate=_existing_directory,
+                    ).ask()
+                )
             )
         )
-    )
     provisional = DiscordBridgeSettings(
         backend=backend,
         backend_command=str(backend_command),
@@ -202,37 +261,51 @@ def configure_discord_interactive(
         allowed_user_ids=(1,),
         custom_arguments=custom_arguments,
     )
-    login_verified = False
-    if bool(
-        _required(
-            questionary.confirm(
-                "Run one small readiness turn using this existing coding-tool login?",
-                default=True,
-            ).ask()
+    questionary.print("Checking that Erga can reply...", style="fg:#aaaaaa")
+    if advanced:
+        login_verified, detail = verify_backend_login(provisional)
+    else:
+        ready_backend, detail = first_ready_discord_backend(
+            detected,
+            project_dir=project_dir,
         )
-    ):
+        login_verified = ready_backend is not None
+        if ready_backend is not None:
+            backend, backend_command = ready_backend
+    if not login_verified:
+        if advanced:
+            questionary.print(f"Connection check failed: {detail}", style="fg:#e0aa55")
+        else:
+            questionary.print(
+                "Erga couldn't start any supported AI app found on this computer. "
+                "Open or reinstall the app you normally use, confirm you are signed in, then "
+                "run `erga discord configure` again.",
+                style="fg:#e0aa55",
+            )
+        if not advanced or not bool(
+            _required(
+                questionary.confirm(
+                    "Advanced: save this incomplete connection anyway?",
+                    default=False,
+                ).ask()
+            )
+        ):
+            raise WizardCancelled(
+                "Discord setup stopped safely. No Discord credentials or settings were saved."
+            )
+    else:
         questionary.print(
-            f"Checking {DISCORD_BACKENDS[backend].label}...",
+            f"Reply check passed using {DISCORD_BACKENDS[backend].label}.",
             style="fg:#aaaaaa",
         )
-        login_verified, detail = verify_backend_login(provisional)
-        if not login_verified:
-            questionary.print(f"Readiness check failed: {detail}", style="fg:#e0aa55")
-            if not bool(
-                _required(
-                    questionary.confirm(
-                        "Save the bridge configuration anyway?",
-                        default=False,
-                    ).ask()
-                )
-            ):
-                raise WizardCancelled("Discord configuration stopped; Erga's core remains ready.")
 
     questionary.print(
-        "\nCreate a Discord application and bot at "
-        "https://discord.com/developers/applications. Enable Message Content Intent, "
-        "then invite it with View Channels, Send Messages, Embed Links, Attach Files, and Read "
-        "Message History.",
+        "\nDiscord bot setup (one time, about 3 minutes)\n"
+        "  1. Open https://discord.com/developers/applications and choose New Application.\n"
+        "  2. Open Bot, create the bot, and enable Message Content Intent.\n"
+        "  3. Copy the bot token; Erga stores it only in your OS credential store.\n"
+        "  4. Under OAuth2, invite it with View Channels, Send Messages, Embed Links, "
+        "Attach Files, and Read Message History.",
         style="fg:#e0aa55",
     )
     token = str(
@@ -277,7 +350,7 @@ def configure_discord_interactive(
             _required(
                 questionary.confirm(
                     "Start the Discord bridge after configuration?",
-                    default=False,
+                    default=True,
                 ).ask()
             )
         )
@@ -288,31 +361,28 @@ def configure_discord_interactive(
             style="fg:#e0aa55",
         )
 
-    questionary.print("\nReview optional Discord connection", style="bold")
+    questionary.print("\nReady to connect", style="bold")
     questionary.print(
         "\n".join(
             [
-                f"  Backend:          {DISCORD_BACKENDS[backend].label}",
-                f"  Backend command:  {backend_command}",
-                f"  Project:          {project_dir}",
+                f"  AI sign-in:       {DISCORD_BACKENDS[backend].label}",
                 f"  Trusted accounts: {len(user_ids) + len(usernames)}",
                 "  Bot token:        OS credential store (never config)",
                 "  Server messages:  "
                 + ("all authorized" if respond_without_mention else "@mention only"),
-                f"  Login check:      {'passed' if login_verified else 'not verified'}",
-                "  Erga core:        unchanged",
+                f"  Reply check:      {'passed' if login_verified else 'not verified'}",
             ]
         )
     )
     if not bool(
         _required(
             questionary.confirm(
-                "Apply this optional Discord connection?",
+                "Connect Erga to Discord?",
                 default=True,
             ).ask()
         )
     ):
-        raise WizardCancelled("Discord configuration cancelled; Erga's core remains ready.")
+        raise WizardCancelled("Discord setup cancelled; your private Erga workspace is unchanged.")
 
     connection = configure_hosts(
         (_host_for_backend(backend),),
@@ -329,9 +399,11 @@ def configure_discord_interactive(
     next_steps: list[str] = []
     if not can_start:
         next_steps.append("Install the optional runtime: pip install 'erga-mcp[discord]'")
-    if not running:
-        next_steps.append("Start when ready: erga discord start")
-    next_steps.append("Use `erga discord status` to inspect only this optional bridge.")
+    if running:
+        next_steps.append("Open Discord and send: Tailor my résumé for this job: <paste link>")
+    else:
+        next_steps.append("Start Erga when ready: erga discord start")
+    next_steps.append("In Discord, send `help` at any time for examples.")
     return DiscordSetupReport(
         status="configured",
         settings_path=str(target),

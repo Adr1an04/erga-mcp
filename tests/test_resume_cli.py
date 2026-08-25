@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from erga_mcp.cli import main
+from erga_mcp.resumes.artifacts import LatexValidation
 
 
 class ResumeCliTests(unittest.TestCase):
@@ -91,6 +92,144 @@ class ResumeCliTests(unittest.TestCase):
             self.assertEqual(result["returncode"], 0)
             self.assertEqual(result["stdout"], "compiled")
 
+    def test_tailor_job_runs_the_deterministic_end_to_end_cli_path(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.toml"
+            template = root / "resume.tex"
+            template.write_text(
+                "\\section{Experience}\n"
+                "\\resumeSubheading{Engineer}{2026}{Synthetic}{Remote}\n"
+                "\\resumeItemListStart\n"
+                "\\resumeItem{Designed marketing campaign assets.}\n"
+                "\\resumeItem{Owned Kubernetes services and production support.}\n"
+                "\\resumeItemListEnd\n",
+                encoding="utf-8",
+            )
+            main(["init", "--config", str(config)])
+            self._json_command(
+                [
+                    "resume",
+                    "settings",
+                    "set",
+                    "--config",
+                    str(config),
+                    "--template-path",
+                    str(template),
+                    "--editable-section",
+                    "Experience",
+                ]
+            )
+            self._json_command(
+                [
+                    "evidence",
+                    "add",
+                    "--config",
+                    str(config),
+                    "--source-ref",
+                    "synthetic:platform",
+                    "--text",
+                    "Owned Kubernetes services and production support.",
+                    "--approved",
+                ]
+            )
+
+            with patch(
+                "erga_mcp.cli.fetch_job_snapshot",
+                return_value=(
+                    "Infrastructure Engineer. Required: Kubernetes production ownership and "
+                    "incident response."
+                ),
+            ):
+                result = self._json_command(
+                    [
+                        "resume",
+                        "tailor-job",
+                        "--config",
+                        str(config),
+                        "--job-url",
+                        "https://jobs.example.test/infrastructure",
+                        "--output-dir",
+                        str(root / "proposal"),
+                    ]
+                )
+
+            self.assertTrue(result["meaningful_change"])
+            self.assertIsNone(result["validation"])
+            self.assertTrue(result["selected_evidence_ids"])
+            proposed = Path(str(result["proposed_tex_path"])).read_text(encoding="utf-8")
+            self.assertLess(
+                proposed.index("Owned Kubernetes"), proposed.index("Designed marketing")
+            )
+
+    def test_one_command_tailor_owns_output_and_checks_the_pdf(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.toml"
+            template = root / "resume.tex"
+            template.write_text(
+                "\\section{Experience}\n"
+                "\\resumeSubheading{Engineer}{2026}{Synthetic}{Remote}\n"
+                "\\resumeItemListStart\n"
+                "\\resumeItem{Owned Kubernetes services and production support.}\n"
+                "\\resumeItemListEnd\n",
+                encoding="utf-8",
+            )
+            main(["init", "--config", str(config)])
+            self._json_command(
+                [
+                    "resume",
+                    "settings",
+                    "set",
+                    "--config",
+                    str(config),
+                    "--template-path",
+                    str(template),
+                    "--editable-section",
+                    "Experience",
+                ]
+            )
+            self._json_command(
+                [
+                    "evidence",
+                    "add",
+                    "--config",
+                    str(config),
+                    "--source-ref",
+                    "synthetic:platform",
+                    "--text",
+                    "Owned Kubernetes services and production support.",
+                    "--approved",
+                ]
+            )
+            output = StringIO()
+            with (
+                patch(
+                    "erga_mcp.cli.fetch_job_snapshot",
+                    return_value="Infrastructure Engineer. Required: Kubernetes ownership.",
+                ),
+                patch(
+                    "erga_mcp.cli.validate_latex_proposal",
+                    return_value=LatexValidation((), 0, "checked", ""),
+                ) as validation,
+                redirect_stdout(output),
+            ):
+                exit_code = main(
+                    [
+                        "tailor",
+                        "https://jobs.example.test/infrastructure",
+                        "--config",
+                        str(config),
+                    ]
+                )
+
+            rendered = output.getvalue()
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Résumé draft complete", rendered)
+            self.assertIn("Nothing was sent or submitted", rendered)
+            self.assertIn(str(root / "output" / "tailored"), rendered)
+            validation.assert_called_once()
+
     def test_tailor_records_bullets_below_configured_minimum_without_failing(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -126,7 +265,7 @@ class ResumeCliTests(unittest.TestCase):
                     "--source-ref",
                     "approved",
                     "--text",
-                    "Verified outcome.",
+                    "Too short",
                     "--approved",
                 ]
             )

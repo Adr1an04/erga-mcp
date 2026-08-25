@@ -45,7 +45,7 @@ class ResumeEditorTests(unittest.TestCase):
             source = root / "resume.tex"
             original = "\\section{Experience}\nold\n\\section{Projects}\nkeep\n"
             source.write_text(original, encoding="utf-8")
-            evidence = Evidence("ev1", "Career.md#Experience", "verified", True, datetime.now(UTC))
+            evidence = Evidence("ev1", "Career.md#Experience", "new", True, datetime.now(UTC))
             proposal = create_section_resume_proposal(
                 resume_path=source,
                 output_dir=root / "proposal",
@@ -87,7 +87,7 @@ class ResumeEditorTests(unittest.TestCase):
             root = Path(directory)
             source = root / "resume.tex"
             source.write_text("\\section{Experience}\nold\n", encoding="utf-8")
-            evidence = Evidence("ev1", "approved", "verified", True, datetime.now(UTC))
+            evidence = Evidence("ev1", "approved", "Too short", True, datetime.now(UTC))
 
             proposal = create_section_resume_proposal(
                 resume_path=source,
@@ -104,6 +104,28 @@ class ResumeEditorTests(unittest.TestCase):
             self.assertIn('"passed": true', report)
             self.assertIn('"soft_deviations"', report)
             self.assertIn('"length": 9', report)
+
+    def test_section_proposal_rejects_a_bullet_with_unrelated_evidence(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resume.tex"
+            source.write_text("\\section{Experience}\nold\n", encoding="utf-8")
+            evidence = Evidence(
+                "ev1",
+                "approved",
+                "Built an accessible React interface.",
+                True,
+                datetime.now(UTC),
+            )
+
+            with self.assertRaisesRegex(ValueError, "must be supported"):
+                create_section_resume_proposal(
+                    resume_path=source,
+                    output_dir=root / "proposal",
+                    section_name="Experience",
+                    latex_content="\\resumeItem{Reduced database latency by 40 percent.}",
+                    evidence=[evidence],
+                )
 
     def test_section_proposal_rejects_bullets_over_the_configured_maximum(self) -> None:
         with TemporaryDirectory() as directory:
@@ -131,8 +153,8 @@ class ResumeEditorTests(unittest.TestCase):
             root = Path(directory)
             source = root / "resume.tex"
             source.write_text("\\section{Experience}\nold\n", encoding="utf-8")
-            evidence = Evidence("ev1", "approved", "verified", True, datetime.now(UTC))
             bullet = "A" * 105
+            evidence = Evidence("ev1", "approved", bullet, True, datetime.now(UTC))
 
             proposal = create_section_resume_proposal(
                 resume_path=source,

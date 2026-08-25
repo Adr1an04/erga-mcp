@@ -1182,6 +1182,22 @@ async def _ai_tailored_project_enrichment(
                 if isinstance(raw_quality_profiles, (list, tuple))
                 else {}
             )
+            raw_graph_alignment = drafted.quality_report.get("evidence_graph_alignment")
+            graph_alignment_by_project = {
+                project_id: item
+                for item in (raw_graph_alignment if isinstance(raw_graph_alignment, list) else [])
+                if isinstance(item, dict)
+                and isinstance((project_id := item.get("project_id")), str)
+            }
+            raw_editorial_validation = drafted.quality_report.get("editorial_validation")
+            editorial_validation_by_project = {
+                project_id: item
+                for item in (
+                    raw_editorial_validation if isinstance(raw_editorial_validation, list) else []
+                )
+                if isinstance(item, dict)
+                and isinstance((project_id := item.get("project_id")), str)
+            }
             final_reports = tuple(
                 {
                     **report_by_id[project_id],
@@ -1199,6 +1215,8 @@ async def _ai_tailored_project_enrichment(
                     "bullet_count_source": "automatic_rendered_page_density",
                     "natural_page_fill_ratio": natural_fill_ratio,
                     "bullet_quality": quality_profiles.get(project_id, {}),
+                    "evidence_graph_alignment": graph_alignment_by_project.get(project_id, {}),
+                    "editorial_validation": editorial_validation_by_project.get(project_id, {}),
                     "portfolio_quality": {
                         key: value
                         for key, value in final_quality.items()
@@ -1840,6 +1858,7 @@ def _upgrade_existing_tailoring(
             "snapshot_refreshed": snapshot_refreshed,
             "template_refreshed": template_refreshed,
             "version": TAILORING_VERSION,
+            "fallback_reason": automatic.fallback_reason,
         },
         "validation": {
             "page_count": validation.page_count,
@@ -2049,6 +2068,7 @@ def _result_from_manifest(
     tailoring_meaningful_change = False
     tailoring_changed_sections: list[str] = []
     tailoring_version: int | None = None
+    tailoring_fallback_reason: str | None = None
     if isinstance(raw_tailoring, dict):
         tailoring_meaningful_change = raw_tailoring.get("meaningful_change") is True
         raw_changed_sections = raw_tailoring.get("changed_sections")
@@ -2059,6 +2079,9 @@ def _result_from_manifest(
         raw_version = raw_tailoring.get("version")
         if isinstance(raw_version, int) and not isinstance(raw_version, bool):
             tailoring_version = raw_version
+        raw_fallback_reason = raw_tailoring.get("fallback_reason")
+        if isinstance(raw_fallback_reason, str):
+            tailoring_fallback_reason = raw_fallback_reason
     raw_warnings = manifest.get("integration_warnings")
     integration_warnings = (
         [item for item in raw_warnings if isinstance(item, str)]
@@ -2071,6 +2094,12 @@ def _result_from_manifest(
         if isinstance(raw_git_research, list)
         else []
     )
+    validation = _validation_from_manifest(
+        package_dir=package_dir, manifest=manifest, reused=reused
+    )
+    readiness = (
+        "ready" if validation.returncode == 0 and validation.pdf is not None else "needs_attention"
+    )
     return IntakeJobResult(
         package_dir=str(package_dir),
         job_snapshot=str(job_snapshot),
@@ -2082,12 +2111,12 @@ def _result_from_manifest(
         diff=str(diff),
         claim_report=str(claim_report),
         decision_report=str(decision_report) if decision_report.is_file() else None,
-        validation=_validation_from_manifest(
-            package_dir=package_dir, manifest=manifest, reused=reused
-        ),
+        validation=validation,
         tailoring_meaningful_change=tailoring_meaningful_change,
         tailoring_changed_sections=tailoring_changed_sections,
         tailoring_version=tailoring_version,
+        tailoring_fallback_reason=tailoring_fallback_reason,
+        readiness=readiness,
         integration_warnings=integration_warnings,
         generated_resume_version_id=(
             cast(str, manifest["generated_resume_version_id"])
@@ -2355,6 +2384,8 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             job_description=_tailoring_context(research, snapshot),
             candidates=candidates,
             project_count=config.resume.project_count,
+            evidence=tuple(approved),
+            role_profile=research.role_profile,
         )
         store.save_tailoring_plan(plan)
         return public_tailoring_plan(plan)
@@ -2608,8 +2639,12 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                     job_url=job_url,
                 )
         all_approved = [item for item in store.list_evidence() if item.approved]
-        evidence = select_relevant_evidence(snapshot, all_approved)
-        selection_strategy = "keyword_overlap"
+        evidence = select_relevant_evidence(
+            snapshot,
+            all_approved,
+            role_profile=source_research.role_profile,
+        )
+        selection_strategy = "weighted_requirement_match_v2"
         if not evidence:
             evidence = all_approved
             selection_strategy = "all_approved_baseline" if evidence else "no_approved_evidence"
@@ -2752,6 +2787,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                     "meaningful_change": automatic.meaningful_change,
                     "snapshot_refreshed": False,
                     "version": TAILORING_VERSION,
+                    "fallback_reason": automatic.fallback_reason,
                 },
                 "template_status": "copied",
                 "validation": {
@@ -3102,7 +3138,11 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             abandon_on_cancel=True,
         )
         all_approved = [item for item in store.list_evidence() if item.approved]
-        evidence = select_relevant_evidence(snapshot, all_approved)
+        evidence = select_relevant_evidence(
+            snapshot,
+            all_approved,
+            role_profile=research.role_profile,
+        )
         tailoring_context = _tailoring_context(research, snapshot)
         try:
             enrichment = await _project_enrichment_for_tailoring(

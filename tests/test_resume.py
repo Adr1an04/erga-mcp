@@ -36,6 +36,28 @@ class ResumeProposalTests(unittest.TestCase):
             self.assertTrue(proposal.claim_report_path.exists())
             self.assertIn("+\\item Verified delivery outcome.", proposal.diff_path.read_text())
             self.assertIn('"ev_example"', proposal.claim_report_path.read_text())
+            self.assertIn('"passed": true', proposal.claim_report_path.read_text())
+
+    def test_rejects_a_manual_claim_with_unrelated_approved_evidence(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            resume = root / "resume.tex"
+            resume.write_text("\\documentclass{article}\n", encoding="utf-8")
+            evidence = Evidence(
+                id="ev_example",
+                source_ref="Career.md#Project",
+                text="Documented customer interview notes.",
+                approved=True,
+                created_at=datetime.now(UTC),
+            )
+
+            with self.assertRaisesRegex(ValueError, "must be supported"):
+                create_resume_proposal(
+                    resume_path=resume,
+                    output_dir=root / "proposals",
+                    latex_snippet="\\item Improved API latency by 40 percent.",
+                    evidence=[evidence],
+                )
 
 
 if __name__ == "__main__":

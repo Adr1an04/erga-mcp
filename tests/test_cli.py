@@ -19,6 +19,34 @@ from erga_mcp.store import ErgaStore
 
 
 class CliTests(unittest.TestCase):
+    def test_no_argument_invocation_is_a_friendly_first_run_guide(self) -> None:
+        output = StringIO()
+        with redirect_stdout(output):
+            exit_code = main([])
+
+        rendered = output.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Welcome to Erga", rendered)
+        self.assertIn("erga setup", rendered)
+        self.assertIn("Tailor my résumé", rendered)
+        self.assertNotIn("MCP", rendered)
+
+    def test_human_status_uses_real_next_steps_without_internal_action_ids(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            main(["init", "--config", str(config_path)])
+            output = StringIO()
+
+            with redirect_stdout(output):
+                exit_code = main(["status", "--config", str(config_path)])
+
+            rendered = output.getvalue()
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Résumé needed", rendered)
+            self.assertIn("erga setup", rendered)
+            self.assertNotIn("onboarding.skills.help", rendered)
+            self.assertNotIn("MCP", rendered)
+
     def test_manual_update_reports_safe_checkout_result(self) -> None:
         output = StringIO()
         result = type(
@@ -154,7 +182,7 @@ class CliTests(unittest.TestCase):
             patch("erga_mcp.cli.connect_discord_bridge", return_value=connected) as connect,
             redirect_stdout(output),
         ):
-            exit_code = main(["discord", "connect"])
+            exit_code = main(["discord", "connect", "--json"])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(json.loads(output.getvalue()), connected)
@@ -168,7 +196,7 @@ class CliTests(unittest.TestCase):
             patch("erga_mcp.cli.store_discord_token") as store,
             redirect_stdout(output),
         ):
-            exit_code = main(["discord", "set-token"])
+            exit_code = main(["discord", "set-token", "--json"])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(json.loads(output.getvalue()), {"stored": "OS credential store"})
@@ -251,7 +279,7 @@ class CliTests(unittest.TestCase):
             output = StringIO()
 
             with redirect_stdout(output):
-                exit_code = main(["status", "--config", str(config_path)])
+                exit_code = main(["status", "--config", str(config_path), "--json"])
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(json.loads(output.getvalue())["mail_events"], 0)

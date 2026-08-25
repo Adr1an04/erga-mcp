@@ -200,7 +200,7 @@ project_count = 3
             )
             self.assertEqual(config.resume.project_count, 3)
 
-    def test_legacy_false_lead_verb_setting_is_upgraded_to_required(self) -> None:
+    def test_lead_verb_uniqueness_can_be_disabled_as_a_style_preference(self) -> None:
         with TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"
             config_path.write_text(
@@ -210,7 +210,7 @@ project_count = 3
 
             config = load_config(config_path)
 
-            self.assertTrue(config.resume.require_unique_lead_verbs)
+            self.assertFalse(config.resume.require_unique_lead_verbs)
 
     def test_rejects_invalid_minimum_page_fill_ratio(self) -> None:
         with TemporaryDirectory() as directory:

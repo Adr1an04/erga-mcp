@@ -9,6 +9,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
+from erga_mcp.applications.role_profile import role_profile_from_text
 from erga_mcp.models import Evidence
 from erga_mcp.resumes.artifacts import latex_to_text, resume_item_texts
 from erga_mcp.resumes.quality import (
@@ -654,7 +655,14 @@ def _score(candidate: ProjectCandidate, job_description: str) -> int:
     matched_terms = candidate_terms & _terms(job_description)
     required_matches = candidate_terms & _required_terms(job_description)
     role_signals = _role_signal_matches(candidate, job_description)
-    return len(matched_terms) + 8 * len(required_matches) + 3 * len(role_signals)
+    requirement_score = (
+        role_profile_from_text(job_description)
+        .match(latex_to_text(candidate.latex) + " " + " ".join(candidate.tags))
+        .score
+    )
+    return (
+        len(matched_terms) + 8 * len(required_matches) + 3 * len(role_signals) + requirement_score
+    )
 
 
 def _contrastive_selection_score(

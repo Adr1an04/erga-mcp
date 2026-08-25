@@ -241,9 +241,10 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
     minimum_page_fill_ratio = float(resume.get("minimum_page_fill_ratio", 0.82))
     if not 0 <= minimum_page_fill_ratio <= 1:
         raise ValueError("resume minimum_page_fill_ratio must be between zero and one")
-    # Generated bullets may never repeat lead verbs. Treat the legacy false value as an old
-    # config default rather than an opt-out so existing installations receive the invariant.
-    require_unique_lead_verbs = True
+    require_unique_lead_verbs_value = resume.get("require_unique_lead_verbs", True)
+    if not isinstance(require_unique_lead_verbs_value, bool):
+        raise ValueError("resume require_unique_lead_verbs must be true or false")
+    require_unique_lead_verbs = require_unique_lead_verbs_value
     latexmk = str(resume.get("latexmk", "latexmk")).strip()
     if not latexmk:
         raise ValueError("resume latexmk must be non-empty")

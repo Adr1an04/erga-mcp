@@ -5,6 +5,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from typing import Protocol
 
+from erga_mcp.applications.role_profile import role_profile_from_text
 from erga_mcp.resumes.artifacts import latex_to_text, resume_item_texts
 
 _NUMBER = re.compile(r"(?<![A-Za-z])(?:\$)?\d[\d,.]*(?:\+|%|[kmb]|ms|hz|x|/year)?", re.I)
@@ -298,6 +299,8 @@ class ResumeMasterComparison:
     master_duplicate_lead_verbs: tuple[str, ...]
     proposal_duplicate_lead_verbs: tuple[str, ...]
     semantic_redundancy_pairs: tuple[tuple[int, int, int], ...]
+    master_role_fit_score: int
+    proposal_role_fit_score: int
     issues: tuple[str, ...]
 
     def as_dict(self) -> dict[str, object]:
@@ -555,7 +558,12 @@ def _resume_quality_summary(source: str) -> tuple[int, int, tuple[str, ...]]:
     return average, quantified, duplicate_leads
 
 
-def compare_resume_to_master(master_latex: str, proposal_latex: str) -> ResumeMasterComparison:
+def compare_resume_to_master(
+    master_latex: str,
+    proposal_latex: str,
+    *,
+    job_description: str = "",
+) -> ResumeMasterComparison:
     """Require generated copy and structure to remain on par with its own master.
 
     The comparison never imports a global person's facts or a fixed template. Its baseline is the
@@ -570,6 +578,18 @@ def compare_resume_to_master(master_latex: str, proposal_latex: str) -> ResumeMa
     )
     proposal_bullets = resume_item_texts(proposal_latex)
     master_bullets = resume_item_texts(master_latex)
+    profile = role_profile_from_text(job_description) if job_description.strip() else None
+    master_role_fit = (
+        sum(profile.match(latex_to_text(item)).score for item in master_bullets)
+        if profile is not None
+        else 0
+    )
+    proposal_role_fit = (
+        sum(profile.match(latex_to_text(item)).score for item in proposal_bullets)
+        if profile is not None
+        else 0
+    )
+    role_fit_improved = proposal_role_fit > master_role_fit
     inherited_redundancy = {
         tuple(
             sorted(
@@ -616,7 +636,9 @@ def compare_resume_to_master(master_latex: str, proposal_latex: str) -> ResumeMa
         proposal_score < master_score and proposal_issue_count > master_issue_count
     ):
         issues.append("proposal falls below master bullet quality")
-    if proposal_coverage < master_coverage:
+    if proposal_coverage < master_coverage and not (
+        role_fit_improved and proposal_score >= master_score - 5
+    ):
         issues.append("proposal falls below master supported quantitative coverage")
     master_lead_counts = _lead_verb_counts(master_bullets)
     proposal_lead_counts = _lead_verb_counts(proposal_bullets)
@@ -632,7 +654,9 @@ def compare_resume_to_master(master_latex: str, proposal_latex: str) -> ResumeMa
     content_retention = (
         round(100 * len(proposal_bullets) / len(master_bullets)) if master_bullets else 100
     )
-    if content_retention < 70:
+    if content_retention < 70 and not (
+        role_fit_improved and content_retention >= 50 and len(proposal_bullets) >= 4
+    ):
         issues.append("proposal removes too much of the master resume's validated content")
     if redundancy:
         issues.append("proposal contains semantically redundant bullets")
@@ -647,6 +671,8 @@ def compare_resume_to_master(master_latex: str, proposal_latex: str) -> ResumeMa
         master_duplicate_lead_verbs=master_duplicates,
         proposal_duplicate_lead_verbs=proposal_duplicates,
         semantic_redundancy_pairs=redundancy,
+        master_role_fit_score=master_role_fit,
+        proposal_role_fit_score=proposal_role_fit,
         issues=tuple(issues),
     )
 
@@ -669,6 +695,7 @@ def select_quality_project_ids(
             raise ValueError("locked_ids must be the exact eligible project selection")
         return locked_ids
     job_terms = _role_terms(job_description)
+    role_profile = role_profile_from_text(job_description)
     sparse_generic_role = bool(job_terms) and job_terms <= _GENERIC_ROLE_TERMS
     profiles = {candidate.id: build_project_identity_profile(candidate) for candidate in candidates}
     remaining = dict(by_id)
@@ -678,7 +705,10 @@ def select_quality_project_ids(
         def score(candidate: ProjectLike) -> tuple[int, int, str]:
             profile = profiles[candidate.id]
             matched = job_terms & set(profile.identity_terms)
-            relevance = min(100, len(matched) * 12)
+            requirement_match = role_profile.match(
+                latex_to_text(candidate.latex) + " " + " ".join(candidate.tags)
+            )
+            relevance = min(100, len(matched) * 12 + requirement_match.score)
             differentiation = (
                 min(
                     compare_project_profiles(profiles[item], profile).differentiation_score

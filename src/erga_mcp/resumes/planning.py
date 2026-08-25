@@ -4,7 +4,15 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from erga_mcp.applications.role_profile import (
+    JobRequirement,
+    RoleProfile,
+    concepts_and_terms,
+    role_profile_from_text,
+)
+from erga_mcp.models import Evidence
 from erga_mcp.portfolio.inventory import ProjectCandidate, _score, select_projects
+from erga_mcp.resumes.artifacts import latex_to_text
 from erga_mcp.resumes.quality import build_project_identity_profile
 
 _ACTIVE_STATUSES = frozenset({"planning", "review", "ready"})
@@ -19,6 +27,7 @@ class TailoringPlanOption:
     project_titles: tuple[str, ...] = ()
     emphasis: str = "balanced"
     allow_ai_synthesis: bool | None = None
+    gap_strategy: str | None = None
     recommended: bool = False
 
 
@@ -40,6 +49,21 @@ class TailoringPreferences:
     project_ids: tuple[str, ...]
     emphasis: str
     allow_ai_synthesis: bool
+    gap_strategy: str = "honest"
+
+
+@dataclass(frozen=True)
+class RoleAlignment:
+    requirement_id: str
+    requirement: str
+    kind: str
+    priority: str
+    status: str
+    supporting_evidence_ids: tuple[str, ...]
+    supporting_project_ids: tuple[str, ...]
+
+    def as_public_dict(self) -> dict[str, object]:
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -56,6 +80,7 @@ class TailoringPlan:
     catalogue_candidate_count: int
     created_at: datetime
     updated_at: datetime
+    role_alignment: tuple[RoleAlignment, ...] = ()
 
     @property
     def current_question(self) -> TailoringPlanQuestion | None:
@@ -75,6 +100,7 @@ class TailoringPlan:
             "current_question": asdict(current) if current is not None else None,
             "status": self.status,
             "catalogue_candidate_count": self.catalogue_candidate_count,
+            "role_alignment": [item.as_public_dict() for item in self.role_alignment],
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -196,6 +222,62 @@ def _portfolio_options(
     return tuple(unique[:3])
 
 
+def _supports_requirement(value: str, requirement: JobRequirement, role: str) -> bool:
+    return bool(
+        RoleProfile(role=role, requirements=(requirement,)).match(value).matched_requirement_ids
+    )
+
+
+def _role_alignment(
+    profile: RoleProfile,
+    *,
+    evidence: tuple[Evidence, ...],
+    candidates: tuple[ProjectCandidate, ...],
+) -> tuple[RoleAlignment, ...]:
+    aligned: list[RoleAlignment] = []
+    for requirement in profile.requirements:
+        evidence_ids = tuple(
+            item.id
+            for item in evidence
+            if item.approved and _supports_requirement(item.text, requirement, profile.role)
+        )
+        project_ids = tuple(
+            item.id
+            for item in candidates
+            if _supports_requirement(
+                latex_to_text(item.latex) + " " + " ".join(item.tags),
+                requirement,
+                profile.role,
+            )
+        )
+        requirement_features = set(requirement.features)
+        partial = any(
+            requirement_features & concepts_and_terms(value)
+            for value in (
+                *(item.text for item in evidence if item.approved),
+                *(latex_to_text(item.latex) + " " + " ".join(item.tags) for item in candidates),
+            )
+        )
+        aligned.append(
+            RoleAlignment(
+                requirement_id=requirement.id,
+                requirement=requirement.text,
+                kind=requirement.kind,
+                priority=requirement.priority,
+                status=(
+                    "supported"
+                    if evidence_ids or project_ids
+                    else "partial"
+                    if partial
+                    else "unsupported"
+                ),
+                supporting_evidence_ids=evidence_ids,
+                supporting_project_ids=project_ids,
+            )
+        )
+    return tuple(aligned)
+
+
 def build_tailoring_plan(
     *,
     job_url: str,
@@ -205,6 +287,8 @@ def build_tailoring_plan(
     job_description: str,
     candidates: tuple[ProjectCandidate, ...],
     project_count: int,
+    evidence: tuple[Evidence, ...] = (),
+    role_profile: RoleProfile | None = None,
     now: datetime | None = None,
 ) -> TailoringPlan:
     """Create a deterministic, review-only plan before any résumé generation."""
@@ -217,6 +301,8 @@ def build_tailoring_plan(
         job_description,
         project_count=effective_project_count,
     )
+    profile = role_profile or role_profile_from_text(job_description)
+    role_alignment = _role_alignment(profile, evidence=evidence, candidates=candidates)
     questions: list[TailoringPlanQuestion] = []
     if len(portfolio_options) > 1:
         questions.append(
@@ -224,6 +310,42 @@ def build_tailoring_plan(
                 id="portfolio",
                 prompt="Which project story should this résumé tell?",
                 options=portfolio_options,
+            )
+        )
+    material_gaps = tuple(
+        item
+        for item in role_alignment
+        if item.priority == "required" and item.status != "supported"
+    )
+    if material_gaps:
+        questions.append(
+            TailoringPlanQuestion(
+                id="evidence_gaps",
+                prompt=(
+                    f"Erga found {len(material_gaps)} required requirement"
+                    f"{'s' if len(material_gaps) != 1 else ''} without strong approved evidence. "
+                    "How should the résumé handle that gap?"
+                ),
+                options=(
+                    TailoringPlanOption(
+                        id="honest_adjacent",
+                        label="🧭 Emphasize adjacent proof",
+                        description=(
+                            "Emphasize the closest supported work without implying the missing "
+                            "qualification."
+                        ),
+                        gap_strategy="honest",
+                        recommended=True,
+                    ),
+                    TailoringPlanOption(
+                        id="preserve_on_gaps",
+                        label="🛡️ Keep claims conservative",
+                        description=(
+                            "Preserve approved copy and avoid model-authored bullets for this role."
+                        ),
+                        gap_strategy="preserve",
+                    ),
+                ),
             )
         )
     questions.append(
@@ -276,6 +398,7 @@ def build_tailoring_plan(
         catalogue_candidate_count=len(candidates),
         created_at=timestamp,
         updated_at=timestamp,
+        role_alignment=role_alignment,
     )
 
 
@@ -337,10 +460,17 @@ def tailoring_plan_preferences(plan: TailoringPlan) -> TailoringPreferences:
     }
     portfolio = option_by_question["portfolio"][answer_by_question["portfolio"]]
     copy_strategy = option_by_question["copy_strategy"][answer_by_question["copy_strategy"]]
+    gap_option = (
+        option_by_question["evidence_gaps"][answer_by_question["evidence_gaps"]]
+        if "evidence_gaps" in answer_by_question
+        else None
+    )
+    gap_strategy = gap_option.gap_strategy if gap_option and gap_option.gap_strategy else "honest"
     return TailoringPreferences(
         project_ids=portfolio.project_ids,
         emphasis=portfolio.emphasis,
-        allow_ai_synthesis=bool(copy_strategy.allow_ai_synthesis),
+        allow_ai_synthesis=bool(copy_strategy.allow_ai_synthesis) and gap_strategy != "preserve",
+        gap_strategy=gap_strategy,
     )
 
 
@@ -360,6 +490,11 @@ def tailoring_plan_from_storage(payload: object) -> TailoringPlan:
                     project_titles=tuple(str(value) for value in option.get("project_titles", [])),
                     emphasis=str(option.get("emphasis", "balanced")),
                     allow_ai_synthesis=option.get("allow_ai_synthesis"),
+                    gap_strategy=(
+                        str(option["gap_strategy"])
+                        if option.get("gap_strategy") is not None
+                        else None
+                    ),
                     recommended=bool(option.get("recommended", False)),
                 )
                 for option in question["options"]
@@ -386,4 +521,20 @@ def tailoring_plan_from_storage(payload: object) -> TailoringPlan:
         catalogue_candidate_count=int(payload["catalogue_candidate_count"]),
         created_at=datetime.fromisoformat(str(payload["created_at"])),
         updated_at=datetime.fromisoformat(str(payload["updated_at"])),
+        role_alignment=tuple(
+            RoleAlignment(
+                requirement_id=str(item["requirement_id"]),
+                requirement=str(item["requirement"]),
+                kind=str(item["kind"]),
+                priority=str(item["priority"]),
+                status=str(item["status"]),
+                supporting_evidence_ids=tuple(
+                    str(value) for value in item.get("supporting_evidence_ids", [])
+                ),
+                supporting_project_ids=tuple(
+                    str(value) for value in item.get("supporting_project_ids", [])
+                ),
+            )
+            for item in payload.get("role_alignment", [])
+        ),
     )

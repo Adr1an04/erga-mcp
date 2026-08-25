@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from urllib.parse import urlsplit
 
 from erga_mcp.applications.research import build_job_snapshot
+from erga_mcp.applications.role_profile import RoleProfile, role_profile_from_text
 from erga_mcp.integrations.http import fetch_public_page
 from erga_mcp.models import Evidence
 
@@ -74,10 +75,33 @@ def fetch_job_snapshot(job_url: str) -> str:
     return text
 
 
-def select_relevant_evidence(job_description: str, evidence: Sequence[Evidence]) -> list[Evidence]:
-    """Rank approved, user-provided evidence by transparent lexical overlap only."""
+def select_relevant_evidence(
+    job_description: str,
+    evidence: Sequence[Evidence],
+    *,
+    role_profile: RoleProfile | None = None,
+) -> list[Evidence]:
+    """Rank approved evidence with explainable requirement and lexical matching.
+
+    Requirement concepts improve recall for common paraphrases, while lexical overlap remains a
+    deterministic fallback. Matching only chooses which already-approved facts enter tailoring;
+    it never approves evidence or establishes a new claim.
+    """
+    profile = role_profile or role_profile_from_text(job_description)
     job_terms = _terms(job_description)
-    scored = [(len(job_terms & _terms(item.text)), item) for item in evidence if item.approved]
+    scored = []
+    for item in evidence:
+        if not item.approved:
+            continue
+        lexical_score = len(job_terms & _terms(item.text))
+        requirement_match = profile.match(item.text)
+        score = requirement_match.score * 10 + lexical_score
+        scored.append((score, requirement_match.coverage_percent, lexical_score, item))
     return [
-        item for score, item in sorted(scored, key=lambda pair: (-pair[0], pair[1].id)) if score
+        item
+        for score, _, _, item in sorted(
+            scored,
+            key=lambda pair: (-pair[0], -pair[1], -pair[2], pair[3].id),
+        )
+        if score
     ]

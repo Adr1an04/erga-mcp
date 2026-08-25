@@ -22,6 +22,7 @@ from pypdf.errors import PdfReadError
 
 from erga_mcp.models import Evidence
 from erga_mcp.operations.private_files import restrict_private_directory, restrict_private_file
+from erga_mcp.resumes.claims import manual_claim_support_report
 
 try:
     import fcntl
@@ -791,6 +792,15 @@ def find_resume_version_manifest(
 _DISALLOWED_LATEX = ("\\input", "\\include", "\\write18", "\\immediate\\write")
 
 
+def _manual_claims_from_latex(latex_content: str) -> tuple[str, ...]:
+    """Extract factual content so non-bullet snippets cannot bypass evidence checks."""
+    bullets = resume_item_texts(latex_content)
+    if bullets:
+        return bullets
+    rendered = latex_to_text(latex_content)
+    return (rendered,) if rendered else ()
+
+
 def create_section_resume_proposal(
     *,
     resume_path: Path,
@@ -822,6 +832,17 @@ def create_section_resume_proposal(
             "new resume bullet lengths must not exceed "
             f"{bullet_max_chars} characters; received {rendered}"
         )
+    manual_claims = _manual_claims_from_latex(latex_content)
+    if not manual_claims:
+        raise ValueError("latex_content must contain reviewable resume content")
+    support_report = manual_claim_support_report(manual_claims, evidence)
+    unsupported = [item for item in support_report if item["passed"] is not True]
+    if unsupported:
+        raise ValueError(
+            "every manually authored resume bullet must be supported by one supplied approved "
+            "evidence record; unsupported bullet: "
+            f"{unsupported[0]['claim']}"
+        )
     original = resume_path.read_text(encoding="utf-8")
     proposed = append_section_contents(original, section_name, latex_content)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -849,6 +870,7 @@ def create_section_resume_proposal(
                 ],
                 "edited_section": section_name,
                 "constraints": {"bullet_characters": bullet_report},
+                "claim_evidence_support": list(support_report),
                 "external_sync": "not performed",
                 "source_modified": False,
             },
@@ -973,6 +995,17 @@ def create_resume_proposal(
         raise ValueError("latex_snippet cannot be empty")
     if any(marker in latex_snippet for marker in _DISALLOWED_LATEX):
         raise ValueError("latex_snippet contains a disallowed file or shell command")
+    manual_claims = _manual_claims_from_latex(latex_snippet)
+    if not manual_claims:
+        raise ValueError("latex_snippet must contain reviewable resume content")
+    support_report = manual_claim_support_report(manual_claims, evidence)
+    unsupported = [item for item in support_report if item["passed"] is not True]
+    if unsupported:
+        raise ValueError(
+            "every manually authored resume claim must be supported by one supplied approved "
+            "evidence record; unsupported claim: "
+            f"{unsupported[0]['claim']}"
+        )
 
     original = resume_path.read_text(encoding="utf-8")
     proposed = f"{original.rstrip()}\n\n% Erga MCP proposal\n{latex_snippet.strip()}\n"
@@ -1000,6 +1033,7 @@ def create_resume_proposal(
                     {"id": item.id, "source_ref": item.source_ref, "text": item.text}
                     for item in evidence
                 ],
+                "claim_evidence_support": list(support_report),
                 "external_sync": "not performed",
                 "source_modified": False,
             },

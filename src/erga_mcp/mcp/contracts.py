@@ -48,6 +48,8 @@ class IntakeJobResult(BaseModel):
     tracker_cycles: list[str] = Field(default_factory=list)
     integration_warnings: list[str] = Field(default_factory=list)
     reused: bool = False
+    readiness: str = "needs_attention"
+    tailoring_fallback_reason: str | None = None
 
 
 class SecondarySearchInput(BaseModel):

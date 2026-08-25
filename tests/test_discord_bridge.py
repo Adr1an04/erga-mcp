@@ -25,6 +25,9 @@ from erga_mcp.integrations.discord.bridge import (
     _backend_environment,
     _backend_prompt,
     _create_discord_client,
+    _help_card,
+    _is_help_request,
+    _is_resume_request,
     _managed_resume_pdf,
     _progress_card,
     _record_matches_process,
@@ -45,11 +48,82 @@ from erga_mcp.integrations.discord.bridge import (
     write_discord_settings,
 )
 from erga_mcp.integrations.discord.cards import discord_card_from_view
-from erga_mcp.integrations.discord.setup import parse_discord_identities
+from erga_mcp.integrations.discord.setup import (
+    DiscordSetupReport,
+    detected_discord_backends,
+    first_ready_discord_backend,
+    parse_discord_identities,
+    render_discord_setup_report,
+)
 from erga_mcp.tracking.cards import CardField, CardView
 
 
 class DiscordBridgeTests(unittest.TestCase):
+    def test_plain_language_help_needs_no_model_or_tool_vocabulary(self) -> None:
+        self.assertTrue(_is_help_request("hi"))
+        self.assertTrue(_is_help_request("what can you do"))
+        self.assertFalse(_is_help_request("tailor my resume"))
+
+        rendered = _help_card()
+        self.assertIn("You do not need commands", rendered.description)
+        self.assertIn("Tailor my résumé", rendered.description)
+        self.assertNotIn("MCP", rendered.description)
+        self.assertNotIn("tool", rendered.description.casefold())
+
+    def test_a_bare_job_link_defaults_to_resume_tailoring(self) -> None:
+        self.assertTrue(_is_resume_request("https://jobs.example.test/platform-engineer"))
+        self.assertFalse(_is_resume_request("research this https://company.example.test/about"))
+
+    def test_discord_setup_auto_detects_runtime_and_reports_a_human_next_step(self) -> None:
+        def resolve(name: str) -> Path:
+            if name == "codex":
+                return Path("/safe/codex")
+            raise FileNotFoundError
+
+        with patch(
+            "erga_mcp.integrations.discord.setup.resolve_backend_command",
+            side_effect=resolve,
+        ):
+            detected = detected_discord_backends()
+
+        self.assertEqual(detected, (("codex", Path("/safe/codex")),))
+        report = render_discord_setup_report(
+            DiscordSetupReport(
+                status="configured",
+                settings_path="/private/settings",
+                backend="codex",
+                project_dir="/private/workspace",
+                authorized_identities=1,
+                token_storage="OS credential store",
+                login_verified=True,
+                host_connection_written=True,
+                running=True,
+                next_steps=["Open Discord and send: Tailor my résumé for this job: <paste link>"],
+            )
+        )
+        self.assertIn("Discord is online", report)
+        self.assertIn("Tailor my résumé", report)
+        self.assertNotIn("backend", report.casefold())
+        self.assertNotIn("MCP", report)
+
+    def test_discord_setup_skips_a_broken_detected_runtime(self) -> None:
+        candidates = (
+            ("codex", Path("/broken/codex")),
+            ("claude-code", Path("/safe/claude")),
+        )
+        with patch(
+            "erga_mcp.integrations.discord.setup.verify_backend_login",
+            side_effect=((False, "internal stack trace"), (True, "ready")),
+        ) as verify:
+            selected, detail = first_ready_discord_backend(
+                candidates,
+                project_dir=Path("/safe/project"),
+            )
+
+        self.assertEqual(selected, candidates[1])
+        self.assertEqual(detail, "ready")
+        self.assertEqual(verify.call_count, 2)
+
     def test_shared_card_renderer_stays_inside_discord_embed_limits(self) -> None:
         rendered = discord_card_from_view(
             CardView(
@@ -82,7 +156,7 @@ class DiscordBridgeTests(unittest.TestCase):
 
         self.assertEqual(card.color, ERGA_ORBIT_VIOLET)
         self.assertEqual(card.title, "✦ Tailoring your résumé")
-        self.assertIn("Evidence selection, tailoring, and validation", card.description)
+        self.assertIn("choosing your strongest experience", card.description)
         self.assertEqual(card.fields[0].value, "Working through the one-page pipeline")
         self.assertEqual(card.fields[1].value, "42s")
         self.assertIn("no submission", card.fields[2].value)

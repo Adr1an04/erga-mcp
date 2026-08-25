@@ -28,6 +28,18 @@ own their rules.
 | `mcp/workspace_tools.py` | project, Git, evidence, mail, and usage tool family |
 | `mcp/server.py` | stdio composition and cross-family intake orchestration |
 
+## Tailoring decision modules
+
+| Module | Responsibility |
+| --- | --- |
+| `applications/role_profile.py` | source-backed required/preferred requirement model, conservative aliases, and explainable matching |
+| `resumes/claims.py` | claim-sized approved-evidence index, exact supported-skill projection, and manual claim/evidence validation |
+| `resumes/bullet_graph.py` | typed evidence nodes, connected bullet assembly paths, and source-path alignment |
+| `resumes/bullet_editor.py` | deterministic bullet/resume structure parsing, editorial issue codes, and repair guidance |
+| `resumes/outcomes.py` | local directional reporting from explicitly used résumé versions and later application statuses |
+| `resumes/planning.py` | project/copy choices plus supported, partial, and unsupported requirement review |
+| `resumes/tailoring.py` | evidence-backed ranking, cross-role bullet budgeting, layout packing, and proposal decision artifacts |
+
 New MCP capability families get a dedicated `*_tools.py` module. New reusable decisions go into
 the owning domain package and are injected into the adapter.
 

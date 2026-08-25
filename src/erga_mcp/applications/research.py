@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
 
+from erga_mcp.applications.role_profile import RoleProfile, build_role_profile
+
 _CYCLE = re.compile(r"\b(Spring|Summer|Fall|Winter)\s+(20\d{2})\b", re.IGNORECASE)
 _REVERSED_CYCLE = re.compile(r"\b(20\d{2})\s+(Spring|Summer|Fall|Winter)\b", re.IGNORECASE)
 _TAG = re.compile(r"<[^>]+>")
@@ -48,6 +50,7 @@ class JobResearch:
     ambiguities: tuple[str, ...]
     application_constraints: tuple[str, ...]
     source_url: str
+    role_profile: RoleProfile | None = None
 
 
 def _clean_text(value: object) -> str:
@@ -771,22 +774,33 @@ def analyze_job_snapshot(snapshot: str, *, job_url: str) -> JobResearch:
     date_posted = _clean_text(posting.get("datePosted")) or None
     if date_posted and "T" in date_posted:
         date_posted = date_posted.split("T", 1)[0]
+    display_role = _display_role(title)
+    highlights = _highlights(description)
+    skills = _skills(description)
+    role_profile = build_role_profile(
+        role=display_role,
+        responsibilities=responsibilities,
+        qualifications=qualifications,
+        skills=skills,
+        highlights=highlights,
+    )
     return JobResearch(
         company=company,
-        role=_display_role(title),
+        role=display_role,
         cycles=_cycles(f"{title} {description}"),
         location=location,
         employment_type=_employment_type(posting, title),
         compensation=_compensation(posting) or _compensation_from_text(description),
         date_posted=date_posted,
-        highlights=_highlights(description),
+        highlights=highlights,
         responsibilities=responsibilities,
         qualifications=qualifications,
-        skills=_skills(description),
+        skills=skills,
         logistics=logistics,
         ambiguities=_ambiguities(description),
         application_constraints=_application_constraints(snapshot, description),
         source_url=job_url,
+        role_profile=role_profile,
     )
 
 

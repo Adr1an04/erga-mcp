@@ -11,6 +11,7 @@ supported paths instead.
 git clone https://github.com/Adr1an04/erga-mcp.git
 cd erga-mcp
 uv sync --extra dev
+uv run erga
 uv run erga setup --config ~/.config/erga-mcp/config.toml
 ```
 
@@ -21,8 +22,9 @@ uv tool install git+https://github.com/Adr1an04/erga-mcp.git
 erga setup --config ~/.config/erga-mcp/config.toml
 ```
 
-The arrow-key setup initializes Erga's private state and local application tracking, imports a
-complete master résumé, and enables the least-privilege `career` MCP profile. The generated
+Running `erga` with no arguments shows the first-run path instead of a command error. The arrow-key
+setup initializes Erga's private state and local application tracking, imports a complete master
+résumé, and prepares its private assistant connection. The generated
 configuration and SQLite data directory live outside the repository. Do not place personal paths,
 tokens, or imports in Git.
 
@@ -179,10 +181,10 @@ cycle can pass it explicitly. A successful LaTeX build is stored under the confi
 
 ## 4. Add the optional Discord bridge
 
-Core setup also finishes before offering Discord, and skipping it is the default. Discord needs a
-bot token and one explicit local headless coding CLI because messages arrive while no interactive
-terminal session is open. That bridge-specific choice does not become Erga's core and does not
-prevent connecting other assistants.
+Setup offers Discord after the private workspace is ready. The normal wizard automatically finds a
+supported signed-in local AI app and uses the current Erga folder; users do not choose a backend,
+command, arguments, or workspace. Discord still needs a bot token because messages arrive while no
+interactive terminal session is open.
 
 This bridge is intended for someone who uses a headless coding tool such as Codex, Claude Code, or
 OpenCode but does not already operate a Discord gateway. If Hermes, OpenClaw, or another gateway
@@ -193,15 +195,13 @@ Install the isolated runtime extra and open the bridge wizard:
 
 ```bash
 uv sync --extra discord
-uv run erga discord configure \
-  --config ~/.config/erga-mcp/config.toml \
-  --project-dir /absolute/path/to/project
+uv run erga discord configure --config ~/.config/erga-mcp/config.toml
 ```
 
-The wizard resolves the selected backend before asking for Discord credentials. Its optional
-readiness probe uses the backend's existing local login and passes only a strict allowlist of basic
-runtime environment variables. The bot token is entered through a hidden prompt and stored only in
-the operating-system credential store.
+The wizard checks the existing local AI sign-in before asking for Discord credentials and passes
+only a strict allowlist of basic runtime environment variables. The bot token is entered through a
+hidden prompt and stored only in the operating-system credential store. Maintainers who need to
+override auto-detection can add `--advanced`; this is never required for ordinary use.
 
 Authorize a current unique Discord username such as `emperor_sai`, a stable numeric user ID, or
 several comma-separated identities. Old `name#1234` discriminator names are deliberately rejected
@@ -387,6 +387,14 @@ Hermes exposes tools prefixed with `mcp__erga_mcp__`:
 
 - `update_application_status` — records a deliberate local workflow transition such as applied, OA, interview, offer, rejected, or withdrawn. It never contacts an employer or changes a remote service.
 - `intake_job_url` — the primary first-turn action for a bare job URL, Markdown/chat link, or URL followed by preview text. It accepts the URL alone, atomically publishes the complete local review package, writes detailed source-cited posting research and an idempotent local application record, ranks the approved project catalogue, researches attributable Git changes for a broader shortlist, and asks a sampling-capable connected host model to draft new role-specific project bullets with per-bullet evidence IDs. Deterministic validation rejects invented numbers, cross-project citations, duplicate lead verbs, unsafe LaTeX, excessive length, and rendered wrapping. Clients without MCP sampling use the approved-copy fallback. It compiles the exact configured PDF, creates/synchronizes the appropriate Obsidian cycle tracker, and reuses current repeats of the same listing (including tracking-only URL variants). Legacy packages are upgraded once using a freshly sanitized snapshot; incomplete legacy files are retained under `legacy-backup/` after a clean rebuild. Jobs with no discoverable time bucket go to `Unscheduled Application Tracker.md` and `Unscheduled Application Notes/`.
+
+The everyday standalone command is `erga tailor URL`. It chooses a unique private output folder and
+checks the finished PDF automatically. The advanced machine-readable form remains `erga resume
+tailor-job --job-url URL`; `--output-dir` and `--validate` are optional. Its result includes the
+structured role profile, selected evidence IDs, changed sections, and an explicit fallback reason
+when no meaningful safe edit is available. `erga resume insights` reports
+local directional correlations only after a résumé version was explicitly marked used; it never
+claims causation or approves résumé evidence.
 - `record_secondary_research` — records bounded host-provided web/community search results after intake, clearly separated from official-posting facts and labeled unverified.
 - `prepare_job_workspace` — an advanced second-stage variant for callers that already have company, role, cycle, and slug metadata and explicitly need tracker integration. It is not the entry point for pasted links.
 - `create_tailored_resume` — writes only a reviewable tailored `.tex`, diff, and claim report inside that package, gated by supplied approved evidence IDs and configured editable sections.
@@ -431,10 +439,18 @@ directive so Discord/Telegram/etc. receive an actual attachment rather than a se
 The PDF is the compiled tailored proposal, not a stale baseline build. When the connected MCP
 client advertises sampling, Erga sends the host model a bounded set of approved project bullets and
 authenticated Git-diff evidence. The model may synthesize new wording, but every returned bullet
-must cite evidence IDs belonging to that project. Erga rejects unsupported numbers, cross-project
-citations, raw Git accounting prose, duplicate lead verbs, unsafe LaTeX, and excessive length.
+must cite evidence IDs belonging to that project. A separate deterministic editor parses the
+action, implementation, scope, proof, outcome, and clause structure of every draft. It rejects
+unsupported numbers, cross-project citations, raw Git accounting prose, participation language,
+tacked-on accomplishments, generic impact claims, duplicate lead verbs, unsafe LaTeX, and excessive
+length. Before drafting, Erga also converts bounded evidence into a typed graph and assembles each
+candidate bottom-up as `object -> method -> scope -> proof -> outcome -> action`. The server rejects
+bullets that fuse disconnected claim paths even when every individual word appeared somewhere in
+the project evidence. Valid alternatives are ranked partly by editorial structure; a failed draft
+receives issue codes and concrete repair guidance on the bounded retry rather than judging its own
+prose.
 Without sampling, intake keeps the deterministic approved-copy behavior. All output records
-per-claim provenance in `claim-report.json`. An exact TeX width preflight selects another approved
+per-claim provenance and a full-resume editorial report in `claim-report.json`. An exact TeX width preflight selects another approved
 project or retries model wording when a candidate overflows. A compiled-PDF check permits readable
 multi-line bullets but prevents publication when a final line contains only one or two words. A
 configured `max_pages` is enforced with the

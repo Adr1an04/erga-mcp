@@ -23,6 +23,10 @@ master résumé. Imported résumés, mail, pages, descriptions, and attachments 
 - Ranks an approved project catalogue against a role.
 - Enriches projects with attributable local Git evidence.
 - Produces evidence-cited résumé proposals, diffs, claim reports, and validated PDFs.
+- Deterministically parses and grades generated bullets for action, implementation, scope, proof,
+  outcome, cohesion, and scanability before accepting model-authored copy.
+- Builds project-scoped evidence graphs and accepts only bullets assembled from one connected claim
+  path, preventing plausible-sounding cross-component fact fusion.
 - Compares every tailored proposal with its own master, records the project decision and exact
   validated version, and distinguishes generation from explicit application use.
 - Preserves the configured master/template structure and enforces page, density, line-wrap, and
@@ -42,8 +46,8 @@ Requirements: Python 3.11+, [`uv`](https://docs.astral.sh/uv/), and Git.
 git clone https://github.com/Adr1an04/erga-mcp.git
 cd erga-mcp
 uv sync
+uv run erga
 uv run erga setup
-uv run erga doctor
 ```
 
 Setup imports a PDF, DOCX, or LaTeX master into private, hash-verified storage and creates a
@@ -51,15 +55,15 @@ standalone editable template. An optional second résumé contributes layout mea
 wording never becomes evidence. The generated configuration uses the least-privilege `career` MCP
 profile.
 
-Typical local commands:
+After setup, normal use can stay in Discord. Send `help` for examples, or paste a job link and ask
+Erga to tailor your résumé. The one-command local equivalent is:
 
 ```bash
-uv run erga status
-uv run erga settings
-uv run erga onboarding status
-uv run erga applications list
-uv run erga git projects
+uv run erga tailor https://jobs.example.com/role
 ```
+
+Erga chooses a private output folder, checks the PDF, and reports exactly where the reviewable
+draft lives. `uv run erga status` shows a plain-language readiness summary.
 
 Use `uv run erga --help` and `uv run erga <command> --help` for the complete CLI surface.
 
