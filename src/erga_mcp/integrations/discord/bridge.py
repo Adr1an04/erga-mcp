@@ -35,8 +35,14 @@ from erga_mcp.integrations.discord.orbit import (
     refresh_orbit_dashboards,
     stop_orbit_dashboard,
 )
+from erga_mcp.integrations.discord.resume_preferences import (
+    is_resume_preference_query,
+    parse_resume_preference_update,
+    render_resume_preferences,
+)
 from erga_mcp.integrations.discord.settings import settings_path
 from erga_mcp.operations.private_files import restrict_private_directory, restrict_private_file
+from erga_mcp.resumes.settings import update_settings as update_resume_settings
 from erga_mcp.tracking.orbit import (
     is_orbit_request,
     is_orbit_stop_request,
@@ -843,6 +849,8 @@ def _help_card() -> DiscordCard:
             "Try one:\n"
             "• **Tailor my résumé for this job:** `<paste link>`\n"
             "• **What experience should I emphasize for this role?** `<paste link>`\n"
+            "• **Change my résumé defaults to 2 pages, 3–5 bullets per experience, "
+            "and 2–3 per project.**\n"
             "• **Show my applications.**\n"
             "• **What still needs setup?**\n\n"
             "Résumé drafts are private and reviewable. I never apply, submit, or message "
@@ -1300,6 +1308,39 @@ def _create_discord_client(
             if _is_update_command(content):
                 await self._handle_update_command(message)
                 return
+            if config_path is not None:
+                resume_preference_updates = parse_resume_preference_update(content)
+                if resume_preference_updates is not None:
+                    try:
+                        resume_settings = update_resume_settings(
+                            config_path,
+                            resume_preference_updates,
+                        )
+                    except (OSError, ValueError) as error:
+                        print(
+                            f"Discord résumé preference update failed: {type(error).__name__}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        await message.reply(
+                            "I couldn’t save those résumé defaults. Bullet minimums must be at "
+                            "least 1 and cannot exceed their maximums. Try: **Set my résumé "
+                            "defaults to 1 page with 2–4 bullets per experience and project.**",
+                            mention_author=False,
+                        )
+                    else:
+                        await message.reply(
+                            render_resume_preferences(resume_settings, updated=True),
+                            mention_author=False,
+                        )
+                    return
+                if is_resume_preference_query(content):
+                    resume_settings = load_config(config_path).resume
+                    await message.reply(
+                        render_resume_preferences(resume_settings),
+                        mention_author=False,
+                    )
+                    return
             if config_path is not None and is_orbit_stop_request(content):
                 stopped = stop_orbit_dashboard(
                     config_path=config_path,

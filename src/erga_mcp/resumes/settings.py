@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
 
@@ -20,7 +21,7 @@ def as_json(settings: ResumeSettings) -> dict[str, object]:
     return result
 
 
-def update_settings(config_path: Path, updates: dict[str, object]) -> ResumeSettings:
+def update_settings(config_path: Path, updates: Mapping[str, object]) -> ResumeSettings:
     """Update owned resume keys while preserving comments and forward-compatible settings."""
     config_path = config_path.expanduser()
     raw = config_path.read_text(encoding="utf-8")

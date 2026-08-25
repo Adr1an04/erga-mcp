@@ -48,6 +48,11 @@ from erga_mcp.integrations.discord.bridge import (
     write_discord_settings,
 )
 from erga_mcp.integrations.discord.cards import discord_card_from_view
+from erga_mcp.integrations.discord.resume_preferences import (
+    is_resume_preference_query,
+    parse_resume_preference_update,
+    render_resume_preferences,
+)
 from erga_mcp.integrations.discord.setup import (
     DiscordSetupReport,
     detected_discord_backends,
@@ -69,6 +74,97 @@ class DiscordBridgeTests(unittest.TestCase):
         self.assertIn("Tailor my résumé", rendered.description)
         self.assertNotIn("MCP", rendered.description)
         self.assertNotIn("tool", rendered.description.casefold())
+
+    def test_plain_language_resume_defaults_are_parsed_without_capturing_tailoring(self) -> None:
+        self.assertEqual(
+            parse_resume_preference_update(
+                "Change my resume defaults to two pages with 3-5 bullets per experience "
+                "and 2-3 per project"
+            ),
+            {
+                "max_pages": 2,
+                "experience_min_bullets": 3,
+                "experience_max_bullets": 5,
+                "project_min_bullets": 2,
+                "project_max_bullets": 3,
+            },
+        )
+        self.assertEqual(
+            parse_resume_preference_update(
+                "Set my resume defaults to 2-4 bullets per experience/project"
+            ),
+            {
+                "experience_min_bullets": 2,
+                "experience_max_bullets": 4,
+                "project_min_bullets": 2,
+                "project_max_bullets": 4,
+            },
+        )
+        self.assertIsNone(
+            parse_resume_preference_update(
+                "Tailor my resume for this role and use two pages if necessary"
+            )
+        )
+        self.assertTrue(is_resume_preference_query("Show my current resume defaults"))
+
+    def test_discord_updates_resume_defaults_without_starting_the_model_backend(self) -> None:
+        class FakeIntents:
+            message_content = False
+
+            @classmethod
+            def default(cls) -> FakeIntents:
+                return cls()
+
+        class FakeClient:
+            def __init__(self, **_: object) -> None:
+                self.user = SimpleNamespace(id=777)
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.toml"
+            config.write_text(DEFAULT_CONFIG, encoding="utf-8")
+            message = SimpleNamespace(
+                author=SimpleNamespace(id=123456789, name="student", bot=False),
+                guild=None,
+                mentions=[],
+                content=(
+                    "Set my resume defaults to 2 pages with 3-5 bullets per experience "
+                    "and 2-3 per project"
+                ),
+                channel=SimpleNamespace(id=123),
+                reply=AsyncMock(),
+            )
+            fake_discord = SimpleNamespace(Intents=FakeIntents, Client=FakeClient)
+
+            with (
+                patch(
+                    "erga_mcp.integrations.discord.bridge._discord_module",
+                    return_value=fake_discord,
+                ),
+                patch("erga_mcp.integrations.discord.bridge.run_backend") as backend,
+            ):
+                client = _create_discord_client(
+                    DiscordBridgeSettings(
+                        backend="codex",
+                        backend_command="/private/codex",
+                        project_dir=Path("/private/project"),
+                        allowed_user_ids=(123456789,),
+                    ),
+                    config_path=config,
+                )
+                asyncio.run(client.on_message(message))
+
+            settings = load_config(config).resume
+            self.assertEqual(settings.max_pages, 2)
+            self.assertEqual(settings.experience_min_bullets, 3)
+            self.assertEqual(settings.experience_max_bullets, 5)
+            self.assertEqual(settings.project_min_bullets, 2)
+            self.assertEqual(settings.project_max_bullets, 3)
+            backend.assert_not_called()
+            message.reply.assert_awaited_once_with(
+                render_resume_preferences(settings, updated=True),
+                mention_author=False,
+            )
 
     def test_a_bare_job_link_defaults_to_resume_tailoring(self) -> None:
         self.assertTrue(_is_resume_request("https://jobs.example.test/platform-engineer"))
