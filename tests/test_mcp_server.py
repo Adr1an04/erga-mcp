@@ -153,6 +153,24 @@ class McpServerTests(unittest.TestCase):
             {"Experience": (3, 1), "Projects": (2, 2, 1)},
         )
 
+        self.assertEqual(
+            _entry_limits_for_item_state(
+                {"Experience": (4, 4, 4), "Projects": (4, 4)},
+                {"Experience": 7, "Projects": 5},
+                minimums={"Experience": 2, "Projects": 2},
+            ),
+            {"Experience": (3, 2, 2), "Projects": (3, 2)},
+        )
+
+    def test_generated_density_starts_with_every_entry_at_its_configured_floor(self) -> None:
+        states = _generated_density_states(
+            {"Education": 2, "Experience": 9, "Projects": 7},
+            entry_counts={"Experience": 3, "Projects": 2},
+            minimum_items_per_entry={"Experience": 2, "Projects": 2},
+        )
+
+        self.assertEqual(states[0], {"Education": 2, "Experience": 6, "Projects": 4})
+
     def test_generated_template_packer_keeps_the_fullest_valid_render(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -347,7 +365,6 @@ Bottom of the approved master template.
                     evidence=[],
                     project_candidates=(),
                     config=config,
-                    spacing_fallback_requested=True,
                 )
 
             proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
@@ -409,8 +426,6 @@ Bottom of the approved master template.
                     (True, 0.77),
                     (True, 0.80),
                     (True, 0.81),
-                    (True, 0.819),
-                    (True, 0.84),
                 ],
             ) as trial:
                 selected, requires_spacing, fill_ratio = _select_rendered_project_bullet_density(
@@ -423,8 +438,8 @@ Bottom of the approved master template.
 
             self.assertEqual([len(item.bullet_evidence_ids) for item in selected], [4, 4])
             self.assertFalse(requires_spacing)
-            self.assertEqual(fill_ratio, 0.84)
-            self.assertEqual(trial.call_count, 7)
+            self.assertEqual(fill_ratio, 0.81)
+            self.assertEqual(trial.call_count, 5)
 
     def test_project_bullet_density_stops_at_visual_template_budget(self) -> None:
         with TemporaryDirectory() as directory:
@@ -474,7 +489,7 @@ Bottom of the approved master template.
 
             with patch(
                 "erga_mcp.mcp.server._project_density_trial",
-                side_effect=[(True, 0.60), (True, 0.65)],
+                side_effect=[(True, 0.60)],
             ) as trial:
                 selected, requires_spacing, fill_ratio = _select_rendered_project_bullet_density(
                     resume_path=resume,
@@ -484,10 +499,10 @@ Bottom of the approved master template.
                     config=config,
                 )
 
-            self.assertEqual([len(item.bullet_evidence_ids) for item in selected], [1, 2])
+            self.assertEqual([len(item.bullet_evidence_ids) for item in selected], [2, 2])
             self.assertFalse(requires_spacing)
-            self.assertEqual(fill_ratio, 0.65)
-            self.assertEqual(trial.call_count, 2)
+            self.assertEqual(fill_ratio, 0.60)
+            self.assertEqual(trial.call_count, 1)
 
     def test_rendered_density_uses_more_claims_before_spacing(self) -> None:
         latexmk = shutil.which("latexmk")
@@ -716,9 +731,9 @@ Bottom of the approved master template.
             resume.write_text("synthetic", encoding="utf-8")
             config_path = root / "config.toml"
             config_path.write_text(
-                DEFAULT_CONFIG.replace("project_count = 4", "project_count = 2").replace(
-                    "editable_sections = []", 'editable_sections = ["Projects"]'
-                ),
+                DEFAULT_CONFIG.replace("project_count = 4", "project_count = 2")
+                .replace("editable_sections = []", 'editable_sections = ["Projects"]')
+                .replace("project_min_bullets = 2", "project_min_bullets = 1"),
                 encoding="utf-8",
             )
             config = load_config(config_path)
@@ -2025,12 +2040,12 @@ Bottom of the approved master template.
             template.write_text("\\section{Experience}\nVerified work.\n", encoding="utf-8")
             config_path = root / "config.toml"
             config_path.write_text(
-                DEFAULT_CONFIG.replace(
-                    'template_path = ""', 'template_path = "resume.tex"'
-                ).replace(
+                DEFAULT_CONFIG.replace('template_path = ""', 'template_path = "resume.tex"')
+                .replace(
                     'project_selection_mode = "inventory_optional"',
                     'project_selection_mode = "template_only"',
-                ),
+                )
+                .replace("max_pages = 1", "max_pages = 0"),
                 encoding="utf-8",
             )
             server = build_server(config_path)
@@ -2445,12 +2460,12 @@ Bottom of the approved master template.
             template.write_text(original, encoding="utf-8")
             config_path = root / "config.toml"
             config_path.write_text(
-                DEFAULT_CONFIG.replace(
-                    'template_path = ""', 'template_path = "resume.tex"'
-                ).replace(
+                DEFAULT_CONFIG.replace('template_path = ""', 'template_path = "resume.tex"')
+                .replace(
                     'output_pdf_name = "Firstname_Lastname_Resume.pdf"',
                     'output_pdf_name = "Candidate_Resume.pdf"',
-                ),
+                )
+                .replace("max_pages = 1", "max_pages = 0"),
                 encoding="utf-8",
             )
             server = build_server(config_path)
@@ -2522,7 +2537,8 @@ Bottom of the approved master template.
                 .replace(
                     'output_pdf_name = "Firstname_Lastname_Resume.pdf"',
                     'output_pdf_name = "Candidate_Resume.pdf"',
-                ),
+                )
+                .replace("max_pages = 1", "max_pages = 0"),
                 encoding="utf-8",
             )
             server = build_server(config_path)
@@ -2555,7 +2571,7 @@ Bottom of the approved master template.
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
             self.assertTrue(result["tailoring_meaningful_change"])
             self.assertEqual(result["tailoring_changed_sections"], ["Experience"])
-            self.assertEqual(result["tailoring_version"], 32)
+            self.assertEqual(result["tailoring_version"], 33)
             self.assertEqual(result["readiness"], "ready")
             self.assertEqual(result["git_project_research"], [])
             self.assertIsInstance(result["application_id"], str)
@@ -2569,7 +2585,7 @@ Bottom of the approved master template.
                 (Path(result["package_dir"]) / "package.json").read_text(encoding="utf-8")
             )
             self.assertTrue(manifest["tailoring"]["meaningful_change"])
-            self.assertEqual(manifest["tailoring"]["version"], 32)
+            self.assertEqual(manifest["tailoring"]["version"], 33)
             self.assertEqual(
                 manifest["generated_resume_version_id"], result["generated_resume_version_id"]
             )
@@ -2591,9 +2607,9 @@ Bottom of the approved master template.
             )
             config_path = root / "config.toml"
             config_path.write_text(
-                DEFAULT_CONFIG.replace(
-                    'template_path = ""', 'template_path = "resume.tex"'
-                ).replace("editable_sections = []", 'editable_sections = ["experience"]'),
+                DEFAULT_CONFIG.replace('template_path = ""', 'template_path = "resume.tex"')
+                .replace("editable_sections = []", 'editable_sections = ["experience"]')
+                .replace("max_pages = 1", "max_pages = 0"),
                 encoding="utf-8",
             )
             job_url = "https://jobs.example.test/jobs/python-intern"
@@ -2643,7 +2659,7 @@ Bottom of the approved master template.
             )
             manifest = json.loads((repaired / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["legacy_backup"], "legacy-backup")
-            self.assertEqual(manifest["tailoring"]["version"], 32)
+            self.assertEqual(manifest["tailoring"]["version"], 33)
             self.assertIn("Legacy package preserved", result["integration_warnings"][-1])
 
     def test_compile_rejects_a_pdf_over_the_configured_page_cap(self) -> None:
@@ -2850,7 +2866,9 @@ Bottom of the approved master template.
             (root / "resume.tex").write_text("\\section{Experience}\nVerified work.\n")
             config_path = root / "config.toml"
             config_path.write_text(
-                DEFAULT_CONFIG.replace('template_path = ""', 'template_path = "resume.tex"'),
+                DEFAULT_CONFIG.replace(
+                    'template_path = ""', 'template_path = "resume.tex"'
+                ).replace("max_pages = 1", "max_pages = 0"),
                 encoding="utf-8",
             )
             server = build_server(config_path)
@@ -2891,7 +2909,9 @@ Bottom of the approved master template.
             (root / "resume.tex").write_text("\\section{Experience}\nVerified work.\n")
             config_path = root / "config.toml"
             config_path.write_text(
-                DEFAULT_CONFIG.replace('template_path = ""', 'template_path = "resume.tex"'),
+                DEFAULT_CONFIG.replace(
+                    'template_path = ""', 'template_path = "resume.tex"'
+                ).replace("max_pages = 1", "max_pages = 0"),
                 encoding="utf-8",
             )
             server = build_server(config_path)
@@ -2956,7 +2976,9 @@ Bottom of the approved master template.
             (root / "resume.tex").write_text("\\section{Experience}\nVerified work.\n")
             config_path = root / "config.toml"
             config_path.write_text(
-                DEFAULT_CONFIG.replace('template_path = ""', 'template_path = "resume.tex"'),
+                DEFAULT_CONFIG.replace(
+                    'template_path = ""', 'template_path = "resume.tex"'
+                ).replace("max_pages = 1", "max_pages = 0"),
                 encoding="utf-8",
             )
             server = build_server(config_path)

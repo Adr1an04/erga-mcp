@@ -422,7 +422,7 @@ _BODY_LAYOUT_COMMAND = re.compile(
 def _body_layout_contract(document_body: str) -> tuple[tuple[str, str], ...]:
     """Bind body font/spacing primitives to the section where the master uses them."""
     document_body = re.sub(
-        r"% ERGA-ADAPTIVE-PAGE-FILL\s*\n\s*\\flushbottom\s*",
+        r"% ERGA-ADAPTIVE-PAGE-FILL\s*\n\s*\\(?:flushbottom|raggedbottom)\s*",
         "",
         document_body,
     )
@@ -457,7 +457,11 @@ def _template_contract(source: str) -> tuple[object, ...]:
     document_body = source.split(document_marker, 1)[1] if has_document else source
     first_section = re.search(r"(?m)^\\section\{", document_body)
     header = document_body[: first_section.start()] if first_section is not None else document_body
-    header = header.replace("% ERGA-ADAPTIVE-PAGE-FILL", "").replace(r"\flushbottom", "")
+    header = (
+        header.replace("% ERGA-ADAPTIVE-PAGE-FILL", "")
+        .replace(r"\flushbottom", "")
+        .replace(r"\raggedbottom", "")
+    )
     header = "\n".join(line.rstrip() for line in header.splitlines() if line.strip())
     macro_names = tuple(
         re.findall(r"\\(?:newcommand|renewcommand)\*?\{?\\([A-Za-z@]+)", document_prefix)

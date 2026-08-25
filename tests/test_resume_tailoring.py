@@ -209,6 +209,56 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
         self.assertEqual(compacted[alpha_start:beta_start].count(r"\resumeItem{"), 1)
         self.assertEqual(compacted[beta_start:].count(r"\resumeItem{"), 2)
 
+    def test_experience_compaction_preserves_each_configured_bullet_floor(self) -> None:
+        section = r"""
+\resumeSubHeadingListStart
+\resumeProjectHeading{\textbf{Platform Engineer}}{}
+\resumeItemListStart
+\resumeItem{Built Python platform automation for production systems.}
+\resumeItem{Reduced deployment toil across Kubernetes environments.}
+\resumeItem{Documented reliable service ownership practices.}
+\resumeItemListEnd
+\resumeProjectHeading{\textbf{Systems Intern}}{}
+\resumeItemListStart
+\resumeItem{Implemented storage migration tooling for internal applications.}
+\resumeItem{Validated Kubernetes manifests across environments.}
+\resumeItem{Improved setup workflows for engineering teams.}
+\resumeItemListEnd
+\resumeSubHeadingListEnd
+"""
+
+        compacted, _ = _compact_generated_entry_section(
+            section,
+            heading_command="resumeProjectHeading",
+            maximum_items=5,
+            maximum_items_per_entry=(3, 3),
+            minimum_items_per_entry=(2, 2),
+            job_description="Python Kubernetes platform engineer",
+            optimize_across_entries=True,
+        )
+
+        second = compacted.index(r"\resumeProjectHeading{\textbf{Systems Intern}}")
+        self.assertGreaterEqual(compacted[:second].count(r"\resumeItem{"), 2)
+        self.assertGreaterEqual(compacted[second:].count(r"\resumeItem{"), 2)
+
+    def test_entry_compaction_rejects_an_unfunded_bullet_floor(self) -> None:
+        section = r"""
+\resumeProjectHeading{\textbf{Only Role}}{}
+\resumeItemListStart
+\resumeItem{Only approved claim.}
+\resumeItemListEnd
+"""
+
+        with self.assertRaisesRegex(ValueError, "per-entry bullet minimum"):
+            _compact_generated_entry_section(
+                section,
+                heading_command="resumeProjectHeading",
+                maximum_items=2,
+                maximum_items_per_entry=(2,),
+                minimum_items_per_entry=(2,),
+                optimize_across_entries=True,
+            )
+
     def test_project_categories_stay_attached_when_projects_are_ranked(self) -> None:
         section = r"""
 \resumeSubHeadingListStart
@@ -239,7 +289,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 32)
+        self.assertEqual(TAILORING_VERSION, 33)
 
     def test_semantic_layout_gate_rejects_flattened_generated_resume(self) -> None:
         flattened = r"""
@@ -299,14 +349,15 @@ Synthetic University
 
         self.assertEqual(semantic_resume_structure_issues(structured), ())
 
-    def test_adaptive_page_fill_is_template_agnostic_and_idempotent(self) -> None:
+    def test_adaptive_page_fill_prevents_elastic_whitespace_and_is_idempotent(self) -> None:
         compact = _SPARSE_TEMPLATE.replace("[10pt]", "[9pt]")
 
         filled = apply_adaptive_single_page_fill(compact)
 
-        self.assertIn(r"\flushbottom", filled)
+        self.assertIn(r"\raggedbottom", filled)
+        self.assertNotIn(r"\flushbottom", filled)
         self.assertNotIn(r"\renewcommand{\resumeItem}[1]", filled)
-        self.assertEqual(filled.count(r"\vspace{0pt plus 1fill}"), 5)
+        self.assertNotIn(r"\vspace{0pt plus 1fill}", filled)
         self.assertNotIn(r"\ergaPageFillOriginalResumeItem", filled)
         self.assertTrue(
             all(
@@ -345,7 +396,7 @@ Synthetic University
             self.assertGreater(filled_fill.fill_ratio, 0.82)
             self.assertGreater(filled_fill.fill_ratio, sparse_fill.fill_ratio)
 
-    def test_sparse_small_font_template_fills_without_rewriting_content(self) -> None:
+    def test_sparse_small_font_template_is_not_stretched_to_fake_density(self) -> None:
         latexmk = shutil.which("latexmk")
         if latexmk is None:
             self.skipTest("latexmk is not installed")
@@ -378,7 +429,7 @@ Synthetic University
             adaptive_fill = pdf_page_fill(adaptive.with_suffix(".pdf"))
 
             self.assertLess(original_fill.fill_ratio, 0.82)
-            self.assertGreaterEqual(adaptive_fill.fill_ratio, 0.82)
+            self.assertAlmostEqual(adaptive_fill.fill_ratio, original_fill.fill_ratio, places=2)
             item_layout = validate_single_line_resume_items(
                 adaptive,
                 latexmk=Path(latexmk),

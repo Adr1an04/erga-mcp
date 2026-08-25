@@ -61,8 +61,35 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "symlink"):
                 load_config(config_path)
 
-    def test_default_config_does_not_ask_users_for_a_project_bullet_count(self) -> None:
-        self.assertNotIn("project_min_bullets", DEFAULT_CONFIG)
+    def test_default_resume_shape_is_one_page_with_balanced_entry_depth(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+
+            resume = load_config(config_path).resume
+
+            self.assertEqual(resume.max_pages, 1)
+            self.assertEqual(resume.experience_min_bullets, 2)
+            self.assertEqual(resume.experience_max_bullets, 4)
+            self.assertEqual(resume.project_min_bullets, 2)
+            self.assertEqual(resume.project_max_bullets, 4)
+
+    def test_resume_entry_bullet_limits_must_be_ordered_and_positive(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace("experience_min_bullets = 2", "experience_min_bullets = 0"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "experience bullet limits"):
+                load_config(config_path)
+
+            config_path.write_text(
+                DEFAULT_CONFIG.replace("project_max_bullets = 4", "project_max_bullets = 1"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "project bullet limits"):
+                load_config(config_path)
 
     def test_keryx_is_disabled_by_default_and_requires_explicit_opt_in(self) -> None:
         with TemporaryDirectory() as directory:

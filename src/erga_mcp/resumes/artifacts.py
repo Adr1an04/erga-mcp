@@ -305,7 +305,16 @@ def latex_to_text(value: str) -> str:
     previous = None
     while rendered != previous:
         previous = rendered
-        rendered = _LATEX_COMMAND_WITH_ARGUMENT.sub(r"\1", rendered)
+
+        def text_argument(match: re.Match[str]) -> str:
+            content = match.group(1)
+            before = rendered[match.start() - 1] if match.start() else ""
+            after = rendered[match.end()] if match.end() < len(rendered) else ""
+            leading = " " if before.isalnum() and content[:1].isalnum() else ""
+            trailing = " " if content[-1:].isalnum() and after.isalnum() else ""
+            return leading + content + trailing
+
+        rendered = _LATEX_COMMAND_WITH_ARGUMENT.sub(text_argument, rendered)
     rendered = re.sub(r"\\([%&#_$])", r"\1", rendered)
     rendered = _LATEX_COMMAND.sub(" ", rendered)
     rendered = rendered.replace("{", " ").replace("}", " ")

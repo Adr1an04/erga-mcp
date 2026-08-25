@@ -180,8 +180,6 @@ from erga_mcp.store import ErgaStore, SQLiteStoreFactory, StoreFactory
 from erga_mcp.tracking.mail_reconciliation import reconcile_mail_events
 
 _VISUAL_SPACING_MARKER = "% Erga visual spacing is template-controlled."
-_AUTO_PROJECT_BULLET_MIN = 1
-_AUTO_PROJECT_BULLET_MAX = 4
 _JOB_URL_INTAKE_DESCRIPTION = """Primary job-link intake tool. Use this tool immediately when the
 user provides a job-posting URL, including a bare URL, a Markdown or chat link, or a URL followed
 by an unfurled title and job-description preview. Pass the complete original HTTP(S) URL unchanged
@@ -445,6 +443,15 @@ def _generated_density_trial(
     config: ErgaConfig,
 ) -> tuple[bool, float, tuple[str, ...]]:
     """Render one generated-template content budget without model calls or persistent writes."""
+    entry_minimums = {
+        "Experience": tuple(
+            config.resume.experience_min_bullets
+            for _ in section_entry_item_limits.get("Experience", ())
+        ),
+        "Projects": tuple(
+            config.resume.project_min_bullets for _ in section_entry_item_limits.get("Projects", ())
+        ),
+    }
     automatic, layout, rejected = _layout_balanced_generated_proposal(
         lambda rejected: create_automatic_resume_proposal(
             resume_path=resume_path,
@@ -460,6 +467,7 @@ def _generated_density_trial(
             max_pages=1,
             generated_section_item_limits=section_item_limits,
             generated_section_entry_item_limits=section_entry_item_limits,
+            generated_section_entry_item_minimums=entry_minimums,
             layout_rejected_bullet_texts=rejected,
         ),
         latexmk=config.resume.latexmk,
@@ -483,7 +491,12 @@ def _generated_density_trial(
         return False, 0, rejected
 
 
-def _generated_density_states(item_counts: Mapping[str, int]) -> tuple[dict[str, int], ...]:
+def _generated_density_states(
+    item_counts: Mapping[str, int],
+    *,
+    entry_counts: Mapping[str, int] | None = None,
+    minimum_items_per_entry: Mapping[str, int] | None = None,
+) -> tuple[dict[str, int], ...]:
     """Build deterministic, relevance-preserving content budgets for binary render search."""
     priorities = sorted(
         item_counts,
@@ -492,10 +505,13 @@ def _generated_density_states(item_counts: Mapping[str, int]) -> tuple[dict[str,
             section.casefold(),
         ),
     )
-    limits = {
-        section: min(total, 2 if section in {"Education", "Experience"} else 1)
-        for section, total in item_counts.items()
-    }
+    limits: dict[str, int] = {}
+    for section, total in item_counts.items():
+        default = 2 if section in {"Education", "Experience"} else 1
+        entry_floor = (entry_counts or {}).get(section, 0) * (minimum_items_per_entry or {}).get(
+            section, 0
+        )
+        limits[section] = min(total, max(default, entry_floor))
     states = [dict(limits)]
     while any(limits[section] < item_counts[section] for section in priorities):
         for section in priorities:
@@ -582,25 +598,66 @@ def _generated_section_entry_counts(resume_path: Path) -> dict[str, int]:
 
 
 def _repeat_entry_patterns(
-    patterns: Mapping[str, tuple[int, ...]], entry_counts: Mapping[str, int]
+    patterns: Mapping[str, tuple[int, ...]],
+    entry_counts: Mapping[str, int],
+    *,
+    minimums: Mapping[str, int] | None = None,
+    maximums: Mapping[str, int] | None = None,
 ) -> dict[str, tuple[int, ...]]:
     """Repeat visual bullet patterns across the factual entries available to fill the page."""
-    return {
-        section: tuple(
-            pattern[index % len(pattern)] for index in range(entry_counts.get(section, 0))
+    bounded: dict[str, tuple[int, ...]] = {}
+    sections = set(patterns)
+    sections.update(section for section in (minimums or {}) if entry_counts.get(section, 0) > 0)
+    for section in sections:
+        count = entry_counts.get(section, 0)
+        pattern = patterns.get(section)
+        if not pattern:
+            fallback = (maximums or {}).get(section)
+            pattern = (fallback,) if fallback is not None else ()
+        if not pattern or count < 1:
+            continue
+        floor = (minimums or {}).get(section, 1)
+        ceiling = (maximums or {}).get(section)
+        bounded[section] = tuple(
+            min(max(pattern[index % len(pattern)], floor), ceiling)
+            if ceiling is not None
+            else max(pattern[index % len(pattern)], floor)
+            for index in range(count)
         )
-        for section, pattern in patterns.items()
-        if pattern and entry_counts.get(section, 0) > 0
-    }
+    return bounded
 
 
 def _entry_limits_for_item_state(
-    patterns: Mapping[str, tuple[int, ...]], item_limits: Mapping[str, int]
+    patterns: Mapping[str, tuple[int, ...]],
+    item_limits: Mapping[str, int],
+    *,
+    minimums: Mapping[str, int] | None = None,
 ) -> dict[str, tuple[int, ...]]:
     """Fit complete template-shaped entries inside one aggregate density-search state."""
     fitted: dict[str, tuple[int, ...]] = {}
     for section, pattern in patterns.items():
         remaining = max(0, item_limits.get(section, 0))
+        minimum = (minimums or {}).get(section)
+        if minimum is not None:
+            floor_counts = [min(cap, minimum) for cap in pattern]
+            remaining -= sum(floor_counts)
+            if remaining < 0:
+                fitted[section] = tuple(floor_counts)
+                continue
+            while remaining:
+                changed = False
+                for index, cap in enumerate(pattern):
+                    if floor_counts[index] >= cap:
+                        continue
+                    floor_counts[index] += 1
+                    remaining -= 1
+                    changed = True
+                    if not remaining:
+                        break
+                if not changed:
+                    break
+            fitted[section] = tuple(floor_counts)
+            continue
         counts: list[int] = []
         for cap in pattern:
             if remaining >= cap:
@@ -638,25 +695,6 @@ def _style_project_bullet_limits(
     return tuple(average + (1 if index < remainder else 0) for index in range(project_count))
 
 
-def _rendered_single_page_fill_ratio(
-    automatic: AutomaticResumeProposal, *, latexmk: str
-) -> float | None:
-    """Measure natural one-page density before any template spacing is introduced."""
-    checked = validate_latex_proposal(
-        automatic.proposal.proposed_tex_path,
-        latexmk=Path(latexmk),
-    )
-    proposal_pdf = automatic.proposal.proposed_tex_path.with_suffix(".pdf")
-    if checked.returncode != 0 or not proposal_pdf.is_file():
-        return None
-    try:
-        if pdf_page_count(proposal_pdf) != 1:
-            return None
-        return pdf_page_fill(proposal_pdf).fill_ratio
-    except ValueError:
-        return None
-
-
 def _create_render_packed_automatic_resume_proposal(
     *,
     resume_path: Path,
@@ -666,7 +704,6 @@ def _create_render_packed_automatic_resume_proposal(
     project_candidates: tuple[ProjectCandidate, ...],
     config: ErgaConfig,
     additional_project_quality_rejections: tuple[dict[str, object], ...] = (),
-    spacing_fallback_requested: bool = False,
 ) -> AutomaticResumeProposal:
     """Create the fullest valid generated-template proposal, independent of the caller agent."""
     common: dict[str, Any] = {
@@ -689,11 +726,30 @@ def _create_render_packed_automatic_resume_proposal(
         if resume_path.with_name("template.json").is_file()
         else config.resume.template_path or resume_path
     )
+    entry_minimums = {
+        "Experience": config.resume.experience_min_bullets,
+        "Projects": config.resume.project_min_bullets,
+    }
+    entry_maximums = {
+        "Experience": config.resume.experience_max_bullets,
+        "Projects": config.resume.project_max_bullets,
+    }
+    factual_entry_counts = _generated_section_entry_counts(profile_path)
+    if project_candidates:
+        factual_entry_counts["Projects"] = config.resume.project_count
     style_caps = _style_section_item_caps(profile_path)
     style_entry_caps = _repeat_entry_patterns(
         _style_section_entry_item_caps(profile_path),
-        _generated_section_entry_counts(profile_path),
+        factual_entry_counts,
+        minimums=entry_minimums,
+        maximums=entry_maximums,
     )
+    entry_item_minimums = {
+        section: tuple(entry_minimums[section] for _ in pattern)
+        for section, pattern in style_entry_caps.items()
+        if section in entry_minimums
+    }
+    common["generated_section_entry_item_minimums"] = entry_item_minimums
     should_pack = (
         config.resume.max_pages == 1
         and bool(config.resume.minimum_page_fill_ratio)
@@ -702,37 +758,17 @@ def _create_render_packed_automatic_resume_proposal(
     )
     if not should_pack:
         if not item_counts:
-            natural = create_automatic_resume_proposal(
-                output_dir=output_dir,
-                generated_section_entry_item_limits=style_entry_caps,
-                minimum_page_fill_ratio=0,
-                **common,
-            )
-            if (
-                not spacing_fallback_requested
-                or config.resume.max_pages != 1
-                or not config.resume.minimum_page_fill_ratio
-            ):
-                return natural
-            natural_fill = _rendered_single_page_fill_ratio(
-                natural,
-                latexmk=config.resume.latexmk,
-            )
-            if natural_fill is None or natural_fill >= config.resume.minimum_page_fill_ratio:
-                return natural
             return create_automatic_resume_proposal(
                 output_dir=output_dir,
                 generated_section_entry_item_limits=style_entry_caps,
-                minimum_page_fill_ratio=config.resume.minimum_page_fill_ratio,
+                minimum_page_fill_ratio=0,
                 **common,
             )
         automatic, _, _ = _layout_balanced_generated_proposal(
             lambda rejected: create_automatic_resume_proposal(
                 output_dir=output_dir,
                 generated_section_entry_item_limits=style_entry_caps,
-                minimum_page_fill_ratio=(
-                    config.resume.minimum_page_fill_ratio if spacing_fallback_requested else 0
-                ),
+                minimum_page_fill_ratio=0,
                 layout_rejected_bullet_texts=rejected,
                 **common,
             ),
@@ -744,7 +780,11 @@ def _create_render_packed_automatic_resume_proposal(
     # approved content so a user with fewer experiences can fill the same geometry with projects,
     # while the repeated per-entry pattern still controls one-vs-two-vs-three bullet styling.
     state_item_counts = item_counts
-    states = _generated_density_states(state_item_counts)
+    states = _generated_density_states(
+        state_item_counts,
+        entry_counts={section: len(pattern) for section, pattern in style_entry_caps.items()},
+        minimum_items_per_entry=entry_minimums,
+    )
     best_index = -1
     best_fill = 0.0
     best_layout_rejections: tuple[str, ...] = ()
@@ -762,7 +802,9 @@ def _create_render_packed_automatic_resume_proposal(
                 evidence=evidence,
                 section_item_limits=states[middle],
                 section_entry_item_limits=_entry_limits_for_item_state(
-                    style_entry_caps, states[middle]
+                    style_entry_caps,
+                    states[middle],
+                    minimums=entry_minimums,
                 ),
                 config=config,
             )
@@ -777,11 +819,15 @@ def _create_render_packed_automatic_resume_proposal(
     if best_index < 0:
         raise ValueError("minimum approved resume content did not fit the one-page layout")
 
-    requires_spacing = not style_caps and best_fill < config.resume.minimum_page_fill_ratio
-    final_entry_limits = _entry_limits_for_item_state(style_entry_caps, states[best_index])
+    underfilled = best_fill < config.resume.minimum_page_fill_ratio
+    final_entry_limits = _entry_limits_for_item_state(
+        style_entry_caps,
+        states[best_index],
+        minimums=entry_minimums,
+    )
     automatic = create_automatic_resume_proposal(
         output_dir=output_dir,
-        minimum_page_fill_ratio=(config.resume.minimum_page_fill_ratio if requires_spacing else 0),
+        minimum_page_fill_ratio=0,
         generated_section_item_limits=states[best_index],
         generated_section_entry_item_limits=final_entry_limits,
         layout_rejected_bullet_texts=best_layout_rejections,
@@ -792,7 +838,8 @@ def _create_render_packed_automatic_resume_proposal(
         "natural_page_fill_ratio": best_fill,
         "section_entry_item_limits": final_entry_limits,
         "section_item_limits": states[best_index],
-        "spacing_fallback": requires_spacing,
+        "spacing_fallback": False,
+        "underfilled": underfilled,
         "strategy": "fullest_valid_one_page_render",
     }
     if style_caps:
@@ -827,6 +874,14 @@ def _select_rendered_project_bullet_density(
         resume_path,
         project_count=config.resume.project_count,
     )
+    if style_limits is not None:
+        style_limits = tuple(
+            min(
+                max(limit, config.resume.project_min_bullets),
+                config.resume.project_max_bullets,
+            )
+            for limit in style_limits
+        )
     density_candidates = (
         tuple(
             limit_project_candidate_bullets(candidate, style_limits[index])
@@ -835,7 +890,7 @@ def _select_rendered_project_bullet_density(
         if style_limits is not None
         else selected_candidates
     )
-    counts = [1 for _ in density_candidates]
+    counts = [config.resume.project_min_bullets for _ in density_candidates]
 
     def candidates_for_counts() -> tuple[ProjectCandidate, ...]:
         return tuple(
@@ -888,7 +943,7 @@ def _select_rendered_project_bullet_density(
             tier += 1
     return (
         current,
-        style_limits is None and fill_ratio < config.resume.minimum_page_fill_ratio,
+        False,
         fill_ratio,
     )
 
@@ -979,7 +1034,8 @@ def _git_enriched_inventory_candidates(
     eligible_candidates = tuple(
         candidate
         for candidate in candidates
-        if candidate.evidence_ids and len(candidate.bullet_evidence_ids) >= _AUTO_PROJECT_BULLET_MIN
+        if candidate.evidence_ids
+        and len(candidate.bullet_evidence_ids) >= config.resume.project_min_bullets
     )
     projects_editable = any(
         re.sub(r"[^a-z0-9]+", "", section.casefold()) == "projects"
@@ -1007,7 +1063,7 @@ def _git_enriched_inventory_candidates(
                 eligible_candidates,
                 job_description=job_description,
                 project_count=config.resume.project_count,
-                minimum_bullets=_AUTO_PROJECT_BULLET_MIN,
+                minimum_bullets=config.resume.project_min_bullets,
             )
         elif config.resume.bullet_max_chars:
             with TemporaryDirectory(prefix="erga-project-layout-") as layout_directory:
@@ -1033,8 +1089,8 @@ def _git_enriched_inventory_candidates(
         candidates=candidates,
         job_description=job_description,
         project_count=config.resume.project_count,
-        bullets_per_project=_AUTO_PROJECT_BULLET_MAX,
-        minimum_catalogue_bullets=_AUTO_PROJECT_BULLET_MIN,
+        bullets_per_project=config.resume.project_max_bullets,
+        minimum_catalogue_bullets=config.resume.project_min_bullets,
         bullet_min_characters=config.resume.bullet_min_chars,
         bullet_target_characters=config.resume.bullet_target_chars,
         bullet_max_characters=config.resume.bullet_max_chars,
@@ -1107,8 +1163,8 @@ async def _ai_tailored_project_enrichment(
                 evidence=all_evidence,
                 reports=enrichment.reports,
                 project_count=config.resume.project_count,
-                bullets_per_project=_AUTO_PROJECT_BULLET_MAX,
-                minimum_bullets_per_project=_AUTO_PROJECT_BULLET_MIN,
+                bullets_per_project=config.resume.project_max_bullets,
+                minimum_bullets_per_project=config.resume.project_min_bullets,
                 bullet_min_chars=config.resume.bullet_min_chars if attempt == 0 else 0,
                 bullet_target_chars=(
                     min(config.resume.bullet_target_chars, max(1, model_max_chars - 5))
@@ -1397,8 +1453,8 @@ def _realign_git_project_research(
         candidates=enrichment.candidates,
         job_description=job_description,
         project_count=max(1, len(selected_ids)),
-        bullets_per_project=_AUTO_PROJECT_BULLET_MAX,
-        minimum_catalogue_bullets=_AUTO_PROJECT_BULLET_MIN,
+        bullets_per_project=config.resume.project_max_bullets,
+        minimum_catalogue_bullets=config.resume.project_min_bullets,
         bullet_min_characters=config.resume.bullet_min_chars,
         bullet_target_characters=config.resume.bullet_target_chars,
         bullet_max_characters=config.resume.bullet_max_chars,
@@ -1819,7 +1875,6 @@ def _upgrade_existing_tailoring(
         project_candidates=project_candidates,
         config=config,
         additional_project_quality_rejections=enrichment.quality_rejections,
-        spacing_fallback_requested=enrichment.requires_spacing_fallback,
     )
     automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
     enrichment = _realign_git_project_research(
@@ -2724,7 +2779,6 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                     project_candidates=project_candidates,
                     config=config,
                     additional_project_quality_rejections=enrichment.quality_rejections,
-                    spacing_fallback_requested=enrichment.requires_spacing_fallback,
                 ),
                 abandon_on_cancel=True,
             )
@@ -3184,7 +3238,6 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             project_candidates=project_candidates,
             config=config,
             additional_project_quality_rejections=enrichment.quality_rejections,
-            spacing_fallback_requested=enrichment.requires_spacing_fallback,
         )
         automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
         enrichment = _realign_git_project_research(

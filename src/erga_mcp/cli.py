@@ -614,6 +614,10 @@ def _parser() -> argparse.ArgumentParser:
     resume_settings_set.add_argument("--bullet-target-chars", type=int)
     resume_settings_set.add_argument("--bullet-max-chars", type=int)
     resume_settings_set.add_argument("--max-pages", type=int)
+    resume_settings_set.add_argument("--experience-min-bullets", type=int)
+    resume_settings_set.add_argument("--experience-max-bullets", type=int)
+    resume_settings_set.add_argument("--project-min-bullets", type=int)
+    resume_settings_set.add_argument("--project-max-bullets", type=int)
     resume_settings_set.add_argument("--output-root")
     resume_settings_set.add_argument("--output-pdf-name")
     resume_settings_set.add_argument("--latexmk")
@@ -1613,6 +1617,10 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "bullet_target_chars": args.bullet_target_chars,
             "bullet_max_chars": args.bullet_max_chars,
             "max_pages": args.max_pages,
+            "experience_min_bullets": args.experience_min_bullets,
+            "experience_max_bullets": args.experience_max_bullets,
+            "project_min_bullets": args.project_min_bullets,
+            "project_max_bullets": args.project_max_bullets,
             "output_root": args.output_root,
             "output_pdf_name": args.output_pdf_name,
             "latexmk": args.latexmk,
@@ -1827,6 +1835,10 @@ def main(arguments: Sequence[str] | None = None) -> int:
             bullet_max_chars=settings.bullet_max_chars,
             project_candidates=resume_candidates,
             project_count=settings.project_count,
+            experience_min_bullets=settings.experience_min_bullets,
+            experience_max_bullets=settings.experience_max_bullets,
+            project_min_bullets=settings.project_min_bullets,
+            project_max_bullets=settings.project_max_bullets,
             require_unique_lead_verbs=settings.require_unique_lead_verbs,
             minimum_page_fill_ratio=settings.minimum_page_fill_ratio,
             max_pages=settings.max_pages,

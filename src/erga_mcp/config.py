@@ -18,7 +18,7 @@ vault_path = ""
 portfolio_roots = []
 
 [resume]
-# Configure these per template. Empty/zero values mean no constraint has been selected yet.
+# Configure these per template. Bullet character limits may be zero to disable that constraint.
 # The master is approved factual knowledge; the reference contributes layout metadata only.
 # template_path may be omitted; Erga generates a private standalone LaTeX template from the master.
 master_path = ""
@@ -28,9 +28,9 @@ editable_sections = []
 bullet_min_chars = 0
 bullet_target_chars = 0
 bullet_max_chars = 0
-max_pages = 0
+max_pages = 1
 # For a one-page resume, require rendered text to occupy at least this fraction of the page height.
-# Erga adds supported bullets first, then spaces only the remaining gap; it never invents filler.
+# Erga fills the page with supported content and never stretches whitespace or invents filler.
 minimum_page_fill_ratio = 0.82
 output_root = "output"
 # Local JSON arsenal of approved LaTeX project blocks. Onboarding creates and requires one
@@ -38,7 +38,12 @@ output_root = "output"
 project_inventory_path = ""
 project_selection_mode = "inventory_optional"
 project_count = 4
-# Per-project bullet counts are selected automatically from rendered page density.
+# Every retained experience/project keeps this many approved bullets before extra lines compete on
+# job relevance. These are content budgets, not permission to invent unsupported claims.
+experience_min_bullets = 2
+experience_max_bullets = 4
+project_min_bullets = 2
+project_max_bullets = 4
 # Compatibility key retained for existing local configs. Lead-verb uniqueness is always required
 # for generated resumes, including configs created before this became a pipeline invariant.
 require_unique_lead_verbs = true
@@ -108,6 +113,10 @@ class ResumeSettings:
     project_inventory_path: Path | None
     project_selection_mode: str
     project_count: int
+    experience_min_bullets: int
+    experience_max_bullets: int
+    project_min_bullets: int
+    project_max_bullets: int
     require_unique_lead_verbs: bool
     output_pdf_name: str
     latexmk: str
@@ -219,7 +228,7 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
         configured_bullet_lengths and not ordered_bullet_lengths
     ):
         raise ValueError("resume bullet character lengths must be zero or ordered positive values")
-    max_pages = int(resume.get("max_pages", 0))
+    max_pages = int(resume.get("max_pages", 1))
     if max_pages < 0:
         raise ValueError("resume max_pages must be zero or positive")
     inventory_value = str(resume.get("project_inventory_path", "")).strip()
@@ -238,6 +247,18 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
     project_count = int(resume.get("project_count", 4))
     if project_count < 1:
         raise ValueError("resume project_count must be positive")
+    experience_bullets = (
+        int(resume.get("experience_min_bullets", 2)),
+        int(resume.get("experience_max_bullets", 4)),
+    )
+    project_bullets = (
+        int(resume.get("project_min_bullets", 2)),
+        int(resume.get("project_max_bullets", 4)),
+    )
+    if not 1 <= experience_bullets[0] <= experience_bullets[1]:
+        raise ValueError("resume experience bullet limits must be ordered positive values")
+    if not 1 <= project_bullets[0] <= project_bullets[1]:
+        raise ValueError("resume project bullet limits must be ordered positive values")
     minimum_page_fill_ratio = float(resume.get("minimum_page_fill_ratio", 0.82))
     if not 0 <= minimum_page_fill_ratio <= 1:
         raise ValueError("resume minimum_page_fill_ratio must be between zero and one")
@@ -265,6 +286,10 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
         project_inventory_path=project_inventory_path,
         project_selection_mode=project_selection_mode,
         project_count=project_count,
+        experience_min_bullets=experience_bullets[0],
+        experience_max_bullets=experience_bullets[1],
+        project_min_bullets=project_bullets[0],
+        project_max_bullets=project_bullets[1],
         require_unique_lead_verbs=require_unique_lead_verbs,
         output_pdf_name=output_pdf_name,
         latexmk=latexmk,

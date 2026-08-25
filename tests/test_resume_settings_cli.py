@@ -45,7 +45,15 @@ class ResumeSettingsCliTests(unittest.TestCase):
                     "--bullet-max-chars",
                     "120",
                     "--max-pages",
-                    "1",
+                    "2",
+                    "--experience-min-bullets",
+                    "3",
+                    "--experience-max-bullets",
+                    "5",
+                    "--project-min-bullets",
+                    "2",
+                    "--project-max-bullets",
+                    "3",
                     "--output-root",
                     "applications",
                     "--output-pdf-name",
@@ -58,6 +66,11 @@ class ResumeSettingsCliTests(unittest.TestCase):
             self.assertEqual(settings["template_path"], str(root / "templates/master.tex"))
             self.assertEqual(settings["editable_sections"], ["experience", "projects"])
             self.assertEqual(settings["bullet_target_chars"], 105)
+            self.assertEqual(settings["max_pages"], 2)
+            self.assertEqual(settings["experience_min_bullets"], 3)
+            self.assertEqual(settings["experience_max_bullets"], 5)
+            self.assertEqual(settings["project_min_bullets"], 2)
+            self.assertEqual(settings["project_max_bullets"], 3)
             self.assertEqual(settings["output_root"], str(root / "applications"))
             self.assertEqual(settings["output_pdf_name"], "Candidate_Resume.pdf")
             stored_config = config.read_text(encoding="utf-8")

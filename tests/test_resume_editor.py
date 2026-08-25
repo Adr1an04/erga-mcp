@@ -9,6 +9,7 @@ from erga_mcp.models import Evidence
 from erga_mcp.resumes.artifacts import (
     create_baseline_resume_proposal,
     create_section_resume_proposal,
+    latex_to_text,
     replace_section_contents,
     resume_bullet_length_report,
 )
@@ -185,6 +186,18 @@ class ResumeEditorTests(unittest.TestCase):
 
         self.assertTrue(report["passed"])
         self.assertEqual(report["validated_bullets"], 1)
+
+    def test_latex_text_preserves_word_boundaries_around_inline_emphasis(self) -> None:
+        rendered = latex_to_text(
+            r"Deployed\textbf{Perplexity Computer}across\textbf{2}small businesses, "
+            r"saving\textbf{10 hrs/wk}labor with 20\% lower latency."
+        )
+
+        self.assertEqual(
+            rendered,
+            "Deployed Perplexity Computer across 2 small businesses, "
+            "saving 10 hrs/wk labor with 20% lower latency.",
+        )
 
     def test_bullet_length_measurement_rejects_malformed_resume_item(self) -> None:
         with self.assertRaisesRegex(ValueError, "unterminated"):

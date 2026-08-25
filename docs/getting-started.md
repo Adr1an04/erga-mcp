@@ -85,7 +85,11 @@ uv run erga resume settings set \
   --bullet-min-chars 90 \
   --bullet-target-chars 105 \
   --bullet-max-chars 120 \
-  --max-pages 1
+  --max-pages 1 \
+  --experience-min-bullets 2 \
+  --experience-max-bullets 4 \
+  --project-min-bullets 2 \
+  --project-max-bullets 4
 ```
 
 After initialization, replace the master independently with:
@@ -110,15 +114,17 @@ uv run erga resume template set /absolute/path/to/preferred-resume.pdf \
 
 Both commands accept PDF, DOCX, or `.tex` input and snapshot it into private local state. The master
 is the sole factual source and never contributes page geometry, typography, spacing, density, or
-section order. A visual template controls section presence, order, density, project slots, and the
-exact bullet count for each experience or project entry, but cannot authorize claims. PDF templates
+section order. A visual template controls section presence, order, density, and project slots, but
+cannot authorize claims. Its observed bullets-per-entry pattern is bounded by the configured
+experience/project minimums and maximums, so a sparse reference cannot silently reduce a retained
+role to one bullet. PDF templates
 additionally contribute measured per-edge margins, typography, small-caps treatment, section-rule
 presence and weight, line height, entry inset, bullet-glyph size, label gap, bullet-text indentation,
 and section/entry/item spacing. Rendered
 packing keeps those template-owned gaps fixed instead of elastically stretching them to fill the
-page. For example, a template with one bullet per project keeps one bullet per selected project;
-mixed patterns such as two/three/two are preserved entry by entry and repeated when more approved
-entries are needed. Section totals are density targets rather than hard factual quotas: if the
+page. Mixed patterns such as two/three/two are preserved entry by entry when they are inside the
+configured bounds and repeated when more approved entries are needed. Section totals are density
+targets rather than hard factual quotas: if the
 master has fewer experiences than the visual example, the one-page render search may use additional
 approved projects without inventing experience. Intentionally spacious templates are not rejected
 against Erga's default page-fill threshold.
@@ -172,7 +178,11 @@ uv run erga resume settings set \
   --bullet-min-chars 99 \
   --bullet-target-chars 105 \
   --bullet-max-chars 116 \
-  --max-pages 1
+  --max-pages 1 \
+  --experience-min-bullets 2 \
+  --experience-max-bullets 4 \
+  --project-min-bullets 2 \
+  --project-max-bullets 4
 ```
 
 When intake cannot infer a recruiting season from its URL-only input, it files the package under
