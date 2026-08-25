@@ -96,44 +96,69 @@ _STATUS_COLORS = {
 }
 _TREE_NODE_SPECS = {
     "applications": ("Applications", 0, _ERGA_INK),
-    "interviews": ("Interview process", 1, _ERGA_ORBIT_VIOLET),
-    "rejected": ("Rejected", 1, _ERGA_CORAL),
-    "no-response": ("No response", 1, _ERGA_SUN),
-    "withdrawn": ("Withdrawn", 1, _ERGA_CORAL),
-    "expired": ("Expired", 1, _ERGA_CORAL),
-    "offers": ("Offers", 2, _ERGA_SKY),
-    "in-process": ("In process", 2, _ERGA_ORBIT_VIOLET),
-    "no-offer": ("No offer", 2, _ERGA_CORAL),
-    "accepted": ("Accepted", 3, _ERGA_LEAF),
+    "open": ("Open applications", 1, _ERGA_ORBIT_VIOLET),
+    "closed": ("Closed applications", 1, _ERGA_CORAL),
+    "active-pipeline": ("Active pipeline", 2, _ERGA_ORBIT_VIOLET),
+    "no-response": ("No response", 2, _ERGA_SUN),
+    "offer-decided": ("Offer decided", 2, _ERGA_SKY),
+    "other-closed": ("Other closed", 2, _ERGA_CORAL),
+    "in-process": ("In process", 3, _ERGA_ORBIT_VIOLET),
     "offer-pending": ("Pending decision", 3, _ERGA_SUN),
+    "accepted": ("Accepted", 3, _ERGA_LEAF),
     "declined": ("Declined", 3, _ERGA_CORAL),
+    "rejection-outcome": ("Rejection outcome", 3, _ERGA_CORAL),
+    "administrative-close": ("Administrative close", 3, _ERGA_INK),
+    "rejected": ("Rejected", 4, _ERGA_CORAL),
+    "no-offer": ("No offer", 4, _ERGA_CORAL),
+    "withdrawn": ("Withdrawn", 4, _ERGA_CORAL),
+    "expired": ("Expired", 4, _ERGA_CORAL),
 }
 _TREE_NODE_ORDER = {
     "applications": 0,
-    "interviews": 0,
-    "rejected": 1,
-    "no-response": 2,
-    "withdrawn": 3,
-    "expired": 4,
-    "offers": 0,
-    "in-process": 1,
-    "no-offer": 2,
-    "accepted": 0,
+    "open": 0,
+    "closed": 1,
+    "active-pipeline": 0,
+    "no-response": 1,
+    "offer-decided": 2,
+    "other-closed": 3,
+    "in-process": 0,
     "offer-pending": 1,
-    "declined": 2,
+    "accepted": 2,
+    "declined": 3,
+    "rejection-outcome": 4,
+    "administrative-close": 5,
+    "rejected": 0,
+    "no-offer": 1,
+    "withdrawn": 2,
+    "expired": 3,
 }
 _TREE_RIBBON_COLORS = {
-    "interviews": _ERGA_ORBIT_VIOLET,
-    "rejected": _ERGA_CORAL,
+    "open": _ERGA_ORBIT_VIOLET,
+    "closed": _ERGA_CORAL,
+    "active-pipeline": _ERGA_ORBIT_VIOLET,
     "no-response": _ERGA_SUN,
+    "offer-decided": _ERGA_SKY,
+    "other-closed": _ERGA_CORAL,
+    "in-process": _ERGA_ORBIT_VIOLET,
+    "offer-pending": _ERGA_SUN,
+    "accepted": _ERGA_LEAF,
+    "declined": _ERGA_CORAL,
+    "rejection-outcome": _ERGA_CORAL,
+    "administrative-close": _ERGA_INK,
+    "rejected": _ERGA_CORAL,
+    "no-offer": _ERGA_CORAL,
     "withdrawn": _ERGA_CORAL,
     "expired": _ERGA_CORAL,
-    "offers": _ERGA_SKY,
-    "in-process": _ERGA_ORBIT_VIOLET,
-    "no-offer": _ERGA_CORAL,
-    "accepted": _ERGA_LEAF,
-    "offer-pending": _ERGA_SUN,
-    "declined": _ERGA_CORAL,
+}
+_TREE_CHILDREN = {
+    "applications": frozenset({"open", "closed"}),
+    "open": frozenset({"active-pipeline", "no-response"}),
+    "active-pipeline": frozenset({"in-process", "offer-pending"}),
+    "closed": frozenset({"offer-decided", "other-closed"}),
+    "offer-decided": frozenset({"accepted", "declined"}),
+    "other-closed": frozenset({"rejection-outcome", "administrative-close"}),
+    "rejection-outcome": frozenset({"rejected", "no-offer"}),
+    "administrative-close": frozenset({"withdrawn", "expired"}),
 }
 _INTERVIEW_PROCESS_STATUSES = frozenset(
     {"oa", "interview", "interview-2", "interview-3", "final-interview"}
@@ -157,7 +182,7 @@ _PRE_APPLICATION_STATUSES = frozenset({"draft", "ready", "researching", "unknown
 _STATUS_AUDIT_ACTIONS = frozenset(
     {"application.status_updated", "application.status_updated_from_mail"}
 )
-_ORBIT_RENDER_VERSION = 7
+_ORBIT_RENDER_VERSION = 8
 
 
 @dataclass(frozen=True)
@@ -271,7 +296,7 @@ def _tree_node(identifier: str) -> tuple[str, str, int, str]:
 
 
 def _outcome_tree_path(statuses: Sequence[str]) -> list[tuple[str, str, int, str]]:
-    """Project one truthful application history onto Orbit's stable outcome hierarchy."""
+    """Project one truthful application history onto Orbit's strict binary outcome tree."""
     current = statuses[-1]
     observed = set(statuses)
     reached_process = bool(observed & _INTERVIEW_PROCESS_STATUSES) or bool(
@@ -279,38 +304,58 @@ def _outcome_tree_path(statuses: Sequence[str]) -> list[tuple[str, str, int, str
     )
     path = [_tree_node("applications")]
     if current in {"applied", "awaiting-response"}:
-        return [*path, _tree_node("no-response")]
+        return [*path, _tree_node("open"), _tree_node("no-response")]
     if current == "rejected":
-        return (
-            [*path, _tree_node("interviews"), _tree_node("no-offer")]
-            if reached_process
-            else [*path, _tree_node("rejected")]
-        )
+        leaf = "no-offer" if reached_process else "rejected"
+        return [
+            *path,
+            _tree_node("closed"),
+            _tree_node("other-closed"),
+            _tree_node("rejection-outcome"),
+            _tree_node(leaf),
+        ]
     if current == "withdrawn":
-        return [*path, _tree_node("withdrawn")]
+        return [
+            *path,
+            _tree_node("closed"),
+            _tree_node("other-closed"),
+            _tree_node("administrative-close"),
+            _tree_node("withdrawn"),
+        ]
     if current == "expired":
-        return [*path, _tree_node("expired")]
+        return [
+            *path,
+            _tree_node("closed"),
+            _tree_node("other-closed"),
+            _tree_node("administrative-close"),
+            _tree_node("expired"),
+        ]
     if current in _INTERVIEW_PROCESS_STATUSES:
-        return [*path, _tree_node("interviews"), _tree_node("in-process")]
+        return [
+            *path,
+            _tree_node("open"),
+            _tree_node("active-pipeline"),
+            _tree_node("in-process"),
+        ]
     if current == "offer":
         return [
             *path,
-            _tree_node("interviews"),
-            _tree_node("offers"),
+            _tree_node("open"),
+            _tree_node("active-pipeline"),
             _tree_node("offer-pending"),
         ]
     if current == "accepted":
         return [
             *path,
-            _tree_node("interviews"),
-            _tree_node("offers"),
+            _tree_node("closed"),
+            _tree_node("offer-decided"),
             _tree_node("accepted"),
         ]
     if current == "declined":
         return [
             *path,
-            _tree_node("interviews"),
-            _tree_node("offers"),
+            _tree_node("closed"),
+            _tree_node("offer-decided"),
             _tree_node("declined"),
         ]
     return []
@@ -396,6 +441,10 @@ def build_orbit_snapshot(
             node_specs[identifier] = (label, column, status)
             node_applications[identifier].add(key)
             if previous is not None:
+                if identifier not in _TREE_CHILDREN.get(previous, frozenset()):
+                    raise RuntimeError(
+                        f"Orbit binary tree does not allow {previous!r} -> {identifier!r}"
+                    )
                 link_key = (previous, identifier)
                 link_applications[link_key].add(key)
                 link_is_fully_recorded[link_key] = (

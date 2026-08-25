@@ -12,6 +12,7 @@ from erga_mcp.tracking.orbit import (
     _ERGA_ORBIT_PALETTE,
     _NODE_LABEL_GAP,
     _STATUS_COLORS,
+    _TREE_CHILDREN,
     _TREE_NODE_SPECS,
     _TREE_RIBBON_COLORS,
     _draw_flow_node,
@@ -94,10 +95,14 @@ class OrbitTests(unittest.TestCase):
         self.assertEqual(snapshot.local_application_count, 3)
         self.assertEqual(snapshot.recorded_history_count, 3)
         self.assertEqual(snapshot.snapshot_only_count, 0)
-        self.assertEqual(links[("applications", "interviews")], 2)
-        self.assertEqual(links[("interviews", "no-offer")], 1)
-        self.assertEqual(links[("interviews", "in-process")], 1)
-        self.assertEqual(links[("applications", "no-response")], 1)
+        self.assertEqual(links[("applications", "open")], 2)
+        self.assertEqual(links[("applications", "closed")], 1)
+        self.assertEqual(links[("open", "active-pipeline")], 1)
+        self.assertEqual(links[("open", "no-response")], 1)
+        self.assertEqual(links[("active-pipeline", "in-process")], 1)
+        self.assertEqual(links[("closed", "other-closed")], 1)
+        self.assertEqual(links[("other-closed", "rejection-outcome")], 1)
+        self.assertEqual(links[("rejection-outcome", "no-offer")], 1)
         self.assertNotIn("draft", {node.id for node in snapshot.nodes})
 
     def test_collapses_raw_statuses_into_a_readable_outcome_tree(self) -> None:
@@ -125,18 +130,22 @@ class OrbitTests(unittest.TestCase):
         links = {(link.source, link.target): link.count for link in snapshot.links}
         node_colors = {node.id: node.color for node in snapshot.nodes}
 
-        self.assertEqual(links[("applications", "interviews")], 4)
-        self.assertEqual(links[("applications", "rejected")], 2)
-        self.assertEqual(links[("applications", "no-response")], 2)
-        self.assertEqual(links[("interviews", "offers")], 2)
-        self.assertEqual(links[("interviews", "no-offer")], 1)
-        self.assertEqual(links[("interviews", "in-process")], 1)
-        self.assertEqual(links[("offers", "accepted")], 1)
-        self.assertEqual(links[("offers", "declined")], 1)
+        self.assertEqual(links[("applications", "open")], 3)
+        self.assertEqual(links[("applications", "closed")], 5)
+        self.assertEqual(links[("open", "active-pipeline")], 1)
+        self.assertEqual(links[("open", "no-response")], 2)
+        self.assertEqual(links[("active-pipeline", "in-process")], 1)
+        self.assertEqual(links[("closed", "offer-decided")], 2)
+        self.assertEqual(links[("closed", "other-closed")], 3)
+        self.assertEqual(links[("offer-decided", "accepted")], 1)
+        self.assertEqual(links[("offer-decided", "declined")], 1)
+        self.assertEqual(links[("other-closed", "rejection-outcome")], 3)
+        self.assertEqual(links[("rejection-outcome", "rejected")], 2)
+        self.assertEqual(links[("rejection-outcome", "no-offer")], 1)
         self.assertLessEqual(set(node_colors.values()), _ERGA_ORBIT_PALETTE)
         self.assertEqual(node_colors["applications"], "#171717")
-        self.assertEqual(node_colors["interviews"], "#7C5CFF")
-        self.assertEqual(node_colors["offers"], "#7FC2FE")
+        self.assertEqual(node_colors["open"], "#7C5CFF")
+        self.assertEqual(node_colors["offer-decided"], "#7FC2FE")
         self.assertEqual(node_colors["accepted"], "#83FE7F")
         self.assertEqual(node_colors["declined"], "#FE7F7F")
         self.assertEqual(node_colors["no-response"], "#FEF17F")
@@ -175,6 +184,17 @@ class OrbitTests(unittest.TestCase):
         )
         self.assertLessEqual(set(_TREE_RIBBON_COLORS.values()), _ERGA_ORBIT_PALETTE)
 
+    def test_orbit_topology_is_a_strict_binary_tree(self) -> None:
+        self.assertTrue(_TREE_CHILDREN)
+        self.assertTrue(all(len(children) <= 2 for children in _TREE_CHILDREN.values()))
+        parents: dict[str, str] = {}
+        for parent, children in _TREE_CHILDREN.items():
+            for child in children:
+                self.assertNotIn(child, parents)
+                parents[child] = parent
+        self.assertNotIn("applications", parents)
+        self.assertEqual(set(parents) | {"applications"}, set(_TREE_NODE_SPECS))
+
     def test_every_applied_role_flows_to_one_visible_current_branch(self) -> None:
         applications = [
             _application("pending-one", status="applied"),
@@ -192,7 +212,8 @@ class OrbitTests(unittest.TestCase):
         self.assertEqual(snapshot.tracked_count, 4)
         self.assertEqual(nodes["no-response"].label, "No response")
         self.assertEqual(nodes["no-response"].count, 2)
-        self.assertEqual(nodes["interviews"].count, 1)
+        self.assertEqual(nodes["active-pipeline"].count, 1)
+        self.assertEqual(nodes["in-process"].count, 1)
         self.assertEqual(nodes["rejected"].count, 1)
         self.assertEqual(outgoing_from_applications, snapshot.tracked_count)
 
@@ -214,8 +235,9 @@ class OrbitTests(unittest.TestCase):
         self.assertEqual(snapshot.tracked_count, 1)
         self.assertEqual(snapshot.recorded_history_count, 0)
         self.assertEqual(snapshot.snapshot_only_count, 1)
-        self.assertEqual(links[("applications", "interviews", False)], 1)
-        self.assertEqual(links[("interviews", "in-process", False)], 1)
+        self.assertEqual(links[("applications", "open", False)], 1)
+        self.assertEqual(links[("open", "active-pipeline", False)], 1)
+        self.assertEqual(links[("active-pipeline", "in-process", False)], 1)
         self.assertNotIn("history-unavailable", {node.id for node in snapshot.nodes})
 
     def test_numbered_interviews_are_real_stages_without_setup_jargon(self) -> None:
@@ -234,12 +256,16 @@ class OrbitTests(unittest.TestCase):
         labels = {node.label for node in snapshot.nodes}
         links = {(link.source, link.target, link.recorded) for link in snapshot.links}
 
-        self.assertEqual(labels, {"Applications", "Interview process", "In process"})
+        self.assertEqual(
+            labels,
+            {"Applications", "Open applications", "Active pipeline", "In process"},
+        )
         self.assertEqual(
             links,
             {
-                ("applications", "interviews", False),
-                ("interviews", "in-process", False),
+                ("applications", "open", False),
+                ("open", "active-pipeline", False),
+                ("active-pipeline", "in-process", False),
             },
         )
 
@@ -304,9 +330,10 @@ class OrbitTests(unittest.TestCase):
         links = {(link.source, link.target) for link in snapshot.links}
 
         self.assertEqual(snapshot.corrected_transition_count, 1)
-        self.assertIn(("applications", "interviews"), links)
-        self.assertIn(("interviews", "in-process"), links)
-        self.assertNotIn(("applications", "rejected"), links)
+        self.assertIn(("applications", "open"), links)
+        self.assertIn(("open", "active-pipeline"), links)
+        self.assertIn(("active-pipeline", "in-process"), links)
+        self.assertNotIn(("applications", "closed"), links)
 
     def test_renders_an_erga_branded_png(self) -> None:
         application = _application("one", status="rejected")

@@ -119,11 +119,12 @@ message per channel: repeating the command edits that message instead of posting
 bridge checks every 60 seconds but uploads a replacement image only when the underlying tracker
 state changes. Send `orbit stop` to disable those updates.
 
-Orbit is deterministic and does not call an AI model. It begins at **Applied** and renders only
-actual recruiting stages: OA, interview rounds, final interview, offer, and recorded outcomes.
-Draft, researching, and ready-to-apply rows are excluded. Recorded local status events form the
-flow; an Obsidian-only later stage connects directly from Applied without inventing intermediate
-rounds. The image contains aggregate counts, not employer names. It is also available
+Orbit is deterministic and does not call an AI model. It begins at **Applications** and renders a
+strict binary outcome tree: every internal node has at most two children, first separating open
+from closed applications and then recursively separating waiting, active-pipeline, offer-decision,
+rejection, and administrative outcomes. Draft, researching, and ready-to-apply rows are excluded.
+Recorded local status events decide the truthful leaf; missing history never invents intermediate
+recruiting rounds. The image contains aggregate counts, not employer names. It is also available
 locally with `erga tracker orbit` and through the `application_orbit` MCP tool. A Hermes-managed
 Discord connection can use `/erga-orbit [cycle]` or the **Orbit** control in `/erga-tracker` for an
 on-demand snapshot. Hermes attaches the PNG natively and never prints its local path. Preview files
