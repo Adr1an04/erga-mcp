@@ -241,7 +241,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
         self.assertGreaterEqual(compacted[:second].count(r"\resumeItem{"), 2)
         self.assertGreaterEqual(compacted[second:].count(r"\resumeItem{"), 2)
 
-    def test_entry_compaction_rejects_an_unfunded_bullet_floor(self) -> None:
+    def test_entry_compaction_omits_an_entry_that_cannot_meet_its_bullet_floor(self) -> None:
         section = r"""
 \resumeProjectHeading{\textbf{Only Role}}{}
 \resumeItemListStart
@@ -249,15 +249,48 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
 \resumeItemListEnd
 """
 
-        with self.assertRaisesRegex(ValueError, "per-entry bullet minimum"):
-            _compact_generated_entry_section(
-                section,
-                heading_command="resumeProjectHeading",
-                maximum_items=2,
-                maximum_items_per_entry=(2,),
-                minimum_items_per_entry=(2,),
-                optimize_across_entries=True,
-            )
+        compacted, omitted = _compact_generated_entry_section(
+            section,
+            heading_command="resumeProjectHeading",
+            maximum_items=2,
+            maximum_items_per_entry=(2,),
+            minimum_items_per_entry=(2,),
+            optimize_across_entries=True,
+        )
+
+        self.assertNotIn("Only Role", compacted)
+        self.assertEqual(omitted, ["Only approved claim."])
+
+    def test_entry_compaction_funds_strong_complete_roles_when_page_budget_is_tight(self) -> None:
+        section = r"""
+\resumeSubHeadingListStart
+\resumeProjectHeading{\textbf{Relevant Role}}{}
+\resumeItemListStart
+\resumeItem{Built Python services for distributed production systems.}
+\resumeItem{Improved API reliability for customer-facing workflows.}
+\resumeItemListEnd
+\resumeProjectHeading{\textbf{Unrelated Role}}{}
+\resumeItemListStart
+\resumeItem{Organized unrelated community programming and events.}
+\resumeItem{Coordinated unrelated operations for local volunteers.}
+\resumeItemListEnd
+\resumeSubHeadingListEnd
+"""
+
+        compacted, omitted = _compact_generated_entry_section(
+            section,
+            heading_command="resumeProjectHeading",
+            maximum_items=2,
+            maximum_items_per_entry=(2, 2),
+            minimum_items_per_entry=(2, 2),
+            job_description="Python distributed API engineer",
+            optimize_across_entries=True,
+        )
+
+        self.assertIn("Relevant Role", compacted)
+        self.assertNotIn("Unrelated Role", compacted)
+        self.assertEqual(compacted.count(r"\resumeItem{"), 2)
+        self.assertEqual(len(omitted), 2)
 
     def test_project_categories_stay_attached_when_projects_are_ranked(self) -> None:
         section = r"""
@@ -289,7 +322,7 @@ class AutomaticResumeTailoringTests(unittest.TestCase):
     def test_tailoring_version_invalidates_cached_proposals_after_constraint_enforcement(
         self,
     ) -> None:
-        self.assertEqual(TAILORING_VERSION, 33)
+        self.assertEqual(TAILORING_VERSION, 34)
 
     def test_semantic_layout_gate_rejects_flattened_generated_resume(self) -> None:
         flattened = r"""

@@ -417,6 +417,90 @@ class HermesJobUrlRouterTests(unittest.TestCase):
             ],
         )
 
+    def test_failed_discord_generation_returns_a_fresh_retry_control(self) -> None:
+        class Button:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        class Response:
+            def __init__(
+                self,
+                *,
+                text: str,
+                buttons: tuple[Any, ...],
+                attachments: tuple[Any, ...] = (),
+            ) -> None:
+                self.text = text
+                self.buttons = buttons
+                self.attachments = attachments
+
+        class Attachment:
+            def __init__(self, **kwargs: Any) -> None:
+                self.__dict__.update(kwargs)
+
+        plan = json.dumps(
+            {
+                "id": "plan_retry",
+                "job_url": "https://jobs.example.test/retry",
+                "company": "Example",
+                "role": "Engineer",
+                "questions": [],
+                "answers": [],
+                "current_question": None,
+                "status": "review",
+                "catalogue_candidate_count": 0,
+            }
+        )
+        context = _FakePluginContext(
+            results=[
+                plan,
+                RuntimeError("temporary renderer failure"),
+                RuntimeError("second temporary renderer failure"),
+            ]
+        )
+        plugins = ModuleType("hermes_cli.plugins")
+        plugins.DiscordButton = Button
+        plugins.DiscordCommandResponse = Response
+        plugins.DiscordAttachment = Attachment
+        hermes_cli = ModuleType("hermes_cli")
+        hermes_cli.__version__ = "0.18.2"
+        hermes_cli.plugins = plugins
+
+        with patch.dict(sys.modules, {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins}):
+            self.router.register(context)
+            review = context.commands["intake-job"]("https://jobs.example.test/retry")
+            generate = next(button for button in review.buttons if "Generate" in button.label)
+            failed = context.discord_button_handlers["erga.plan.action"](
+                type(
+                    "Interaction",
+                    (),
+                    {"payload": generate.payload, "user_id": "42", "channel_id": "123"},
+                )()
+            )
+            retried = context.discord_button_handlers["erga.plan.action"](
+                type(
+                    "Interaction",
+                    (),
+                    {
+                        "payload": failed.buttons[0].payload,
+                        "user_id": "42",
+                        "channel_id": "123",
+                    },
+                )()
+            )
+
+        self.assertIn("temporary renderer failure", failed.text)
+        self.assertEqual([button.label for button in failed.buttons], ["↻ Retry generation"])
+        self.assertIn("second temporary renderer failure", retried.text)
+        self.assertNotIn("no longer available", retried.text)
+        self.assertEqual(
+            context.calls[-2:],
+            [
+                ("mcp__erga_mcp__execute_tailoring_plan", {"plan_id": "plan_retry"}),
+                ("mcp__erga_mcp__execute_tailoring_plan", {"plan_id": "plan_retry"}),
+            ],
+        )
+
     def test_discord_mail_review_resolves_an_ambiguous_match_with_opaque_state(self) -> None:
         class Button:
             def __init__(self, **kwargs: Any) -> None:

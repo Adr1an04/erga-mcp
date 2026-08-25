@@ -139,6 +139,10 @@ out of the submitted funnel. The confirmation is application-bound and rejects s
 résumé versions before changing status. Each choice also synchronizes an unambiguous configured
 Obsidian tracker row.
 
+If local generation fails before a validated PDF exists, the response includes a fresh **Retry
+generation** control bound to the same reviewed plan. Failed controls are never the user's only way
+forward.
+
 Later high-confidence recruiting mail can advance the canonical record and is mirrored back into
 the tracker. Ambiguous, older, or sensitive messages stay unchanged in a metadata-only review
 queue. Hermes users can open that queue with `/erga-mail-review`, choose a candidate application or

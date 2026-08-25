@@ -2578,22 +2578,31 @@ def register(
             if supports_discord_attachments:
                 assert DiscordAttachment is not None
                 assert DiscordCommandResponse is not None
+
+                def retryable_generation_failure(detail: str) -> object:
+                    return DiscordCommandResponse(
+                        text=_fit_discord_content(f"❌ Erga résumé generation failed: {detail}"),
+                        buttons=(
+                            plan_action_button(
+                                label="↻ Retry generation",
+                                plan_id=plan_id,
+                                operation="generate",
+                                owner_user_id=user_id,
+                                style="primary",
+                            ),
+                        ),
+                    )
+
                 try:
                     result = ctx.dispatch_tool(
                         tailoring_plan_execute_tool,
                         {"plan_id": plan_id},
                     )
                 except Exception as exc:
-                    return DiscordCommandResponse(
-                        text=f"❌ Erga résumé generation failed: {exc}",
-                        buttons=(),
-                    )
+                    return retryable_generation_failure(str(exc))
                 error_text = _dispatch_error_text(result)
                 if error_text:
-                    return DiscordCommandResponse(
-                        text=f"❌ Erga résumé generation failed: {error_text}",
-                        buttons=(),
-                    )
+                    return retryable_generation_failure(error_text)
                 message, pdf = _planned_resume_delivery(result)
                 application_id = _application_id_from_result(result)
                 if pdf is None:

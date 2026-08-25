@@ -117,7 +117,9 @@ is the sole factual source and never contributes page geometry, typography, spac
 section order. A visual template controls section presence, order, density, and project slots, but
 cannot authorize claims. Its observed bullets-per-entry pattern is bounded by the configured
 experience/project minimums and maximums, so a sparse reference cannot silently reduce a retained
-role to one bullet. PDF templates
+role to one bullet. If the approved master itself has fewer bullets than the configured minimum,
+Erga omits that complete entry instead of inventing a claim or failing the intake; adding more
+approved evidence or lowering the minimum makes it eligible again. PDF templates
 additionally contribute measured per-edge margins, typography, small-caps treatment, section-rule
 presence and weight, line height, entry inset, bullet-glyph size, label gap, bullet-text indentation,
 and section/entry/item spacing. Rendered
