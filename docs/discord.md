@@ -167,6 +167,10 @@ and orbit mark:
   (`#FEF17F`) for review-required, Coral (`#FE7F7F`) for a stopped turn, and Sky (`#7FC2FE`) for
   continuation details.
 
+The Orbit flow image uses this same palette end to end and includes the complete Erga mark and
+wordmark. Counts and outcome labels are rendered as separate, deliberately spaced lines so dense
+branches remain readable in Discord previews as well as full-size exports.
+
 Discord owns the light or dark message canvas, so Erga applies this hierarchy to the embed rail,
 titles, fields, and status language rather than forcing a background color that may become
 unreadable in the user's theme. Progress text never claims a pipeline stage has completed unless

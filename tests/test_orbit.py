@@ -8,7 +8,15 @@ from tempfile import TemporaryDirectory
 from PIL import Image
 
 from erga_mcp.models import Application, AuditEvent
-from erga_mcp.tracking.orbit import build_orbit_snapshot, render_orbit_png
+from erga_mcp.tracking.orbit import (
+    _ERGA_ORBIT_PALETTE,
+    _NODE_LABEL_GAP,
+    _STATUS_COLORS,
+    _TREE_NODE_SPECS,
+    _TREE_RIBBON_COLORS,
+    build_orbit_snapshot,
+    render_orbit_png,
+)
 from erga_mcp.tracking.tracker import TrackerEntry
 
 NOW = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
@@ -114,6 +122,7 @@ class OrbitTests(unittest.TestCase):
 
         snapshot = build_orbit_snapshot(applications, audits)
         links = {(link.source, link.target): link.count for link in snapshot.links}
+        node_colors = {node.id: node.color for node in snapshot.nodes}
 
         self.assertEqual(links[("applications", "interviews")], 4)
         self.assertEqual(links[("applications", "rejected")], 2)
@@ -123,6 +132,24 @@ class OrbitTests(unittest.TestCase):
         self.assertEqual(links[("interviews", "in-process")], 1)
         self.assertEqual(links[("offers", "accepted")], 1)
         self.assertEqual(links[("offers", "declined")], 1)
+        self.assertLessEqual(set(node_colors.values()), _ERGA_ORBIT_PALETTE)
+        self.assertEqual(node_colors["applications"], "#171717")
+        self.assertEqual(node_colors["interviews"], "#7C5CFF")
+        self.assertEqual(node_colors["offers"], "#7FC2FE")
+        self.assertEqual(node_colors["accepted"], "#83FE7F")
+        self.assertEqual(node_colors["declined"], "#FE7F7F")
+        self.assertEqual(node_colors["no-response"], "#FEF17F")
+
+    def test_node_counts_have_a_clear_gap_before_every_label(self) -> None:
+        self.assertGreaterEqual(_NODE_LABEL_GAP, 10)
+
+    def test_every_orbit_color_comes_from_the_erga_brand_palette(self) -> None:
+        self.assertLessEqual(set(_STATUS_COLORS.values()), _ERGA_ORBIT_PALETTE)
+        self.assertLessEqual(
+            {color for _, _, color in _TREE_NODE_SPECS.values()},
+            _ERGA_ORBIT_PALETTE,
+        )
+        self.assertLessEqual(set(_TREE_RIBBON_COLORS.values()), _ERGA_ORBIT_PALETTE)
 
     def test_every_applied_role_flows_to_one_visible_current_branch(self) -> None:
         applications = [

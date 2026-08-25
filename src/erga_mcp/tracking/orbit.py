@@ -20,6 +20,24 @@ from erga_mcp.applications.identity import job_identity
 from erga_mcp.models import Application, AuditEvent
 from erga_mcp.tracking.tracker import TrackerEntry, read_application_tracker
 
+_ERGA_INK = "#171717"
+_ERGA_ORBIT_VIOLET = "#7C5CFF"
+_ERGA_CORAL = "#FE7F7F"
+_ERGA_LEAF = "#83FE7F"
+_ERGA_SUN = "#FEF17F"
+_ERGA_SKY = "#7FC2FE"
+_ERGA_ORBIT_PALETTE = frozenset(
+    {
+        _ERGA_INK,
+        _ERGA_ORBIT_VIOLET,
+        _ERGA_CORAL,
+        _ERGA_LEAF,
+        _ERGA_SUN,
+        _ERGA_SKY,
+    }
+)
+_NODE_LABEL_GAP = 12
+
 _STATUS_ALIASES = {
     "assessment": "oa",
     "awaiting response": "awaiting-response",
@@ -56,39 +74,39 @@ _STATUS_LABELS = {
     "withdrawn": "Withdrawn",
 }
 _STATUS_COLORS = {
-    "accepted": "#18A63B",
-    "applied": "#18A63B",
-    "awaiting-response": "#A8ACB8",
-    "declined": "#BF3036",
-    "draft": "#A8ACB8",
-    "expired": "#BF3036",
-    "history-unavailable": "#B8BBC5",
-    "interview": "#18A63B",
-    "interview-2": "#18A63B",
-    "interview-3": "#18A63B",
-    "final-interview": "#18A63B",
-    "oa": "#18A63B",
-    "offer": "#18A63B",
-    "ready": "#70C7C2",
-    "rejected": "#BF3036",
-    "researching": "#A8ACB8",
-    "tracked": "#171717",
-    "unknown": "#B8BBC5",
-    "withdrawn": "#BF3036",
+    "accepted": _ERGA_LEAF,
+    "applied": _ERGA_ORBIT_VIOLET,
+    "awaiting-response": _ERGA_SUN,
+    "declined": _ERGA_CORAL,
+    "draft": _ERGA_INK,
+    "expired": _ERGA_CORAL,
+    "history-unavailable": _ERGA_INK,
+    "interview": _ERGA_ORBIT_VIOLET,
+    "interview-2": _ERGA_ORBIT_VIOLET,
+    "interview-3": _ERGA_ORBIT_VIOLET,
+    "final-interview": _ERGA_ORBIT_VIOLET,
+    "oa": _ERGA_ORBIT_VIOLET,
+    "offer": _ERGA_SKY,
+    "ready": _ERGA_LEAF,
+    "rejected": _ERGA_CORAL,
+    "researching": _ERGA_INK,
+    "tracked": _ERGA_INK,
+    "unknown": _ERGA_INK,
+    "withdrawn": _ERGA_CORAL,
 }
 _TREE_NODE_SPECS = {
-    "applications": ("Applications", 0, "#A6A19A"),
-    "interviews": ("Interview process", 1, "#4D82B8"),
-    "rejected": ("Rejected", 1, "#F08A24"),
-    "no-response": ("No response", 1, "#E85B61"),
-    "withdrawn": ("Withdrawn", 1, "#8A8E98"),
-    "expired": ("Expired", 1, "#9A6B53"),
-    "offers": ("Offers", 2, "#56B8AC"),
-    "in-process": ("In process", 2, "#6C9DCA"),
-    "no-offer": ("No offer", 2, "#D94B52"),
-    "accepted": ("Accepted", 3, "#4F9E50"),
-    "offer-pending": ("Pending decision", 3, "#56B8AC"),
-    "declined": ("Declined", 3, "#E1B632"),
+    "applications": ("Applications", 0, _ERGA_INK),
+    "interviews": ("Interview process", 1, _ERGA_ORBIT_VIOLET),
+    "rejected": ("Rejected", 1, _ERGA_CORAL),
+    "no-response": ("No response", 1, _ERGA_SUN),
+    "withdrawn": ("Withdrawn", 1, _ERGA_CORAL),
+    "expired": ("Expired", 1, _ERGA_CORAL),
+    "offers": ("Offers", 2, _ERGA_SKY),
+    "in-process": ("In process", 2, _ERGA_ORBIT_VIOLET),
+    "no-offer": ("No offer", 2, _ERGA_CORAL),
+    "accepted": ("Accepted", 3, _ERGA_LEAF),
+    "offer-pending": ("Pending decision", 3, _ERGA_SUN),
+    "declined": ("Declined", 3, _ERGA_CORAL),
 }
 _TREE_NODE_ORDER = {
     "applications": 0,
@@ -105,17 +123,17 @@ _TREE_NODE_ORDER = {
     "declined": 2,
 }
 _TREE_RIBBON_COLORS = {
-    "interviews": "#9CBBD7",
-    "rejected": "#F4B168",
-    "no-response": "#EE9A9E",
-    "withdrawn": "#BFC1C8",
-    "expired": "#C7A18D",
-    "offers": "#A5D7D0",
-    "in-process": "#B1C9DF",
-    "no-offer": "#E7969A",
-    "accepted": "#A6D0A7",
-    "offer-pending": "#B3DCD7",
-    "declined": "#EEDB88",
+    "interviews": _ERGA_ORBIT_VIOLET,
+    "rejected": _ERGA_CORAL,
+    "no-response": _ERGA_SUN,
+    "withdrawn": _ERGA_CORAL,
+    "expired": _ERGA_CORAL,
+    "offers": _ERGA_SKY,
+    "in-process": _ERGA_ORBIT_VIOLET,
+    "no-offer": _ERGA_CORAL,
+    "accepted": _ERGA_LEAF,
+    "offer-pending": _ERGA_SUN,
+    "declined": _ERGA_CORAL,
 }
 _INTERVIEW_PROCESS_STATUSES = frozenset(
     {"oa", "interview", "interview-2", "interview-3", "final-interview"}
@@ -139,7 +157,7 @@ _PRE_APPLICATION_STATUSES = frozenset({"draft", "ready", "researching", "unknown
 _STATUS_AUDIT_ACTIONS = frozenset(
     {"application.status_updated", "application.status_updated_from_mail"}
 )
-_ORBIT_RENDER_VERSION = 5
+_ORBIT_RENDER_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -777,7 +795,7 @@ def render_orbit_png(
         ((width * scale - title_width) / 2, 32 * scale),
         title,
         font=title_font,
-        fill=_hex_color("#171717"),
+        fill=_hex_color(_ERGA_INK),
     )
 
     if not snapshot.nodes:
@@ -790,7 +808,7 @@ def render_orbit_png(
             ),
             message,
             font=title_font,
-            fill=_hex_color("#8A8E98"),
+            fill=_hex_color(_ERGA_INK),
         )
     else:
         chart_left = 220
@@ -888,7 +906,7 @@ def render_orbit_png(
             label_width = max(count_box[2] - count_box[0], label_box[2] - label_box[0]) / scale
             count_height = (count_box[3] - count_box[1]) / scale
             label_height = (label_box[3] - label_box[1]) / scale
-            text_height = count_height + label_height + 2
+            text_height = count_height + label_height + _NODE_LABEL_GAP
             label_x = x - label_width - 18 if node.column == 0 else x + 22
             label_y = (y0 + y1 - text_height) / 2
             draw.rounded_rectangle(
@@ -905,13 +923,13 @@ def render_orbit_png(
                 (label_x * scale, label_y * scale),
                 count,
                 font=count_font,
-                fill=_hex_color("#171717"),
+                fill=_hex_color(_ERGA_INK),
             )
             draw.text(
-                (label_x * scale, (label_y + count_height + 2) * scale),
+                (label_x * scale, (label_y + count_height + _NODE_LABEL_GAP) * scale),
                 label,
                 font=label_font,
-                fill=_hex_color("#171717"),
+                fill=_hex_color(_ERGA_INK),
             )
     _draw_erga_logo(draw, x=width - 280, y=height - 96, width=248, scale=scale)
 
