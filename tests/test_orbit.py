@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from erga_mcp.models import Application, AuditEvent
 from erga_mcp.tracking.orbit import (
@@ -13,9 +13,11 @@ from erga_mcp.tracking.orbit import (
     _NODE_LABEL_GAP,
     _STATUS_COLORS,
     _TREE_CHILDREN,
+    _TREE_EDGE_WIDTH,
+    _TREE_NODE_HEIGHT,
     _TREE_NODE_SPECS,
-    _TREE_RIBBON_COLORS,
-    _draw_flow_node,
+    _TREE_NODE_WIDTH,
+    _binary_tree_layout,
     build_orbit_snapshot,
     render_orbit_png,
 )
@@ -153,28 +155,44 @@ class OrbitTests(unittest.TestCase):
     def test_node_counts_have_a_clear_gap_before_every_label(self) -> None:
         self.assertGreaterEqual(_NODE_LABEL_GAP, 10)
 
-    def test_flow_nodes_square_only_the_edges_connected_to_ribbons(self) -> None:
-        color = "#FE7F7F"
+    def test_renderer_uses_fixed_nodes_and_thin_forward_edges(self) -> None:
+        journeys = {
+            "pending": ("draft", "applied"),
+            "interview": ("draft", "applied", "interview"),
+            "offer": ("draft", "applied", "offer"),
+            "accepted": ("draft", "applied", "offer", "accepted"),
+            "declined": ("draft", "applied", "offer", "declined"),
+            "rejected": ("draft", "applied", "rejected"),
+            "no-offer": ("draft", "applied", "interview", "rejected"),
+            "withdrawn": ("draft", "applied", "withdrawn"),
+            "expired": ("draft", "applied", "expired"),
+        }
+        applications = [
+            _application(identifier, status=statuses[-1])
+            for identifier, statuses in journeys.items()
+        ]
+        audits = [
+            event
+            for identifier, statuses in journeys.items()
+            for event in _journey(identifier, statuses)
+        ]
+        snapshot = build_orbit_snapshot(applications, audits)
+        positions = _binary_tree_layout(snapshot, width=1600, height=900)
 
-        def corner_pixels(*, incoming: bool, outgoing: bool) -> tuple[object, object]:
-            image = Image.new("RGB", (30, 30), "white")
-            _draw_flow_node(
-                ImageDraw.Draw(image),
-                x=8,
-                y0=5,
-                y1=25,
-                color=color,
-                scale=1,
-                has_incoming=incoming,
-                has_outgoing=outgoing,
-            )
-            return image.getpixel((8, 5)), image.getpixel((22, 5))
-
-        coral = (254, 127, 127)
-        white = (255, 255, 255)
-        self.assertEqual(corner_pixels(incoming=False, outgoing=True), (white, coral))
-        self.assertEqual(corner_pixels(incoming=True, outgoing=True), (coral, coral))
-        self.assertEqual(corner_pixels(incoming=True, outgoing=False), (coral, white))
+        self.assertEqual(set(positions), {node.id for node in snapshot.nodes})
+        self.assertTrue(
+            all(positions[link.source][0] < positions[link.target][0] for link in snapshot.links)
+        )
+        for parent, children in _TREE_CHILDREN.items():
+            visible_children = [child for child in children if child in positions]
+            if len(visible_children) == 2:
+                self.assertNotEqual(
+                    positions[visible_children[0]][1],
+                    positions[visible_children[1]][1],
+                    parent,
+                )
+        self.assertEqual((_TREE_NODE_WIDTH, _TREE_NODE_HEIGHT), (156, 64))
+        self.assertLessEqual(_TREE_EDGE_WIDTH, 4)
 
     def test_every_orbit_color_comes_from_the_erga_brand_palette(self) -> None:
         self.assertLessEqual(set(_STATUS_COLORS.values()), _ERGA_ORBIT_PALETTE)
@@ -182,7 +200,6 @@ class OrbitTests(unittest.TestCase):
             {color for _, _, color in _TREE_NODE_SPECS.values()},
             _ERGA_ORBIT_PALETTE,
         )
-        self.assertLessEqual(set(_TREE_RIBBON_COLORS.values()), _ERGA_ORBIT_PALETTE)
 
     def test_orbit_topology_is_a_strict_binary_tree(self) -> None:
         self.assertTrue(_TREE_CHILDREN)
