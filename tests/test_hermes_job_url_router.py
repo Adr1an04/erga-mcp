@@ -444,11 +444,29 @@ class HermesJobUrlRouterTests(unittest.TestCase):
                 "job_url": "https://jobs.example.test/retry",
                 "company": "Example",
                 "role": "Engineer",
-                "questions": [],
-                "answers": [],
+                "questions": [
+                    {
+                        "id": "copy_strategy",
+                        "prompt": "How should Erga tailor?",
+                        "options": [
+                            {
+                                "id": "synthesize",
+                                "label": "✨ Evidence-backed tailoring",
+                                "description": "Draft only from approved evidence.",
+                            }
+                        ],
+                    }
+                ],
+                "answers": [{"question_id": "copy_strategy", "option_id": "synthesize"}],
                 "current_question": None,
                 "status": "review",
                 "catalogue_candidate_count": 0,
+                "project_selection": {
+                    "mode": "automatic_strength",
+                    "project_ids": [],
+                    "project_titles": [],
+                    "emphasis": "balanced",
+                },
             }
         )
         context = _FakePluginContext(
@@ -469,6 +487,7 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         with patch.dict(sys.modules, {"hermes_cli": hermes_cli, "hermes_cli.plugins": plugins}):
             self.router.register(context)
             review = context.commands["intake-job"]("https://jobs.example.test/retry")
+            self.assertIn("select the strongest evidence-backed set", review.text)
             generate = next(button for button in review.buttons if "Generate" in button.label)
             failed = context.discord_button_handlers["erga.plan.action"](
                 type(

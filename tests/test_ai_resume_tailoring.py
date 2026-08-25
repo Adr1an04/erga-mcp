@@ -451,6 +451,11 @@ class AIResumeTailoringTests(unittest.TestCase):
         self.assertIn("Engineered", prompt["allowed_lead_verbs"])
         self.assertIn("Validated", prompt["allowed_lead_verbs"])
         self.assertEqual(prompt["projects"][0]["relevance_rank"], 1)
+        self.assertIn("every eligible project", prompt["selection_objective"]["instruction"])
+        self.assertEqual(
+            prompt["selection_objective"]["priority_order"][0],
+            "required-role coverage",
+        )
         self.assertIn("identity_profile", prompt["projects"][0])
         self.assertIn("metric_categories", prompt["projects"][0]["identity_profile"])
         self.assertIn("portfolio_differentiators", prompt["projects"][0])

@@ -7,6 +7,7 @@ import subprocess
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -54,6 +55,11 @@ from erga_mcp.resumes.artifacts import (
     ResumeItemLayoutValidation,
     create_job_package,
     record_validated_resume_version,
+)
+from erga_mcp.resumes.planning import (
+    TailoringPlanAnswer,
+    TailoringPlanOption,
+    TailoringPlanQuestion,
 )
 from erga_mcp.resumes.tailoring import create_automatic_resume_proposal
 from erga_mcp.store import ErgaStore
@@ -2068,26 +2074,49 @@ Bottom of the approved master template.
             payload = cast(dict[str, Any], created.structured_content)
 
             self.assertEqual(payload["status"], "planning")
-            self.assertEqual(payload["current_question"]["id"], "portfolio")
+            self.assertEqual(payload["current_question"]["id"], "copy_strategy")
+            self.assertEqual(payload["project_selection"]["mode"], "automatic_strength")
+            self.assertEqual(payload["project_selection"]["project_ids"], [])
             self.assertNotIn("job_snapshot", payload)
             self.assertNotIn("job_description", payload)
-            self.assertEqual(ErgaStore(root / "state" / "erga.sqlite3").list_applications(), [])
+            external_store = ErgaStore(root / "state" / "erga.sqlite3")
+            self.assertEqual(external_store.list_applications(), [])
 
-            plan_id = str(payload["id"])
-            portfolio_option = payload["current_question"]["options"][0]["id"]
-            answered: Any = asyncio.run(
-                server.call_tool(
-                    "update_tailoring_plan",
-                    {
-                        "plan_id": plan_id,
-                        "operation": "answer",
-                        "question_id": "portfolio",
-                        "option_id": portfolio_option,
-                    },
+            stored_plan = external_store.get_tailoring_plan(str(payload["id"]))
+            assert stored_plan is not None
+            portfolio_question = TailoringPlanQuestion(
+                id="portfolio",
+                prompt="Which project mix?",
+                options=(
+                    TailoringPlanOption(
+                        id="balanced",
+                        label="Balanced",
+                        description="Legacy manual selection.",
+                        project_ids=("project-1", "project-2", "project-3"),
+                    ),
+                ),
+            )
+            external_store.save_tailoring_plan(
+                replace(
+                    stored_plan,
+                    questions=(portfolio_question, *stored_plan.questions),
+                    answers=(TailoringPlanAnswer("portfolio", "balanced"),),
+                    project_selection_mode="legacy_question",
+                    project_ids=("project-1", "project-2", "project-3"),
                 )
             )
-            copy_payload = cast(dict[str, Any], answered.structured_content)
-            self.assertEqual(copy_payload["current_question"]["id"], "copy_strategy")
+            migrated: Any = asyncio.run(
+                server.call_tool(
+                    "create_tailoring_plan",
+                    {"job_url": "https://jobs.example.test/software-engineer"},
+                )
+            )
+            payload = cast(dict[str, Any], migrated.structured_content)
+            self.assertEqual(payload["current_question"]["id"], "copy_strategy")
+            self.assertEqual(payload["project_selection"]["project_ids"], [])
+            self.assertNotIn("portfolio", {item["id"] for item in payload["questions"]})
+
+            plan_id = str(payload["id"])
             reviewed: Any = asyncio.run(
                 server.call_tool(
                     "update_tailoring_plan",
@@ -2641,7 +2670,7 @@ Bottom of the approved master template.
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
             self.assertTrue(result["tailoring_meaningful_change"])
             self.assertEqual(result["tailoring_changed_sections"], ["Experience"])
-            self.assertEqual(result["tailoring_version"], 34)
+            self.assertEqual(result["tailoring_version"], 35)
             self.assertEqual(result["readiness"], "ready")
             self.assertEqual(result["git_project_research"], [])
             self.assertIsInstance(result["application_id"], str)
@@ -2655,7 +2684,7 @@ Bottom of the approved master template.
                 (Path(result["package_dir"]) / "package.json").read_text(encoding="utf-8")
             )
             self.assertTrue(manifest["tailoring"]["meaningful_change"])
-            self.assertEqual(manifest["tailoring"]["version"], 34)
+            self.assertEqual(manifest["tailoring"]["version"], 35)
             self.assertEqual(
                 manifest["generated_resume_version_id"], result["generated_resume_version_id"]
             )
@@ -2729,7 +2758,7 @@ Bottom of the approved master template.
             )
             manifest = json.loads((repaired / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["legacy_backup"], "legacy-backup")
-            self.assertEqual(manifest["tailoring"]["version"], 34)
+            self.assertEqual(manifest["tailoring"]["version"], 35)
             self.assertIn("Legacy package preserved", result["integration_warnings"][-1])
 
     def test_compile_rejects_a_pdf_over_the_configured_page_cap(self) -> None:

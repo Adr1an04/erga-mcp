@@ -11,9 +11,8 @@ from erga_mcp.applications.role_profile import (
     role_profile_from_text,
 )
 from erga_mcp.models import Evidence
-from erga_mcp.portfolio.inventory import ProjectCandidate, _score, select_projects
+from erga_mcp.portfolio.inventory import ProjectCandidate
 from erga_mcp.resumes.artifacts import latex_to_text
-from erga_mcp.resumes.quality import build_project_identity_profile
 
 _ACTIVE_STATUSES = frozenset({"planning", "review", "ready"})
 
@@ -81,6 +80,10 @@ class TailoringPlan:
     created_at: datetime
     updated_at: datetime
     role_alignment: tuple[RoleAlignment, ...] = ()
+    project_selection_mode: str = "automatic_strength"
+    project_ids: tuple[str, ...] = ()
+    project_titles: tuple[str, ...] = ()
+    project_emphasis: str = "balanced"
 
     @property
     def current_question(self) -> TailoringPlanQuestion | None:
@@ -100,6 +103,12 @@ class TailoringPlan:
             "current_question": asdict(current) if current is not None else None,
             "status": self.status,
             "catalogue_candidate_count": self.catalogue_candidate_count,
+            "project_selection": {
+                "mode": self.project_selection_mode,
+                "project_ids": list(self.project_ids),
+                "project_titles": list(self.project_titles),
+                "emphasis": self.project_emphasis,
+            },
             "role_alignment": [item.as_public_dict() for item in self.role_alignment],
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
@@ -111,115 +120,6 @@ class TailoringPlan:
         payload["job_snapshot"] = self.job_snapshot
         payload["job_description"] = self.job_description
         return payload
-
-
-def _portfolio_option(
-    option_id: str,
-    label: str,
-    description: str,
-    candidates: tuple[ProjectCandidate, ...],
-    *,
-    emphasis: str,
-    recommended: bool = False,
-) -> TailoringPlanOption:
-    return TailoringPlanOption(
-        id=option_id,
-        label=label,
-        description=description,
-        project_ids=tuple(candidate.id for candidate in candidates),
-        project_titles=tuple(candidate.title for candidate in candidates),
-        emphasis=emphasis,
-        recommended=recommended,
-    )
-
-
-def _portfolio_options(
-    candidates: tuple[ProjectCandidate, ...],
-    job_description: str,
-    *,
-    project_count: int,
-) -> tuple[TailoringPlanOption, ...]:
-    if project_count == 0:
-        return (
-            TailoringPlanOption(
-                id="master_projects",
-                label="🛡️ Keep current projects",
-                description="No complete approved catalogue replacement is available yet.",
-                recommended=True,
-            ),
-        )
-    matching = tuple(
-        candidate for candidate in candidates if _score(candidate, job_description) > 0
-    )
-    balanced = select_projects(candidates, job_description, max_projects=project_count)
-    if len(balanced) < project_count:
-        balanced = tuple(dict.fromkeys((*balanced, *matching, *candidates)))[:project_count]
-    profiles = {candidate.id: build_project_identity_profile(candidate) for candidate in matching}
-    role_fit = tuple(
-        sorted(
-            matching,
-            key=lambda item: (
-                -_score(item, job_description),
-                -profiles[item.id].quality_score,
-                item.id,
-            ),
-        )[:project_count]
-    )
-    quality_first = tuple(
-        sorted(
-            matching,
-            key=lambda item: (
-                -profiles[item.id].quality_score,
-                -_score(item, job_description),
-                item.id,
-            ),
-        )[:project_count]
-    )
-    raw = (
-        _portfolio_option(
-            "balanced",
-            "⚖️ Balanced",
-            "Best mix of role fit, strong approved copy, and distinct project stories.",
-            balanced,
-            emphasis="balanced",
-            recommended=True,
-        ),
-        _portfolio_option(
-            "role_fit",
-            "🎯 Closest match",
-            "Prioritize the projects with the strongest direct overlap with this posting.",
-            role_fit,
-            emphasis="technical_depth",
-        ),
-        _portfolio_option(
-            "quality_first",
-            "💎 Strongest copy",
-            "Favor the strongest approved outcome bullets among role-relevant projects.",
-            quality_first,
-            emphasis="outcome_impact",
-        ),
-    )
-    unique: list[TailoringPlanOption] = []
-    seen: set[tuple[str, ...]] = set()
-    for option in raw:
-        if len(option.project_ids) != project_count or option.project_ids in seen:
-            continue
-        unique.append(option)
-        seen.add(option.project_ids)
-    if len(unique) == 1 and len(candidates) > project_count:
-        alternative = tuple(
-            (*balanced[:-1], next(item for item in candidates if item not in balanced))
-        )
-        unique.append(
-            _portfolio_option(
-                "alternate",
-                "🎯 Alternate mix",
-                "Keep the leading projects and swap the final story for broader coverage.",
-                alternative,
-                emphasis="technical_depth",
-            )
-        )
-    return tuple(unique[:3])
 
 
 def _supports_requirement(value: str, requirement: JobRequirement, role: str) -> bool:
@@ -295,23 +195,9 @@ def build_tailoring_plan(
     if project_count < 1:
         raise ValueError("project_count must be positive")
     timestamp = now or datetime.now(UTC)
-    effective_project_count = min(project_count, len(candidates))
-    portfolio_options = _portfolio_options(
-        candidates,
-        job_description,
-        project_count=effective_project_count,
-    )
     profile = role_profile or role_profile_from_text(job_description)
     role_alignment = _role_alignment(profile, evidence=evidence, candidates=candidates)
     questions: list[TailoringPlanQuestion] = []
-    if len(portfolio_options) > 1:
-        questions.append(
-            TailoringPlanQuestion(
-                id="portfolio",
-                prompt="Which project story should this résumé tell?",
-                options=portfolio_options,
-            )
-        )
     material_gaps = tuple(
         item
         for item in role_alignment
@@ -374,17 +260,6 @@ def build_tailoring_plan(
             ),
         )
     )
-    answers: tuple[TailoringPlanAnswer, ...] = ()
-    if len(portfolio_options) == 1:
-        answers = (TailoringPlanAnswer("portfolio", portfolio_options[0].id),)
-        questions.insert(
-            0,
-            TailoringPlanQuestion(
-                id="portfolio",
-                prompt="Only one complete approved project set is available.",
-                options=portfolio_options,
-            ),
-        )
     return TailoringPlan(
         id=f"plan_{uuid4().hex}",
         job_url=job_url,
@@ -393,12 +268,48 @@ def build_tailoring_plan(
         job_snapshot=job_snapshot,
         job_description=job_description,
         questions=tuple(questions),
-        answers=answers,
+        answers=(),
         status="planning",
         catalogue_candidate_count=len(candidates),
         created_at=timestamp,
         updated_at=timestamp,
         role_alignment=role_alignment,
+        project_selection_mode=("automatic_strength" if candidates else "master_projects"),
+    )
+
+
+def migrate_tailoring_plan_project_selection(
+    plan: TailoringPlan, *, now: datetime | None = None
+) -> TailoringPlan:
+    """Replace the legacy portfolio-choice question with automatic strength selection."""
+    if plan.project_selection_mode != "legacy_question" and not any(
+        question.id == "portfolio" for question in plan.questions
+    ):
+        return plan
+
+    questions = tuple(question for question in plan.questions if question.id != "portfolio")
+    answer_by_question = {answer.question_id: answer for answer in plan.answers}
+    answers = tuple(
+        answer_by_question[question.id]
+        for question in questions
+        if question.id in answer_by_question
+    )
+    if plan.status in _ACTIVE_STATUSES:
+        status = "review" if len(answers) == len(questions) else "planning"
+    else:
+        status = plan.status
+    return replace(
+        plan,
+        questions=questions,
+        answers=answers,
+        status=status,
+        project_selection_mode=(
+            "automatic_strength" if plan.catalogue_candidate_count else "master_projects"
+        ),
+        project_ids=(),
+        project_titles=(),
+        project_emphasis="balanced",
+        updated_at=now or datetime.now(UTC),
     )
 
 
@@ -458,7 +369,6 @@ def tailoring_plan_preferences(plan: TailoringPlan) -> TailoringPreferences:
         question.id: {option.id: option for option in question.options}
         for question in plan.questions
     }
-    portfolio = option_by_question["portfolio"][answer_by_question["portfolio"]]
     copy_strategy = option_by_question["copy_strategy"][answer_by_question["copy_strategy"]]
     gap_option = (
         option_by_question["evidence_gaps"][answer_by_question["evidence_gaps"]]
@@ -467,8 +377,8 @@ def tailoring_plan_preferences(plan: TailoringPlan) -> TailoringPreferences:
     )
     gap_strategy = gap_option.gap_strategy if gap_option and gap_option.gap_strategy else "honest"
     return TailoringPreferences(
-        project_ids=portfolio.project_ids,
-        emphasis=portfolio.emphasis,
+        project_ids=plan.project_ids,
+        emphasis=plan.project_emphasis,
         allow_ai_synthesis=bool(copy_strategy.allow_ai_synthesis) and gap_strategy != "preserve",
         gap_strategy=gap_strategy,
     )
@@ -502,6 +412,34 @@ def tailoring_plan_from_storage(payload: object) -> TailoringPlan:
         )
         for question in payload["questions"]
     )
+    raw_project_selection = payload.get("project_selection")
+    project_selection = raw_project_selection if isinstance(raw_project_selection, dict) else {}
+    project_ids = tuple(str(value) for value in project_selection.get("project_ids", []))
+    project_titles = tuple(str(value) for value in project_selection.get("project_titles", []))
+    project_emphasis = str(project_selection.get("emphasis", "balanced"))
+    project_selection_mode = str(project_selection.get("mode", "legacy_question"))
+    if not project_ids:
+        answer_by_question = {
+            str(answer.get("question_id")): str(answer.get("option_id"))
+            for answer in payload.get("answers", [])
+            if isinstance(answer, dict)
+        }
+        portfolio_answer = answer_by_question.get("portfolio")
+        portfolio_question = next(
+            (question for question in questions if question.id == "portfolio"), None
+        )
+        portfolio_option = (
+            next(
+                (option for option in portfolio_question.options if option.id == portfolio_answer),
+                None,
+            )
+            if portfolio_question is not None and portfolio_answer is not None
+            else None
+        )
+        if portfolio_option is not None:
+            project_ids = portfolio_option.project_ids
+            project_titles = portfolio_option.project_titles
+            project_emphasis = portfolio_option.emphasis
     return TailoringPlan(
         id=str(payload["id"]),
         job_url=str(payload["job_url"]),
@@ -537,4 +475,8 @@ def tailoring_plan_from_storage(payload: object) -> TailoringPlan:
             )
             for item in payload.get("role_alignment", [])
         ),
+        project_selection_mode=project_selection_mode,
+        project_ids=project_ids,
+        project_titles=project_titles,
+        project_emphasis=project_emphasis,
     )

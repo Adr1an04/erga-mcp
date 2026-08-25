@@ -139,6 +139,12 @@ out of the submitted funnel. The confirmation is application-bound and rejects s
 résumé versions before changing status. Each choice also synchronizes an unambiguous configured
 Obsidian tracker row.
 
+Job intake does not ask users to rank or choose projects. Erga compares the complete eligible
+shortlist for required-role fit, approved evidence strength, bullet quality, and differentiation,
+then the connected model chooses the strongest portfolio during generation. The user reviews the
+tailoring strategy and final résumé; clients without model sampling use the deterministic
+approved-copy selector.
+
 If local generation fails before a validated PDF exists, the response includes a fresh **Retry
 generation** control bound to the same reviewed plan. Failed controls are never the user's only way
 forward.

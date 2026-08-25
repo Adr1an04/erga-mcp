@@ -1330,6 +1330,23 @@ async def draft_evidence_backed_projects(
         "job_description": job_description,
         "project_count": project_count,
         "candidate_variant_count": 3,
+        "selection_objective": {
+            "instruction": (
+                "Choose the strongest complete portfolio globally; do not merely accept the "
+                "candidate order. Compare every eligible project before selecting."
+            ),
+            "priority_order": [
+                "required-role coverage",
+                "approved evidence strength and specificity",
+                "human-quality bullet structure",
+                "distinct engineering stories across the selected set",
+                "preferred-role coverage",
+            ],
+            "quality_floor": (
+                "Reject a superficially relevant project when its evidence cannot support the "
+                "configured bullet floor or a specific defensible story."
+            ),
+        },
         "minimum_bullets_per_project": resolved_minimum_bullets,
         "maximum_bullets_per_project": bullets_per_project,
         "master_project_quantitative_coverage_percent": master_quantitative_coverage,

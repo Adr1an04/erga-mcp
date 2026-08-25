@@ -159,6 +159,7 @@ from erga_mcp.resumes.planning import (
     answer_tailoring_plan,
     approve_tailoring_plan,
     build_tailoring_plan,
+    migrate_tailoring_plan_project_selection,
     reopen_previous_question,
     set_tailoring_plan_status,
     tailoring_plan_preferences,
@@ -2412,7 +2413,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         annotations=_NETWORK_READ_AND_WRITE,
     )
     def create_tailoring_plan(job_url: str) -> dict[str, object]:
-        """Prepare deterministic project/copy choices without generating a résumé."""
+        """Prepare evidence and copy choices without generating a résumé."""
         existing = next(
             (
                 plan
@@ -2422,6 +2423,10 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             None,
         )
         if existing is not None:
+            migrated = migrate_tailoring_plan_project_selection(existing)
+            if migrated is not existing:
+                store.save_tailoring_plan(migrated)
+                existing = migrated
             return public_tailoring_plan(existing)
         snapshot = fetch_job_snapshot(job_url)
         research = analyze_job_snapshot(snapshot, job_url=job_url)

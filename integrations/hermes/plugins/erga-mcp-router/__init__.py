@@ -1468,14 +1468,23 @@ def register(
                 )
             return "\n".join(lines)
 
+        project_selection = plan.get("project_selection")
         portfolio = selected_plan_option(plan, "portfolio") or {}
         copy_strategy = selected_plan_option(plan, "copy_strategy") or {}
-        titles = portfolio.get("project_titles")
-        project_text = (
-            ", ".join(str(item) for item in titles)
-            if isinstance(titles, list) and titles
-            else "Keep the strongest current approved projects"
+        selection_mode = (
+            str(project_selection.get("mode", "")) if isinstance(project_selection, dict) else ""
         )
+        titles = (
+            project_selection.get("project_titles")
+            if isinstance(project_selection, dict)
+            else portfolio.get("project_titles")
+        )
+        if isinstance(titles, list) and titles:
+            project_text = ", ".join(str(item) for item in titles)
+        elif selection_mode == "automatic_strength":
+            project_text = "Erga will select the strongest evidence-backed set for this job"
+        else:
+            project_text = "Keep the strongest current approved projects"
         lines = [
             "**Erga résumé plan · Review before generation**",
             f"{company} — {role}",

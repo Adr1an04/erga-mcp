@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from erga_mcp.portfolio.inventory import ProjectCandidate
 from erga_mcp.resumes.planning import (
+    TailoringPlanAnswer,
+    TailoringPlanOption,
+    TailoringPlanQuestion,
     answer_tailoring_plan,
     approve_tailoring_plan,
     build_tailoring_plan,
+    migrate_tailoring_plan_project_selection,
     reopen_previous_question,
     tailoring_plan_preferences,
 )
@@ -78,31 +83,25 @@ class TailoringPlanTests(unittest.TestCase):
             now=datetime(2026, 8, 11, tzinfo=UTC),
         )
 
-    def test_plan_exposes_short_emoji_choices_without_leaking_the_snapshot(self) -> None:
+    def test_plan_auto_selects_projects_without_leaking_the_snapshot(self) -> None:
         plan = self._plan()
 
         self.assertEqual(plan.status, "planning")
-        self.assertEqual(plan.current_question.id, "portfolio")
-        self.assertGreaterEqual(len(plan.current_question.options), 2)
-        self.assertLessEqual(len(plan.current_question.options), 3)
-        self.assertTrue(all(option.label[0] in "⚖️🎯💎" for option in plan.current_question.options))
+        self.assertEqual(plan.current_question.id, "copy_strategy")
+        self.assertEqual(plan.project_selection_mode, "automatic_strength")
+        self.assertEqual(plan.project_ids, ())
+        self.assertNotIn("portfolio", {question.id for question in plan.questions})
         payload = plan.as_public_dict()
         self.assertNotIn("job_snapshot", payload)
         self.assertNotIn("job_description", payload)
-        self.assertEqual(payload["current_question"]["id"], "portfolio")
+        self.assertEqual(payload["current_question"]["id"], "copy_strategy")
+        self.assertEqual(payload["project_selection"]["mode"], "automatic_strength")
 
     def test_answers_are_sequential_reviewable_and_resolve_generation_preferences(self) -> None:
         plan = self._plan()
         with self.assertRaisesRegex(ValueError, "current question"):
-            answer_tailoring_plan(plan, question_id="copy_strategy", option_id="synthesize")
+            answer_tailoring_plan(plan, question_id="portfolio", option_id="balanced")
 
-        portfolio = plan.current_question.options[0]
-        plan = answer_tailoring_plan(
-            plan,
-            question_id="portfolio",
-            option_id=portfolio.id,
-        )
-        self.assertEqual(plan.current_question.id, "copy_strategy")
         plan = answer_tailoring_plan(
             plan,
             question_id="copy_strategy",
@@ -112,9 +111,9 @@ class TailoringPlanTests(unittest.TestCase):
         self.assertEqual(plan.status, "review")
         self.assertIsNone(plan.current_question)
         preferences = tailoring_plan_preferences(plan)
-        self.assertEqual(preferences.project_ids, portfolio.project_ids)
+        self.assertEqual(preferences.project_ids, ())
         self.assertTrue(preferences.allow_ai_synthesis)
-        self.assertEqual(preferences.emphasis, portfolio.emphasis)
+        self.assertEqual(preferences.emphasis, "balanced")
 
         ready = approve_tailoring_plan(plan)
         self.assertEqual(ready.status, "ready")
@@ -133,13 +132,51 @@ class TailoringPlanTests(unittest.TestCase):
             assert loaded is not None
             answered = answer_tailoring_plan(
                 loaded,
-                question_id="portfolio",
-                option_id=loaded.current_question.options[0].id,
+                question_id="copy_strategy",
+                option_id="synthesize",
             )
             store.save_tailoring_plan(answered)
 
             self.assertEqual(store.get_tailoring_plan(plan.id), answered)
             self.assertEqual(store.list_tailoring_plans()[0].id, plan.id)
+
+    def test_legacy_portfolio_choice_migrates_to_automatic_strength_selection(self) -> None:
+        plan = self._plan()
+        legacy_question = TailoringPlanQuestion(
+            id="portfolio",
+            prompt="Which project mix?",
+            options=(
+                TailoringPlanOption(
+                    id="balanced",
+                    label="Balanced",
+                    description="Legacy manual choice.",
+                    project_ids=("robotics", "platform", "tooling"),
+                    project_titles=("Robotics", "Platform", "Tooling"),
+                ),
+            ),
+        )
+        legacy = replace(
+            plan,
+            questions=(legacy_question, *plan.questions),
+            answers=(
+                TailoringPlanAnswer("portfolio", "balanced"),
+                TailoringPlanAnswer("copy_strategy", "synthesize"),
+            ),
+            status="ready",
+            project_selection_mode="legacy_question",
+            project_ids=("robotics", "platform", "tooling"),
+            project_titles=("Robotics", "Platform", "Tooling"),
+        )
+
+        migrated = migrate_tailoring_plan_project_selection(
+            legacy, now=datetime(2026, 8, 12, tzinfo=UTC)
+        )
+
+        self.assertEqual(migrated.status, "review")
+        self.assertEqual(migrated.project_selection_mode, "automatic_strength")
+        self.assertEqual(migrated.project_ids, ())
+        self.assertEqual([question.id for question in migrated.questions], ["copy_strategy"])
+        self.assertEqual(migrated.answers, (TailoringPlanAnswer("copy_strategy", "synthesize"),))
 
 
 if __name__ == "__main__":
