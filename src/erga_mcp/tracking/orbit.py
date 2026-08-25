@@ -76,22 +76,50 @@ _STATUS_COLORS = {
     "unknown": "#B8BBC5",
     "withdrawn": "#BF3036",
 }
-_PROGRESS_RIBBON = "#7FD383"
-_OUTCOME_RIBBON = "#D78383"
-_NEGATIVE_OUTCOMES = frozenset({"declined", "expired", "rejected", "withdrawn"})
-_STATUS_COLUMNS = {
-    "applied": 0,
-    "awaiting-response": 1,
-    "oa": 1,
-    "interview": 2,
-    "interview-2": 3,
-    "interview-3": 4,
-    "final-interview": 5,
-    "offer": 6,
-    "accepted": 7,
-    "declined": 7,
-    "expired": 1,
+_TREE_NODE_SPECS = {
+    "applications": ("Applications", 0, "#A6A19A"),
+    "interviews": ("Interview process", 1, "#4D82B8"),
+    "rejected": ("Rejected", 1, "#F08A24"),
+    "no-response": ("No response", 1, "#E85B61"),
+    "withdrawn": ("Withdrawn", 1, "#8A8E98"),
+    "expired": ("Expired", 1, "#9A6B53"),
+    "offers": ("Offers", 2, "#56B8AC"),
+    "in-process": ("In process", 2, "#6C9DCA"),
+    "no-offer": ("No offer", 2, "#D94B52"),
+    "accepted": ("Accepted", 3, "#4F9E50"),
+    "offer-pending": ("Pending decision", 3, "#56B8AC"),
+    "declined": ("Declined", 3, "#E1B632"),
 }
+_TREE_NODE_ORDER = {
+    "applications": 0,
+    "interviews": 0,
+    "rejected": 1,
+    "no-response": 2,
+    "withdrawn": 3,
+    "expired": 4,
+    "offers": 0,
+    "in-process": 1,
+    "no-offer": 2,
+    "accepted": 0,
+    "offer-pending": 1,
+    "declined": 2,
+}
+_TREE_RIBBON_COLORS = {
+    "interviews": "#9CBBD7",
+    "rejected": "#F4B168",
+    "no-response": "#EE9A9E",
+    "withdrawn": "#BFC1C8",
+    "expired": "#C7A18D",
+    "offers": "#A5D7D0",
+    "in-process": "#B1C9DF",
+    "no-offer": "#E7969A",
+    "accepted": "#A6D0A7",
+    "offer-pending": "#B3DCD7",
+    "declined": "#EEDB88",
+}
+_INTERVIEW_PROCESS_STATUSES = frozenset(
+    {"oa", "interview", "interview-2", "interview-3", "final-interview"}
+)
 _STATUS_PROGRESS = {
     "researching": 0,
     "draft": 0,
@@ -111,7 +139,7 @@ _PRE_APPLICATION_STATUSES = frozenset({"draft", "ready", "researching", "unknown
 _STATUS_AUDIT_ACTIONS = frozenset(
     {"application.status_updated", "application.status_updated_from_mail"}
 )
-_ORBIT_RENDER_VERSION = 4
+_ORBIT_RENDER_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -172,22 +200,8 @@ def _canonical_status(value: object) -> str:
     )
 
 
-def _status_label(status: str) -> str:
-    return _STATUS_LABELS.get(status, status.replace("-", " ").title())
-
-
-def _status_color(status: str) -> str:
-    return _STATUS_COLORS.get(status, _STATUS_COLORS["unknown"])
-
-
-def _is_negative_node(node: OrbitNode) -> bool:
-    return any(
-        node.id == status or node.id.startswith(f"{status}-stage-") for status in _NEGATIVE_OUTCOMES
-    )
-
-
 def _ribbon_color(target: OrbitNode) -> str:
-    return _OUTCOME_RIBBON if _is_negative_node(target) else _PROGRESS_RIBBON
+    return _TREE_RIBBON_COLORS.get(target.id, target.color)
 
 
 def _recorded_statuses(
@@ -233,30 +247,55 @@ def _recorded_statuses(
     return compact or [current], True, corrected
 
 
-def _terminal_node(status: str, previous: str) -> tuple[str, str, int]:
-    column = max(_STATUS_COLUMNS.get(previous, 0) + 1, 1)
-    return f"{status}-stage-{column}", _status_label(status), column
+def _tree_node(identifier: str) -> tuple[str, str, int, str]:
+    label, column, _ = _TREE_NODE_SPECS[identifier]
+    return identifier, label, column, identifier
 
 
-def _journey_nodes(statuses: Sequence[str]) -> list[tuple[str, str, int, str]]:
-    nodes: list[tuple[str, str, int, str]] = []
-    previous = "applied"
-    for status in statuses:
-        if status in _TERMINAL_STATUSES:
-            identifier, label, column = _terminal_node(status, previous)
-            nodes.append((identifier, label, column, status))
-            previous = status
-            continue
-        nodes.append(
-            (
-                status,
-                _status_label(status),
-                _STATUS_COLUMNS.get(status, _STATUS_COLUMNS.get(previous, 0) + 1),
-                status,
-            )
+def _outcome_tree_path(statuses: Sequence[str]) -> list[tuple[str, str, int, str]]:
+    """Project one truthful application history onto Orbit's stable outcome hierarchy."""
+    current = statuses[-1]
+    observed = set(statuses)
+    reached_process = bool(observed & _INTERVIEW_PROCESS_STATUSES) or bool(
+        observed & {"offer", "accepted"}
+    )
+    path = [_tree_node("applications")]
+    if current in {"applied", "awaiting-response"}:
+        return [*path, _tree_node("no-response")]
+    if current == "rejected":
+        return (
+            [*path, _tree_node("interviews"), _tree_node("no-offer")]
+            if reached_process
+            else [*path, _tree_node("rejected")]
         )
-        previous = status
-    return nodes
+    if current == "withdrawn":
+        return [*path, _tree_node("withdrawn")]
+    if current == "expired":
+        return [*path, _tree_node("expired")]
+    if current in _INTERVIEW_PROCESS_STATUSES:
+        return [*path, _tree_node("interviews"), _tree_node("in-process")]
+    if current == "offer":
+        return [
+            *path,
+            _tree_node("interviews"),
+            _tree_node("offers"),
+            _tree_node("offer-pending"),
+        ]
+    if current == "accepted":
+        return [
+            *path,
+            _tree_node("interviews"),
+            _tree_node("offers"),
+            _tree_node("accepted"),
+        ]
+    if current == "declined":
+        return [
+            *path,
+            _tree_node("interviews"),
+            _tree_node("offers"),
+            _tree_node("declined"),
+        ]
+    return []
 
 
 def _pipeline_statuses(statuses: Sequence[str]) -> tuple[list[str], bool]:
@@ -267,14 +306,6 @@ def _pipeline_statuses(statuses: Sequence[str]) -> tuple[list[str], bool]:
     if "applied" in pipeline:
         return pipeline[pipeline.index("applied") :], True
     return ["applied", *pipeline], False
-
-
-def _with_current_outcome(statuses: Sequence[str]) -> list[str]:
-    """Give a submitted role with no later event an explicit visible branch."""
-    pipeline = list(statuses)
-    if pipeline == ["applied"]:
-        pipeline.append("awaiting-response")
-    return pipeline
 
 
 def _tracker_by_identity(entries: Sequence[TrackerEntry], *, cycle: str) -> dict[str, TrackerEntry]:
@@ -328,7 +359,8 @@ def build_orbit_snapshot(
     }
     node_applications: dict[str, set[str]] = defaultdict(set)
     node_specs: dict[str, tuple[str, int, str]] = {}
-    link_applications: dict[tuple[str, str, bool], set[str]] = defaultdict(set)
+    link_applications: dict[tuple[str, str], set[str]] = defaultdict(set)
+    link_is_fully_recorded: dict[tuple[str, str], bool] = {}
     recorded_history_count = 0
     snapshot_only_count = 0
     corrected_transition_count = 0
@@ -346,7 +378,11 @@ def build_orbit_snapshot(
             node_specs[identifier] = (label, column, status)
             node_applications[identifier].add(key)
             if previous is not None:
-                link_applications[(previous, identifier, recorded)].add(key)
+                link_key = (previous, identifier)
+                link_applications[link_key].add(key)
+                link_is_fully_recorded[link_key] = (
+                    link_is_fully_recorded.get(link_key, True) and recorded
+                )
             previous = identifier
 
     for application in selected_applications:
@@ -356,27 +392,25 @@ def build_orbit_snapshot(
         pipeline, applied_was_recorded = _pipeline_statuses(statuses)
         if not pipeline:
             continue
-        pipeline = _with_current_outcome(pipeline)
         corrected_transition_count += corrected
         local_application_count += 1
         path_is_recorded = recorded and applied_was_recorded
         if path_is_recorded:
             recorded_history_count += 1
-            add_path(application.id, _journey_nodes(pipeline), recorded=True)
+            add_path(application.id, _outcome_tree_path(pipeline), recorded=True)
         else:
             snapshot_only_count += 1
-            add_path(application.id, _journey_nodes(pipeline), recorded=False)
+            add_path(application.id, _outcome_tree_path(pipeline), recorded=False)
 
     for identity, entry in tracker_only.items():
         pipeline, _ = _pipeline_statuses([_canonical_status(entry.status)])
         if not pipeline:
             continue
-        pipeline = _with_current_outcome(pipeline)
         tracker_only_count += 1
         snapshot_only_count += 1
         add_path(
             f"tracker:{identity}",
-            _journey_nodes(pipeline),
+            _outcome_tree_path(pipeline),
             recorded=False,
         )
 
@@ -388,12 +422,12 @@ def build_orbit_snapshot(
                     label=spec[0],
                     column=spec[1],
                     count=len(node_applications[identifier]),
-                    color=_status_color(spec[2]),
+                    color=_TREE_NODE_SPECS[identifier][2],
                 )
                 for identifier, spec in node_specs.items()
                 if node_applications[identifier]
             ),
-            key=lambda item: (item.column, item.label.casefold(), item.id),
+            key=lambda item: (item.column, _TREE_NODE_ORDER[item.id]),
         )
     )
     node_colors = {node.id: node.color for node in nodes}
@@ -405,15 +439,15 @@ def build_orbit_snapshot(
                     target=target,
                     count=len(keys),
                     color=node_colors.get(target, _STATUS_COLORS["unknown"]),
-                    recorded=recorded,
+                    recorded=link_is_fully_recorded[(source, target)],
                 )
-                for (source, target, recorded), keys in link_applications.items()
+                for (source, target), keys in link_applications.items()
                 if keys
             ),
-            key=lambda item: (item.source, item.target, not item.recorded),
+            key=lambda item: (item.source, item.target),
         )
     )
-    tracked_count = len(node_applications["applied"])
+    tracked_count = len(node_applications["applications"])
     stable_payload: dict[str, object] = {
         "nodes": [asdict(node) for node in nodes],
         "links": [asdict(link) for link in links],
@@ -716,9 +750,7 @@ def _draw_erga_logo(
 
 
 def _visual_label(node: OrbitNode) -> str:
-    if node.id.startswith("rejected-stage-"):
-        return "Rejected"
-    return {"oa": "OA"}.get(node.id, node.label)
+    return node.label
 
 
 def render_orbit_png(
@@ -735,7 +767,8 @@ def render_orbit_png(
     image = Image.new("RGBA", (width * scale, height * scale), _hex_color("#FFFFFF"))
     draw = ImageDraw.Draw(image, "RGBA")
     title_font = _font(38 * scale)
-    label_font = _font(18 * scale, bold=True)
+    count_font = _font(22 * scale, bold=True)
+    label_font = _font(16 * scale)
 
     title = "Erga Orbit Tracker"
     title_box = draw.textbbox((0, 0), title, font=title_font)
@@ -760,12 +793,12 @@ def render_orbit_png(
             fill=_hex_color("#8A8E98"),
         )
     else:
-        chart_left = 72
-        chart_right = width - 112
+        chart_left = 220
+        chart_right = width - 250
         chart_top = 132
         chart_bottom = height - 64
         chart_height = chart_bottom - chart_top
-        max_column = max(max(node.column for node in snapshot.nodes), 4)
+        max_column = max(max(node.column for node in snapshot.nodes), 3)
         columns: dict[int, list[OrbitNode]] = defaultdict(list)
         for node in snapshot.nodes:
             columns[node.column].append(node)
@@ -774,7 +807,7 @@ def render_orbit_png(
         geometry: dict[str, tuple[float, float, float]] = {}
         first_column = min(columns)
         for column, nodes in columns.items():
-            nodes.sort(key=lambda node: (_is_negative_node(node), node.label.casefold(), node.id))
+            nodes.sort(key=lambda node: _TREE_NODE_ORDER[node.id])
             gap = 28
             heights = [max(24.0, node.count * value_scale) for node in nodes]
             total = sum(heights) + gap * max(len(nodes) - 1, 0)
@@ -785,7 +818,7 @@ def render_orbit_png(
                 total = sum(heights) + gap * max(len(nodes) - 1, 0)
             remaining_height = max(chart_height - total, 0)
             y = chart_top + (
-                remaining_height / 2 if column == first_column else remaining_height * 0.15
+                remaining_height / 2 if column == first_column else remaining_height * 0.10
             )
             x = chart_left + (chart_right - chart_left) * column / max_column
             for node, node_height in zip(nodes, heights):
@@ -805,8 +838,7 @@ def render_orbit_png(
             key=lambda item: (
                 node_by_id[item.source].column,
                 geometry[item.source][1],
-                _is_negative_node(node_by_id[item.target]),
-                -node_by_id[item.target].column,
+                _TREE_NODE_ORDER[item.target],
                 geometry[item.target][1],
             ),
         ):
@@ -831,7 +863,7 @@ def render_orbit_png(
             color = _ribbon_color(node_by_id[link.target])
             draw.polygon(
                 _ribbon_points(
-                    source_x + 11,
+                    source_x + 14,
                     source_top,
                     source_bottom,
                     target_x,
@@ -845,31 +877,38 @@ def render_orbit_png(
         for node in snapshot.nodes:
             x, y0, y1 = geometry[node.id]
             draw.rounded_rectangle(
-                (x * scale, y0 * scale, (x + 11) * scale, y1 * scale),
+                (x * scale, y0 * scale, (x + 14) * scale, y1 * scale),
                 radius=4 * scale,
                 fill=_hex_color(node.color),
             )
-            label = f"{_visual_label(node)}  {node.count}"
+            count = f"{node.count:,}"
+            label = _visual_label(node)
+            count_box = draw.textbbox((0, 0), count, font=count_font)
             label_box = draw.textbbox((0, 0), label, font=label_font)
-            label_width = (label_box[2] - label_box[0]) / scale
+            label_width = max(count_box[2] - count_box[0], label_box[2] - label_box[0]) / scale
+            count_height = (count_box[3] - count_box[1]) / scale
             label_height = (label_box[3] - label_box[1]) / scale
-            if node.column >= max_column:
-                label_x = x - label_width - 14
-            else:
-                label_x = x + 20
-            label_y = (y0 + y1 - label_height) / 2 - 3
+            text_height = count_height + label_height + 2
+            label_x = x - label_width - 18 if node.column == 0 else x + 22
+            label_y = (y0 + y1 - text_height) / 2
             draw.rounded_rectangle(
                 (
                     (label_x - 6) * scale,
                     (label_y - 4) * scale,
                     (label_x + label_width + 6) * scale,
-                    (label_y + label_height + 6) * scale,
+                    (label_y + text_height + 6) * scale,
                 ),
                 radius=5 * scale,
                 fill=(255, 255, 255, 232),
             )
             draw.text(
                 (label_x * scale, label_y * scale),
+                count,
+                font=count_font,
+                fill=_hex_color("#171717"),
+            )
+            draw.text(
+                (label_x * scale, (label_y + count_height + 2) * scale),
                 label,
                 font=label_font,
                 fill=_hex_color("#171717"),

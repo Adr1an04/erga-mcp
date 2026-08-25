@@ -85,11 +85,44 @@ class OrbitTests(unittest.TestCase):
         self.assertEqual(snapshot.local_application_count, 3)
         self.assertEqual(snapshot.recorded_history_count, 3)
         self.assertEqual(snapshot.snapshot_only_count, 0)
-        self.assertEqual(links[("applied", "oa")], 1)
-        self.assertEqual(links[("oa", "rejected-stage-2")], 1)
-        self.assertEqual(links[("applied", "interview")], 1)
-        self.assertEqual(links[("applied", "awaiting-response")], 1)
+        self.assertEqual(links[("applications", "interviews")], 2)
+        self.assertEqual(links[("interviews", "no-offer")], 1)
+        self.assertEqual(links[("interviews", "in-process")], 1)
+        self.assertEqual(links[("applications", "no-response")], 1)
         self.assertNotIn("draft", {node.id for node in snapshot.nodes})
+
+    def test_collapses_raw_statuses_into_a_readable_outcome_tree(self) -> None:
+        journeys = {
+            "accepted": ("draft", "applied", "interview", "offer", "accepted"),
+            "declined": ("draft", "applied", "interview", "offer", "declined"),
+            "no-offer": ("draft", "applied", "interview", "rejected"),
+            "interviewing": ("draft", "applied", "oa", "interview"),
+            "rejected-one": ("draft", "applied", "rejected"),
+            "rejected-two": ("draft", "applied", "rejected"),
+            "pending-one": ("draft", "applied"),
+            "pending-two": ("draft", "applied"),
+        }
+        applications = [
+            _application(identifier, status=statuses[-1])
+            for identifier, statuses in journeys.items()
+        ]
+        audits = [
+            event
+            for identifier, statuses in journeys.items()
+            for event in _journey(identifier, statuses)
+        ]
+
+        snapshot = build_orbit_snapshot(applications, audits)
+        links = {(link.source, link.target): link.count for link in snapshot.links}
+
+        self.assertEqual(links[("applications", "interviews")], 4)
+        self.assertEqual(links[("applications", "rejected")], 2)
+        self.assertEqual(links[("applications", "no-response")], 2)
+        self.assertEqual(links[("interviews", "offers")], 2)
+        self.assertEqual(links[("interviews", "no-offer")], 1)
+        self.assertEqual(links[("interviews", "in-process")], 1)
+        self.assertEqual(links[("offers", "accepted")], 1)
+        self.assertEqual(links[("offers", "declined")], 1)
 
     def test_every_applied_role_flows_to_one_visible_current_branch(self) -> None:
         applications = [
@@ -101,16 +134,16 @@ class OrbitTests(unittest.TestCase):
 
         snapshot = build_orbit_snapshot(applications, [])
         nodes = {node.id: node for node in snapshot.nodes}
-        outgoing_from_applied = sum(
-            link.count for link in snapshot.links if link.source == "applied"
+        outgoing_from_applications = sum(
+            link.count for link in snapshot.links if link.source == "applications"
         )
 
         self.assertEqual(snapshot.tracked_count, 4)
-        self.assertEqual(nodes["awaiting-response"].label, "No response")
-        self.assertEqual(nodes["awaiting-response"].count, 2)
-        self.assertEqual(nodes["oa"].count, 1)
-        self.assertEqual(nodes["rejected-stage-1"].count, 1)
-        self.assertEqual(outgoing_from_applied, snapshot.tracked_count)
+        self.assertEqual(nodes["no-response"].label, "No response")
+        self.assertEqual(nodes["no-response"].count, 2)
+        self.assertEqual(nodes["interviews"].count, 1)
+        self.assertEqual(nodes["rejected"].count, 1)
+        self.assertEqual(outgoing_from_applications, snapshot.tracked_count)
 
     def test_tracker_only_rows_are_labeled_as_snapshot_only_not_fake_history(self) -> None:
         tracker = TrackerEntry(
@@ -130,7 +163,8 @@ class OrbitTests(unittest.TestCase):
         self.assertEqual(snapshot.tracked_count, 1)
         self.assertEqual(snapshot.recorded_history_count, 0)
         self.assertEqual(snapshot.snapshot_only_count, 1)
-        self.assertEqual(links[("applied", "interview", False)], 1)
+        self.assertEqual(links[("applications", "interviews", False)], 1)
+        self.assertEqual(links[("interviews", "in-process", False)], 1)
         self.assertNotIn("history-unavailable", {node.id for node in snapshot.nodes})
 
     def test_numbered_interviews_are_real_stages_without_setup_jargon(self) -> None:
@@ -149,8 +183,14 @@ class OrbitTests(unittest.TestCase):
         labels = {node.label for node in snapshot.nodes}
         links = {(link.source, link.target, link.recorded) for link in snapshot.links}
 
-        self.assertEqual(labels, {"Applied", "Interview 2"})
-        self.assertEqual(links, {("applied", "interview-2", False)})
+        self.assertEqual(labels, {"Applications", "Interview process", "In process"})
+        self.assertEqual(
+            links,
+            {
+                ("applications", "interviews", False),
+                ("interviews", "in-process", False),
+            },
+        )
 
     def test_pre_application_roles_are_not_part_of_the_funnel(self) -> None:
         applications = [
@@ -213,8 +253,9 @@ class OrbitTests(unittest.TestCase):
         links = {(link.source, link.target) for link in snapshot.links}
 
         self.assertEqual(snapshot.corrected_transition_count, 1)
-        self.assertIn(("applied", "oa"), links)
-        self.assertNotIn(("rejected-stage-1", "oa"), links)
+        self.assertIn(("applications", "interviews"), links)
+        self.assertIn(("interviews", "in-process"), links)
+        self.assertNotIn(("applications", "rejected"), links)
 
     def test_renders_an_erga_branded_png(self) -> None:
         application = _application("one", status="rejected")
@@ -237,7 +278,7 @@ class OrbitTests(unittest.TestCase):
             )
             self.assertIsNotNone(color_counts)
             colors = {color for _, color in color_counts or []}
-            self.assertTrue(any(g > r + 25 and g > b + 25 for r, g, b in colors))
+            self.assertTrue(any(b > r + 25 and b > g + 10 for r, g, b in colors))
             self.assertTrue(any(r > g + 25 and r > b + 25 for r, g, b in colors))
             title_colors = rendered_image.crop((500, 20, 1100, 100)).getcolors(maxcolors=600 * 80)
             logo_colors = rendered_image.crop((1320, 804, 1570, 892)).getcolors(maxcolors=250 * 88)
