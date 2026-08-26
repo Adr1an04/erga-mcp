@@ -133,6 +133,15 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(result.kind, "unknown")
         self.assertFalse(result.requires_review)
 
+    def test_named_hack_event_application_is_not_a_job_application(self) -> None:
+        result = classify_application_message(
+            subject="Example Hacks IX - We received your application!",
+            preview="Your participant application has been received.",
+        )
+
+        self.assertEqual(result.kind, "unknown")
+        self.assertFalse(result.requires_review)
+
 
 if __name__ == "__main__":
     unittest.main()

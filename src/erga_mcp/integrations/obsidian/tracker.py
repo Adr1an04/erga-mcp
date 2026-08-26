@@ -35,6 +35,10 @@ _LOOSE_ROLE_CYCLE_PATTERN = re.compile(
     r"undergraduate|graduate|campus|software)){0,5}\s*[-–—,:]?\s*(20\d{2})\b",
     re.IGNORECASE,
 )
+_ROLE_SEASON_PATTERN = re.compile(r"\b(Winter|Spring|Summer|Fall)\b", re.IGNORECASE)
+_ROLE_YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
+_INTERNSHIP_ROLE_PATTERN = re.compile(r"\b(?:intern|internship|internships|co-?op)\b", re.I)
+_SEASON_INFERENCE_CUTOFF_MONTH = {"winter": 2, "spring": 5, "summer": 6, "fall": 8}
 _SOURCE_URL_PATTERN = re.compile(r"https?://[^)\s|]+", re.IGNORECASE)
 _MANAGED_MAIL_SOURCE = "email acknowledgement"
 
@@ -244,6 +248,21 @@ def _explicit_event_cycles(event: MailEvent) -> tuple[str, ...]:
         add(season, year)
     for season, year in _LOOSE_ROLE_CYCLE_PATTERN.findall(text):
         add(season, year)
+    if found:
+        return tuple(found)
+
+    seasons = {season.casefold() for season in _ROLE_SEASON_PATTERN.findall(event.role_hint)}
+    if len(seasons) == 1:
+        season = seasons.pop()
+        inferred_year = event.received_at.year + int(
+            event.received_at.month > _SEASON_INFERENCE_CUTOFF_MONTH[season]
+        )
+        add(season, str(inferred_year))
+        return tuple(found)
+
+    years = set(_ROLE_YEAR_PATTERN.findall(text))
+    if len(years) == 1 and _INTERNSHIP_ROLE_PATTERN.search(event.role_hint):
+        add("Summer", years.pop())
     return tuple(found)
 
 

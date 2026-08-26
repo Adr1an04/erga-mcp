@@ -171,7 +171,10 @@ are shown, duplicate or obsolete `Email acknowledgement` rows are repaired or re
 rows created from event registrations are excluded. Rows the user created from postings, notes, or
 manual research are never deleted by that cleanup. When a receipt names a recruiting term, including
 forms such as `Summer 2027` or `Summer Internship Program - 2027`, that term selects the tracker;
-the email's received date is only a fallback when the role does not name a term.
+year-only internship programs such as `2027 Internships` resolve to Summer 2027, and a season-only
+title such as `(Winter)` resolves to its next recruiting term. Existing exact tracker identity is
+preferred before the email's received date is used as a final fallback. Known ATS relay domains are
+never presented as employers; their bounded subject/body identity is parsed instead.
 
 ## Live request experience and color system
 

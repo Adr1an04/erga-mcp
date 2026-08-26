@@ -425,6 +425,28 @@ class ObsidianTrackerTests(unittest.TestCase):
                     company_hint="Example Entertainment",
                     role_hint="Platform Engineering Internship, Spring 2027",
                 ),
+                MailEvent(
+                    message_id="winter-receipt",
+                    received_at=datetime(2026, 8, 17, tzinfo=UTC),
+                    sender="careers@example.test",
+                    subject="Application received",
+                    kind="application.acknowledgement",
+                    confidence=0.95,
+                    requires_review=False,
+                    company_hint="Example Metrics",
+                    role_hint="Software Engineering Intern (Winter)",
+                ),
+                MailEvent(
+                    message_id="year-only-receipt",
+                    received_at=datetime(2026, 8, 19, tzinfo=UTC),
+                    sender="careers@example.test",
+                    subject="Application received",
+                    kind="application.acknowledgement",
+                    confidence=0.95,
+                    requires_review=False,
+                    company_hint="Example Compute",
+                    role_hint="2027 Internships: Systems Software Engineering",
+                ),
             ]
 
             first = import_confirmed_application_tracker_rows(
@@ -440,14 +462,21 @@ class ObsidianTrackerTests(unittest.TestCase):
             spring_rendered = (tracker / "Spring 2027 Application Tracker.md").read_text(
                 encoding="utf-8"
             )
+            winter_rendered = (tracker / "Winter 2027 Application Tracker.md").read_text(
+                encoding="utf-8"
+            )
 
             self.assertGreater(first, 0)
             self.assertEqual(second, 0)
             self.assertIn("| User Company | User Role |", fall_rendered)
             self.assertNotIn("Example Financial", fall_rendered)
             self.assertNotIn("Example Entertainment", fall_rendered)
+            self.assertNotIn("Example Metrics", fall_rendered)
+            self.assertNotIn("Example Compute", fall_rendered)
             self.assertIn("| Example Financial | Campus Undergraduate Summer", summer_rendered)
+            self.assertIn("| Example Compute | 2027 Internships:", summer_rendered)
             self.assertIn("| Example Entertainment | Platform Engineering", spring_rendered)
+            self.assertIn("| Example Metrics | Software Engineering Intern", winter_rendered)
 
     def test_routes_termless_receipt_to_its_existing_job_tracker(self) -> None:
         with TemporaryDirectory() as directory:

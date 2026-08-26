@@ -18,6 +18,7 @@ from erga_mcp.integrations.mail.zoho_live import (
 )
 from erga_mcp.models import MailEvent
 from erga_mcp.store import ErgaStore
+from erga_mcp.tracking.mail_receipts import RECEIPT_PARSER_VERSION
 
 
 class LiveZohoSyncTests(unittest.TestCase):
@@ -360,7 +361,7 @@ class LiveZohoSyncTests(unittest.TestCase):
             confidence=0.95,
             requires_review=False,
             receipt_parsed=True,
-            receipt_parser_version=1,
+            receipt_parser_version=RECEIPT_PARSER_VERSION - 1,
         )
         current = MailEvent(
             message_id="current-parser-result",
@@ -371,7 +372,7 @@ class LiveZohoSyncTests(unittest.TestCase):
             confidence=0.95,
             requires_review=False,
             receipt_parsed=True,
-            receipt_parser_version=2,
+            receipt_parser_version=RECEIPT_PARSER_VERSION,
         )
 
         self.assertEqual(receipt_recovery_message_ids([legacy, current]), {legacy.message_id})
@@ -408,7 +409,7 @@ class LiveZohoSyncTests(unittest.TestCase):
 
         self.assertEqual(result["reparsed"], 1)
         self.assertEqual(retained.kind, "other")
-        self.assertEqual(retained.receipt_parser_version, 2)
+        self.assertEqual(retained.receipt_parser_version, RECEIPT_PARSER_VERSION)
 
     def test_oa_and_interview_survive_normal_email_footers(self) -> None:
         messages = [

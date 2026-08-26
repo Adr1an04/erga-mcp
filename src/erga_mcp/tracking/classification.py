@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -104,6 +105,9 @@ _ACKNOWLEDGEMENT_MARKERS = (
     "we want to confirm that your application",
     "successfully submitted your",
 )
+_NAMED_HACK_EVENT_SUBJECT = re.compile(
+    r"\b[a-z0-9&.'-]+\s+hacks?(?:\s+[ivxlcdm]+)?\s*[-:]", re.IGNORECASE
+)
 
 
 def classify_application_message(*, subject: str, preview: str) -> Classification:
@@ -111,6 +115,11 @@ def classify_application_message(*, subject: str, preview: str) -> Classificatio
     normalized_subject = subject.casefold()
     content = f"{subject}\n{preview}".casefold()
     if any(marker in normalized_subject for marker in _STRONG_NON_APPLICATION_SUBJECT_MARKERS):
+        return Classification(kind="unknown", confidence=0.0, requires_review=False)
+    if (
+        "application" in normalized_subject
+        and _NAMED_HACK_EVENT_SUBJECT.search(subject) is not None
+    ) or "participant application" in content:
         return Classification(kind="unknown", confidence=0.0, requires_review=False)
     if any(marker in content for marker in _DENIAL_MARKERS):
         return Classification(kind="denial", confidence=0.95, requires_review=True)

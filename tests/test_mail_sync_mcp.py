@@ -13,6 +13,7 @@ from erga_mcp.integrations.mail.zoho import MailMessageMetadata
 from erga_mcp.mcp.server import build_server
 from erga_mcp.models import MailEvent
 from erga_mcp.store import ErgaStore
+from erga_mcp.tracking.mail_receipts import RECEIPT_PARSER_VERSION
 
 
 class MailSyncMcpTests(unittest.TestCase):
@@ -72,7 +73,7 @@ class MailSyncMcpTests(unittest.TestCase):
             self.assertEqual(retained.kind, "application.acknowledgement")
             self.assertEqual(retained.role_hint, "AI Software Engineering Intern - Edge")
             self.assertTrue(retained.receipt_parsed)
-            self.assertEqual(retained.receipt_parser_version, 2)
+            self.assertEqual(retained.receipt_parser_version, RECEIPT_PARSER_VERSION)
             self.assertIn("1 recovered recruiting", payload["message"])
             self.assertIn("Reparsed 1 stored message", payload["message"])
             self.assertEqual(fetch.call_args.kwargs["known_message_ids"], set())

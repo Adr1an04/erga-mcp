@@ -86,6 +86,47 @@ class MailReceiptTests(unittest.TestCase):
         self.assertEqual(receipt.company, "Example Computing")
         self.assertEqual(receipt.role, "Software Developer Intern 2027")
 
+    def test_greenhouse_relay_uses_subject_company_and_body_role(self) -> None:
+        receipt = parse_application_receipt(
+            sender="no-reply@us.greenhouse-mail.io",
+            subject="Thank you for applying to Example Security",
+            content=(
+                "We have received your application for the Software Engineering Intern, "
+                "Summer 2027 position at Example Security."
+            ),
+        )
+
+        self.assertEqual(receipt.company, "Example Security")
+        self.assertEqual(receipt.role, "Software Engineering Intern, Summer 2027")
+
+    def test_smartrecruiters_relay_does_not_become_the_company(self) -> None:
+        receipt = parse_application_receipt(
+            sender="notification@smartrecruiters.com",
+            subject="Thank you for applying to Example Storage",
+            content=(
+                "We received your application for the Firmware Engineering Intern role "
+                "at Example Storage."
+            ),
+        )
+
+        self.assertEqual(receipt.company, "Example Storage")
+        self.assertEqual(receipt.role, "Firmware Engineering Intern")
+
+    def test_company_domain_ignores_io_tld_and_common_hq_suffix(self) -> None:
+        io_receipt = parse_application_receipt(
+            sender="notifications@example-security.io",
+            subject="Application received",
+            content="We received your application for the Software Engineering Intern role.",
+        )
+        hq_receipt = parse_application_receipt(
+            sender="notifications@exampledatahq.com",
+            subject="Application received",
+            content="We received your application for the Platform Engineering Intern role.",
+        )
+
+        self.assertEqual(io_receipt.company, "Example Security")
+        self.assertEqual(hq_receipt.company, "Exampledata")
+
 
 if __name__ == "__main__":
     unittest.main()

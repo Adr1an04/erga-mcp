@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from email.utils import parseaddr
 
-RECEIPT_PARSER_VERSION = 2
+RECEIPT_PARSER_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,9 @@ _SUBJECT_COMPANY_ROLE_PATTERNS = (
 _SUBJECT_ROLE_PATTERNS = (
     re.compile(r"(?:thank\s+you|thanks)\s+for\s+applying\s+to\s+(.+)$", re.I),
 )
+_SUBJECT_APPLYING_TO_PATTERN = re.compile(
+    r"(?:thank\s+you|thanks)\s+for\s+applying\s+to\s+(.+?)(?:[!.,:]|$)", re.I
+)
 _SUBJECT_COMPANY_PATTERNS = (
     re.compile(r"(?:thank\s+you|thanks)\s+for\s+your\s+interest\s+in\s+(.+?)(?:[!.,:]|$)", re.I),
     re.compile(r"(?:thank\s+you|thanks)\s+for\s+applying\s+at\s+(.+?)(?:[!.,:]|$)", re.I),
@@ -72,11 +75,14 @@ _BODY_COMPANY_PATTERNS = (
 )
 _ATS_RELAY_DOMAINS = (
     "eightfold.ai",
+    "greenhouse-mail.io",
     "icims.com",
     "myworkday.com",
     "myworkdayjobs.com",
+    "smartrecruiters.com",
     "workday.com",
 )
+_ATS_COMPANY_IN_SUBJECT_DOMAINS = ("greenhouse-mail.io", "smartrecruiters.com")
 _GENERIC_SENDER_PARTS = frozenset(
     {
         "applicant",
@@ -119,18 +125,43 @@ def _company_from_sender(sender: str) -> str:
     local, separator, domain = address.casefold().partition("@")
     if not separator:
         return ""
-    if any(domain == suffix or domain.endswith(f".{suffix}") for suffix in _ATS_RELAY_DOMAINS):
+    is_ats_relay = any(
+        domain == suffix or domain.endswith(f".{suffix}") for suffix in _ATS_RELAY_DOMAINS
+    )
+    if is_ats_relay:
         candidate = re.split(r"[+._-]", local, maxsplit=1)[0]
         if candidate and candidate not in _GENERIC_SENDER_PARTS:
             return _bounded_display(candidate.replace("-", " ").title(), limit=100)
+        return ""
     labels = [label for label in domain.split(".") if label not in _GENERIC_SENDER_PARTS]
-    labels = [label for label in labels if label not in {"com", "co", "org", "net", "ai"}]
+    labels = [
+        label
+        for label in labels
+        if label not in {"ai", "app", "co", "com", "dev", "io", "jobs", "net", "org", "test"}
+    ]
     if labels:
-        return _bounded_display(labels[-1].replace("-", " ").title(), limit=100)
+        candidate = labels[-1]
+        if candidate.endswith("hq") and len(candidate) > 4:
+            candidate = candidate[:-2]
+        return _bounded_display(candidate.replace("-", " ").title(), limit=100)
     return ""
 
 
+def _ats_subject_company(sender: str, subject: str) -> str:
+    _display, address = parseaddr(sender)
+    _local, separator, domain = address.casefold().partition("@")
+    if not separator or not any(
+        domain == suffix or domain.endswith(f".{suffix}")
+        for suffix in _ATS_COMPANY_IN_SUBJECT_DOMAINS
+    ):
+        return ""
+    match = _SUBJECT_APPLYING_TO_PATTERN.search(subject)
+    return _bounded_display(match.group(1), limit=100) if match else ""
+
+
 def _company_hint(sender: str, subject: str, content: str) -> str:
+    if company := _ats_subject_company(sender, subject):
+        return company
     for pattern in _SUBJECT_COMPANY_PATTERNS:
         if match := pattern.search(subject):
             return _bounded_display(match.group(1), limit=100)
@@ -148,6 +179,7 @@ def _strip_receipt_prefix(value: str, *, company: str, requisitions: tuple[str, 
         normalized = re.sub(rf"^\s*{re.escape(company)}\s+", "", normalized, flags=re.I)
     normalized = re.sub(r"^\s*(?:the\s+)?(?:position|role)\s+of\s+", "", normalized, flags=re.I)
     normalized = re.sub(r"^\s*(?:the\s+)?role\s*:\s*", "", normalized, flags=re.I)
+    normalized = re.sub(r"\s+(?:position|role)\s*$", "", normalized, flags=re.I)
     return _bounded_display(normalized, limit=200)
 
 
@@ -179,7 +211,7 @@ def parse_application_receipt(
         if match := pattern.search(body_plain):
             role = _strip_receipt_prefix(match.group(1), company=company, requisitions=requisitions)
             break
-    if not role:
+    if not role and not _ats_subject_company(sender, subject):
         for pattern in _SUBJECT_ROLE_PATTERNS:
             if match := pattern.search(subject):
                 candidate = re.sub(r"\s+-\s+\d{6,}\s*$", "", match.group(1))
