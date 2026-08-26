@@ -169,7 +169,9 @@ read-only reparse instead of remaining permanently misclassified. Mail-created t
 canonical projection rather than an append-only import: only receipts with both a company and role
 are shown, duplicate or obsolete `Email acknowledgement` rows are repaired or removed on sync, and
 rows created from event registrations are excluded. Rows the user created from postings, notes, or
-manual research are never deleted by that cleanup.
+manual research are never deleted by that cleanup. When a receipt names a recruiting term, including
+forms such as `Summer 2027` or `Summer Internship Program - 2027`, that term selects the tracker;
+the email's received date is only a fallback when the role does not name a term.
 
 ## Live request experience and color system
 

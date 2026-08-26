@@ -365,10 +365,10 @@ class ObsidianTrackerTests(unittest.TestCase):
             ]
 
             first = import_confirmed_application_tracker_rows(
-                tracker_dir=tracker, active_cycles=("Fall 2026",), events=events
+                tracker_dir=tracker, active_cycles=(), events=events
             )
             second = import_confirmed_application_tracker_rows(
-                tracker_dir=tracker, active_cycles=("Fall 2026",), events=events
+                tracker_dir=tracker, active_cycles=(), events=events
             )
             rendered = tracker_path.read_text(encoding="utf-8")
 
@@ -379,6 +379,116 @@ class ObsidianTrackerTests(unittest.TestCase):
             self.assertNotIn("Application confirmed by email", rendered)
             self.assertNotIn("the position of", rendered)
             self.assertNotIn("Example Hackathon", rendered)
+
+    def test_routes_receipts_by_role_term_instead_of_email_date(self) -> None:
+        with TemporaryDirectory() as directory:
+            tracker = Path(directory)
+            fall_tracker = tracker / "Fall 2026 Application Tracker.md"
+            fall_tracker.write_text(
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| User Company | User Role | Remote | Saved posting | Researching |  | "
+                "Review requirements. | Note |\n"
+                "| Example Financial | Campus Undergraduate Summer Internship Program - "
+                "2027 Digital Product |  | Email acknowledgement | Applied | 2026-08-03 | "
+                "Await recruiting update. |  |\n"
+                "| Example Entertainment | Platform Engineering Internship, Spring 2027 |  | "
+                "Email acknowledgement | Applied | 2026-08-25 | Await recruiting update. |  |\n",
+                encoding="utf-8",
+            )
+            events = [
+                MailEvent(
+                    message_id="summer-receipt",
+                    received_at=datetime(2026, 8, 3, tzinfo=UTC),
+                    sender="careers@example.test",
+                    subject=(
+                        "Thank you for applying to Campus Undergraduate Summer Internship "
+                        "Program - 2027 Digital Product"
+                    ),
+                    kind="application.acknowledgement",
+                    confidence=0.95,
+                    requires_review=False,
+                    company_hint="Example Financial",
+                    role_hint=(
+                        "Campus Undergraduate Summer Internship Program - 2027 Digital Product"
+                    ),
+                ),
+                MailEvent(
+                    message_id="spring-receipt",
+                    received_at=datetime(2026, 8, 25, tzinfo=UTC),
+                    sender="careers@example.test",
+                    subject="Application received",
+                    kind="application.acknowledgement",
+                    confidence=0.95,
+                    requires_review=False,
+                    company_hint="Example Entertainment",
+                    role_hint="Platform Engineering Internship, Spring 2027",
+                ),
+            ]
+
+            first = import_confirmed_application_tracker_rows(
+                tracker_dir=tracker, active_cycles=(), events=events
+            )
+            second = import_confirmed_application_tracker_rows(
+                tracker_dir=tracker, active_cycles=(), events=events
+            )
+            fall_rendered = fall_tracker.read_text(encoding="utf-8")
+            summer_rendered = (tracker / "Summer 2027 Application Tracker.md").read_text(
+                encoding="utf-8"
+            )
+            spring_rendered = (tracker / "Spring 2027 Application Tracker.md").read_text(
+                encoding="utf-8"
+            )
+
+            self.assertGreater(first, 0)
+            self.assertEqual(second, 0)
+            self.assertIn("| User Company | User Role |", fall_rendered)
+            self.assertNotIn("Example Financial", fall_rendered)
+            self.assertNotIn("Example Entertainment", fall_rendered)
+            self.assertIn("| Example Financial | Campus Undergraduate Summer", summer_rendered)
+            self.assertIn("| Example Entertainment | Platform Engineering", spring_rendered)
+
+    def test_routes_termless_receipt_to_its_existing_job_tracker(self) -> None:
+        with TemporaryDirectory() as directory:
+            tracker = Path(directory)
+            header = (
+                "| Company | Role | Location / work mode | Source | Status | Applied | "
+                "Next action | Contact / link |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            )
+            fall_tracker = tracker / "Fall 2026 Application Tracker.md"
+            fall_tracker.write_text(header, encoding="utf-8")
+            summer_tracker = tracker / "Summer 2027 Applications.md"
+            summer_tracker.write_text(
+                header + "| Example Devices | Systems Software Intern | Remote | Saved posting | "
+                "Researching |  | Review requirements. | Note |\n",
+                encoding="utf-8",
+            )
+            event = MailEvent(
+                message_id="termless-receipt",
+                received_at=datetime(2026, 8, 19, tzinfo=UTC),
+                sender="careers@example.test",
+                subject="We received your application",
+                kind="application.acknowledgement",
+                confidence=0.95,
+                requires_review=False,
+                company_hint="Example Devices",
+                role_hint="Systems Software Intern",
+            )
+
+            changed = import_confirmed_application_tracker_rows(
+                tracker_dir=tracker, active_cycles=("Fall 2026",), events=[event]
+            )
+
+            self.assertEqual(changed, 0)
+            self.assertNotIn("Example Devices", fall_tracker.read_text(encoding="utf-8"))
+            self.assertEqual(
+                summer_tracker.read_text(encoding="utf-8").count(
+                    "| Example Devices | Systems Software Intern |"
+                ),
+                1,
+            )
 
     def test_marks_only_exactly_matched_acknowledgements_as_applied(self) -> None:
         with TemporaryDirectory() as directory:

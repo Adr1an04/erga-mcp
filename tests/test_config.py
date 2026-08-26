@@ -310,13 +310,30 @@ bullet_max_chars = 90
             config_path.write_text(
                 DEFAULT_CONFIG.replace("enabled = false", "enabled = true")
                 .replace('tracker_dir = ""', 'tracker_dir = "tracker"')
-                .replace("active_cycles = []", 'active_cycles = ["Fall 2026", "Spring 2027"]'),
+                .replace(
+                    "active_cycles = []",
+                    'active_cycles = ["Fall 2026", "Winter 2027", "Spring 2027", "Summer 2027"]',
+                ),
                 encoding="utf-8",
             )
 
             config = load_config(config_path)
 
-            self.assertEqual(config.tracker.active_cycles, ("Fall 2026", "Spring 2027"))
+            self.assertEqual(
+                config.tracker.active_cycles,
+                ("Fall 2026", "Winter 2027", "Spring 2027", "Summer 2027"),
+            )
+
+    def test_rejects_unknown_tracker_seasons(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG.replace("active_cycles = []", 'active_cycles = ["Autumn 2027"]'),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Winter, Spring, Summer, or Fall"):
+                load_config(config_path)
 
 
 if __name__ == "__main__":

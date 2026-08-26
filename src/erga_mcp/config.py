@@ -72,7 +72,7 @@ folder = "Job Applications"
 # Optional Obsidian tracker projection. Both `erga setup` and `erga init` may leave it disabled.
 enabled = false
 tracker_dir = ""
-# Explicit recruiting cycles eligible for acknowledgement-based tracker imports.
+# Explicit recruiting cycles used only as fallbacks when a receipt does not name its term.
 active_cycles = []
 
 [orbit]
@@ -340,10 +340,17 @@ def load_config(config_path: Path) -> ErgaConfig:
     active_cycles_value = tracking.get("active_cycles", [])
     if not isinstance(active_cycles_value, list) or any(
         not isinstance(cycle, str)
-        or re.fullmatch(r"(?:Fall|Spring)\s+\d{4}", " ".join(cycle.split()), re.IGNORECASE) is None
+        or re.fullmatch(
+            r"(?:Winter|Spring|Summer|Fall)\s+20\d{2}",
+            " ".join(cycle.split()),
+            re.IGNORECASE,
+        )
+        is None
         for cycle in active_cycles_value
     ):
-        raise ValueError("tracking active_cycles must be a list of Fall YYYY or Spring YYYY values")
+        raise ValueError(
+            "tracking active_cycles must be a list of Winter, Spring, Summer, or Fall YYYY values"
+        )
     active_cycles = tuple(" ".join(cycle.split()) for cycle in active_cycles_value)
     if tracker_enabled and tracker_dir is None:
         raise ValueError("tracking tracker_dir must be configured when tracking is enabled")

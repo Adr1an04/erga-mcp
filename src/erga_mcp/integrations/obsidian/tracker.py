@@ -24,7 +24,17 @@ _EXPECTED_TABLE_COLUMNS = (
     "next action",
     "contact / link",
 )
-_ACTIVE_CYCLE_PATTERN = re.compile(r"^(Fall|Spring)\s+(\d{4})$", re.IGNORECASE)
+_ACTIVE_CYCLE_PATTERN = re.compile(r"^(Winter|Spring|Summer|Fall)\s+(20\d{2})$", re.IGNORECASE)
+_ROLE_CYCLE_PATTERN = re.compile(r"\b(Winter|Spring|Summer|Fall)\s+(20\d{2})\b", re.IGNORECASE)
+_REVERSED_ROLE_CYCLE_PATTERN = re.compile(
+    r"\b(20\d{2})\s+(Winter|Spring|Summer|Fall)\b", re.IGNORECASE
+)
+_LOOSE_ROLE_CYCLE_PATTERN = re.compile(
+    r"\b(Winter|Spring|Summer|Fall)\b"
+    r"(?:\s+(?:internship|intern|co-?op|program|role|position|engineering|"
+    r"undergraduate|graduate|campus|software)){0,5}\s*[-–—,:]?\s*(20\d{2})\b",
+    re.IGNORECASE,
+)
 _SOURCE_URL_PATTERN = re.compile(r"https?://[^)\s|]+", re.IGNORECASE)
 _MANAGED_MAIL_SOURCE = "email acknowledgement"
 
@@ -203,7 +213,7 @@ def reconcile_application_status_tracker_rows(
     return updates
 
 
-def _active_cycle_for_received_at(
+def _fallback_cycle_for_received_at(
     received_at_year: int, received_at_month: int, active_cycles: Sequence[str]
 ) -> str | None:
     season = "Fall" if received_at_month >= 7 else "Spring"
@@ -211,6 +221,75 @@ def _active_cycle_for_received_at(
     return next(
         (cycle for cycle in active_cycles if cycle.casefold() == candidate.casefold()), None
     )
+
+
+def _explicit_event_cycles(event: MailEvent) -> tuple[str, ...]:
+    """Extract bounded recruiting terms from receipt identity, never arbitrary filenames."""
+    text = f"{event.role_hint}\n{event.subject}"
+    found: list[str] = []
+    found_keys: set[str] = set()
+
+    def add(season: str, year_text: str) -> None:
+        year = int(year_text)
+        if year < event.received_at.year - 1 or year > event.received_at.year + 2:
+            return
+        cycle = f"{season.title()} {year}"
+        if cycle.casefold() not in found_keys:
+            found.append(cycle)
+            found_keys.add(cycle.casefold())
+
+    for season, year in _ROLE_CYCLE_PATTERN.findall(text):
+        add(season, year)
+    for year, season in _REVERSED_ROLE_CYCLE_PATTERN.findall(text):
+        add(season, year)
+    for season, year in _LOOSE_ROLE_CYCLE_PATTERN.findall(text):
+        add(season, year)
+    return tuple(found)
+
+
+def _existing_tracker_cycles(tracker_dir: Path) -> tuple[str, ...]:
+    cycles: list[str] = []
+    for path in sorted(tracker_dir.glob("*.md")):
+        stem = path.stem
+        for suffix in (" Application Tracker", " Applications"):
+            if stem.endswith(suffix):
+                cycle = stem.removesuffix(suffix)
+                if _ACTIVE_CYCLE_PATTERN.fullmatch(cycle) and cycle not in cycles:
+                    cycles.append(cycle)
+                break
+    return tuple(cycles)
+
+
+def _existing_tracker_identity_cycles(
+    tracker_dir: Path, cycles: Sequence[str]
+) -> dict[tuple[str, str], tuple[str, ...]]:
+    matches: dict[tuple[str, str], list[str]] = {}
+    for cycle in cycles:
+        candidates = (
+            tracker_dir / f"{cycle} Application Tracker.md",
+            tracker_dir / f"{cycle} Applications.md",
+        )
+        paths = [path for path in candidates if path.is_file()]
+        if len(paths) != 1:
+            continue
+        lines = paths[0].read_text(encoding="utf-8").splitlines()
+        divider_line = _application_table_divider_line(lines)
+        if divider_line is None:
+            continue
+        table_end = _application_table_end(lines, divider_line)
+        for line in lines[divider_line + 1 : table_end]:
+            cells = _table_cells(line)
+            if (
+                len(cells) != len(_EXPECTED_TABLE_COLUMNS)
+                or not cells[0]
+                or not cells[1]
+                or cells[3].casefold() == _MANAGED_MAIL_SOURCE
+            ):
+                continue
+            key = (cells[0].casefold(), cells[1].casefold())
+            if cycle not in matches.setdefault(key, []):
+                matches[key].append(cycle)
+    return {key: tuple(values) for key, values in matches.items()}
 
 
 def _application_table_end(lines: list[str], divider_line: int) -> int:
@@ -225,19 +304,21 @@ def import_confirmed_application_tracker_rows(
 ) -> int:
     """Project complete acknowledgement identities into canonical managed tracker rows."""
     active_cycles = tuple(" ".join(cycle.split()) for cycle in active_cycles if cycle.strip())
-    if not active_cycles:
-        return 0
     if any(_ACTIVE_CYCLE_PATTERN.fullmatch(cycle) is None for cycle in active_cycles):
-        raise ValueError("active tracker cycles must be Fall YYYY or Spring YYYY")
+        raise ValueError("active tracker cycles must be Winter, Spring, Summer, or Fall YYYY")
 
     tracker_dir = tracker_dir.expanduser().resolve()
+    projection_cycles = list(active_cycles)
+    projection_cycle_keys = {cycle.casefold() for cycle in projection_cycles}
+    for cycle in _existing_tracker_cycles(tracker_dir):
+        if cycle.casefold() not in projection_cycle_keys:
+            projection_cycles.append(cycle)
+            projection_cycle_keys.add(cycle.casefold())
+    existing_identity_cycles = _existing_tracker_identity_cycles(tracker_dir, projection_cycles)
     desired_by_cycle: dict[str, dict[tuple[str, str], list[str]]] = {}
     for event in sorted(events, key=lambda item: item.received_at):
         if event.kind != "application.acknowledgement":
             continue
-        cycle = _active_cycle_for_received_at(
-            event.received_at.year, event.received_at.month, active_cycles
-        )
         if not event.company_hint or not event.role_hint:
             continue
         try:
@@ -245,24 +326,40 @@ def import_confirmed_application_tracker_rows(
             role = _safe_tracker_identity(event.role_hint, limit=200)
         except ValueError:
             continue
-        if cycle is None:
+        event_cycles = _explicit_event_cycles(event)
+        if not event_cycles:
+            existing_cycles = existing_identity_cycles.get(
+                (company.casefold(), role.casefold()), ()
+            )
+            if len(existing_cycles) == 1:
+                event_cycles = existing_cycles
+        if not event_cycles:
+            fallback = _fallback_cycle_for_received_at(
+                event.received_at.year, event.received_at.month, projection_cycles
+            )
+            event_cycles = (fallback,) if fallback is not None else ()
+        if not event_cycles:
             continue
-        desired_by_cycle.setdefault(cycle.casefold(), {}).setdefault(
-            (company.casefold(), role.casefold()),
-            [
-                company,
-                role,
-                "",
-                "Email acknowledgement",
-                "Applied",
-                event.received_at.date().isoformat(),
-                "Await recruiting update.",
-                "",
-            ],
-        )
+        for cycle in event_cycles:
+            if cycle.casefold() not in projection_cycle_keys:
+                projection_cycles.append(cycle)
+                projection_cycle_keys.add(cycle.casefold())
+            desired_by_cycle.setdefault(cycle.casefold(), {}).setdefault(
+                (company.casefold(), role.casefold()),
+                [
+                    company,
+                    role,
+                    "",
+                    "Email acknowledgement",
+                    "Applied",
+                    event.received_at.date().isoformat(),
+                    "Await recruiting update.",
+                    "",
+                ],
+            )
 
     changes = 0
-    for cycle in active_cycles:
+    for cycle in projection_cycles:
         candidates = (
             tracker_dir / f"{cycle} Application Tracker.md",
             tracker_dir / f"{cycle} Applications.md",
