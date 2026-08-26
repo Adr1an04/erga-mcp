@@ -538,6 +538,7 @@ folder = "Recruiting"
             r"..\resume.pdf",
             r"C:\temp\resume.pdf",
             r"\\server\share\resume.pdf",
+            "Resume.pdfFirstname_Resume.pdf",
         ):
             with self.subTest(unsafe_name=unsafe_name):
                 with self.assertRaisesRegex(ValueError, "filename"):

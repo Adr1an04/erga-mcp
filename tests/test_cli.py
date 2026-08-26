@@ -47,6 +47,34 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("onboarding.skills.help", rendered)
             self.assertNotIn("MCP", rendered)
 
+    def test_review_is_human_readable_and_does_not_expose_internal_ids(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            main(["init", "--config", str(config_path)])
+            output = StringIO()
+
+            with redirect_stdout(output):
+                exit_code = main(["review", "--config", str(config_path)])
+
+            rendered = output.getvalue()
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Erga résumé review", rendered)
+            self.assertIn("Generation defaults", rendered)
+            self.assertNotIn("ev_", rendered)
+            self.assertNotIn("project-inventory.json", rendered)
+
+    def test_missing_config_points_directly_to_setup(self) -> None:
+        with TemporaryDirectory() as directory:
+            error = StringIO()
+            with redirect_stderr(error):
+                exit_code = _run_console(
+                    ["status", "--config", str(Path(directory) / "missing" / "config.toml")]
+                )
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn("Run `erga setup`", error.getvalue())
+            self.assertNotIn("Errno", error.getvalue())
+
     def test_manual_update_reports_safe_checkout_result(self) -> None:
         output = StringIO()
         result = type(

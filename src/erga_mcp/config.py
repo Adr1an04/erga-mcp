@@ -201,6 +201,7 @@ def validate_output_pdf_name(value: str) -> str:
         or "/" in name
         or "\\" in name
         or Path(name).name != name
+        or name.casefold().count(".pdf") != 1
     ):
         raise ValueError("resume output_pdf_name must be a PDF filename without path components")
     return name
@@ -229,6 +230,11 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
         configured_bullet_lengths and not ordered_bullet_lengths
     ):
         raise ValueError("resume bullet character lengths must be zero or ordered positive values")
+    if configured_bullet_lengths and bullet_lengths[2] > 180:
+        raise ValueError(
+            "resume bullet maximum must be 180 characters or fewer; longer bullets are not "
+            "reliably scannable"
+        )
     max_pages = int(resume.get("max_pages", 1))
     if max_pages < 0:
         raise ValueError("resume max_pages must be zero or positive")

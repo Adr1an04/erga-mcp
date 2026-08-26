@@ -7,7 +7,7 @@ import os
 import secrets
 import sys
 from collections.abc import Sequence
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import cast
 
@@ -16,7 +16,13 @@ from erga_mcp.applications.identity import job_identity, posting_identifier, slu
 from erga_mcp.applications.intake import fetch_job_snapshot, select_relevant_evidence
 from erga_mcp.applications.lookup import select_tracked_application
 from erga_mcp.applications.research import analyze_job_snapshot, official_job_text
-from erga_mcp.config import DEFAULT_CONFIG, DEFAULT_CONFIG_PATH, ErgaConfig, load_config
+from erga_mcp.config import (
+    DEFAULT_CONFIG,
+    DEFAULT_CONFIG_PATH,
+    ErgaConfig,
+    ResumeSettings,
+    load_config,
+)
 from erga_mcp.integrations.discord.bridge import (
     ErgaUpdateError,
     connect_discord_bridge,
@@ -29,7 +35,6 @@ from erga_mcp.integrations.discord.bridge import (
     update_erga_checkout,
 )
 from erga_mcp.integrations.discord.setup import (
-    collect_optional_discord,
     configure_discord_interactive,
     render_discord_setup_report,
 )
@@ -46,7 +51,6 @@ from erga_mcp.integrations.hosts import (
     configure_hosts,
 )
 from erga_mcp.integrations.keryx import (
-    collect_optional_keryx,
     disable_keryx,
     enable_keryx,
     keryx_status,
@@ -116,6 +120,7 @@ from erga_mcp.resumes.cover_letter import create_cover_letter_proposal, load_sty
 from erga_mcp.resumes.cover_letter_settings import as_json as cover_letter_settings_as_json
 from erga_mcp.resumes.cover_letter_settings import update_settings as update_cover_letter_settings
 from erga_mcp.resumes.outcomes import build_resume_outcome_report
+from erga_mcp.resumes.render_validation import validate_resume_render
 from erga_mcp.resumes.settings import as_json as resume_settings_as_json
 from erga_mcp.resumes.settings import update_settings
 from erga_mcp.resumes.sources import (
@@ -149,12 +154,12 @@ def _welcome_text() -> str:
 
 First time here?
   1. Run: erga setup
-  2. Choose Discord during setup
-  3. In Discord, say: Tailor my résumé for this job: <paste link>
+  2. Run: erga tailor <job link>
+  3. Or paste a description: erga tailor --job-file job.txt
 
 Already set up?
-  • Start Discord: erga discord start
-  • Tailor from this computer: erga tailor <job link>
+  • Tailor my résumé: erga tailor <job link>
+  • Track an application: erga applications add --company NAME --role ROLE --source-url URL
   • Check setup: erga status
 
 Erga creates reviewable drafts. It never applies, submits, or messages anyone for you."""
@@ -171,8 +176,26 @@ def _parser() -> argparse.ArgumentParser:
         "tailor",
         help="tailor your résumé for a job link and check the finished PDF",
     )
-    tailor.add_argument("job_url", help="the public job-posting link")
+    tailor.add_argument("job_url", nargs="?", help="the public job-posting link")
     _config_argument(tailor)
+    tailor.add_argument("--job-text", help="paste the job description directly")
+    tailor.add_argument("--job-file", type=Path, help="read a job description from a text file")
+    tailor.add_argument("--company", help="correct or supply the company name")
+    tailor.add_argument("--role", help="correct or supply the role title")
+    tailor.add_argument(
+        "--preset",
+        choices=("concise", "balanced", "technical"),
+        default="balanced",
+        help="concise, balanced (default), or technical evidence emphasis",
+    )
+    tailor.add_argument("--project-count", type=int, help="projects to select for this resume")
+    tailor.add_argument("--max-pages", type=int, help="page limit for this resume")
+    tailor.add_argument("--experience-min-bullets", type=int)
+    tailor.add_argument("--experience-max-bullets", type=int)
+    tailor.add_argument("--project-min-bullets", type=int)
+    tailor.add_argument("--project-max-bullets", type=int)
+    tailor.add_argument("--minimum-page-fill", type=float)
+    tailor.add_argument("--json", action="store_true", help="print machine-readable results")
     tailor.add_argument(
         "--output-dir",
         type=Path,
@@ -190,10 +213,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     _config_argument(init)
 
-    setup = subcommands.add_parser(
-        "setup",
-        help="guided setup for your résumé, private workspace, and Discord",
-    )
+    setup = subcommands.add_parser("setup", help="guided private résumé and tracker setup")
     _config_argument(setup)
     setup.add_argument("--vault", type=Path)
     setup.add_argument(
@@ -290,6 +310,11 @@ def _parser() -> argparse.ArgumentParser:
     status = subcommands.add_parser("status", help="show what is ready and what to do next")
     _config_argument(status)
     status.add_argument("--json", action="store_true", help="print machine-readable counts")
+    review = subcommands.add_parser(
+        "review", help="plain-language résumé, evidence, and generation readiness check"
+    )
+    _config_argument(review)
+    review.add_argument("--json", action="store_true", help="print machine-readable readiness")
     tracker = subcommands.add_parser("tracker", help="inspect local application tracking")
     _config_argument(tracker)
     tracker_commands = tracker.add_subparsers(dest="tracker_command")
@@ -540,7 +565,21 @@ def _parser() -> argparse.ArgumentParser:
         help="fetch a job posting and create a complete deterministic evidence-backed proposal",
     )
     _config_argument(resume_tailor_job)
-    resume_tailor_job.add_argument("--job-url", required=True)
+    resume_tailor_job.add_argument("--job-url")
+    resume_tailor_job.add_argument("--job-text")
+    resume_tailor_job.add_argument("--job-file", type=Path)
+    resume_tailor_job.add_argument("--company")
+    resume_tailor_job.add_argument("--role")
+    resume_tailor_job.add_argument(
+        "--preset", choices=("concise", "balanced", "technical"), default="balanced"
+    )
+    resume_tailor_job.add_argument("--project-count", type=int)
+    resume_tailor_job.add_argument("--max-pages", type=int)
+    resume_tailor_job.add_argument("--experience-min-bullets", type=int)
+    resume_tailor_job.add_argument("--experience-max-bullets", type=int)
+    resume_tailor_job.add_argument("--project-min-bullets", type=int)
+    resume_tailor_job.add_argument("--project-max-bullets", type=int)
+    resume_tailor_job.add_argument("--minimum-page-fill", type=float)
     resume_tailor_job.add_argument(
         "--output-dir",
         type=Path,
@@ -618,6 +657,11 @@ def _parser() -> argparse.ArgumentParser:
     resume_settings_set.add_argument("--experience-max-bullets", type=int)
     resume_settings_set.add_argument("--project-min-bullets", type=int)
     resume_settings_set.add_argument("--project-max-bullets", type=int)
+    resume_settings_set.add_argument("--project-count", type=int)
+    resume_settings_set.add_argument("--minimum-page-fill-ratio", type=float)
+    resume_settings_set.add_argument(
+        "--require-unique-lead-verbs", action=argparse.BooleanOptionalAction
+    )
     resume_settings_set.add_argument("--output-root")
     resume_settings_set.add_argument("--output-pdf-name")
     resume_settings_set.add_argument("--latexmk")
@@ -790,7 +834,7 @@ def _initialize(config_path: Path) -> int:
         _set_owner_only_permissions(database_path, 0o600)
     print(f"Created local configuration: {config.config_path}")
     print(f"Created local data directory: {config.data_dir}")
-    print("Next: run `erga setup` to add your résumé and connect Discord.")
+    print("Next: run `erga setup` to add your résumé.")
     return 0
 
 
@@ -824,7 +868,7 @@ def _render_human_status(config: ErgaConfig, store: ErgaStore) -> str:
         "",
         "✓ Private workspace is ready",
         "✓ Résumé is ready" if resume_ready else "! Résumé needed",
-        discord_line,
+        f"○ Optional connection: {discord_line.removeprefix('! ').removeprefix('✓ ')}",
         f"{'✓' if approved else '○'} Career evidence: {approved} approved",
         f"○ Applications tracked: {len(applications)}",
         "",
@@ -832,13 +876,88 @@ def _render_human_status(config: ErgaConfig, store: ErgaStore) -> str:
     ]
     if not resume_ready:
         lines.append("  Run `erga setup` to add your résumé.")
-    elif not discord.get("configured"):
-        lines.append("  Run `erga discord configure` to connect Discord.")
-    elif not discord.get("ready"):
-        lines.append("  Run `erga discord start` to bring Erga online.")
     else:
-        lines.append("  In Discord, send `help` or paste a job link.")
+        lines.append("  Run `erga tailor <job link>` or `erga tailor --job-file job.txt`.")
+        if discord.get("configured") and not discord.get("ready"):
+            lines.append("  Optional Discord connection is offline; core CLI features still work.")
     lines.append("Nothing is sent or submitted without your action.")
+    return "\n".join(lines)
+
+
+def _resume_readiness(config: ErgaConfig, store: ErgaStore) -> dict[str, object]:
+    approved = [item for item in store.list_evidence() if item.approved]
+    projects: Sequence[object] = ()
+    project_warning: str | None = None
+    if config.resume.project_inventory_path is not None:
+        try:
+            projects = load_project_inventory(config.resume.project_inventory_path, approved)
+        except (OSError, ValueError) as error:
+            project_warning = str(error)
+    template_ready = (
+        config.resume.template_path is not None and config.resume.template_path.is_file()
+    )
+    return {
+        "ready": bool(template_ready and approved),
+        "master_ready": bool(
+            config.resume.master_path is not None and config.resume.master_path.is_file()
+        ),
+        "template_ready": template_ready,
+        "approved_evidence_count": len(approved),
+        "project_count": len(projects),
+        "project_warning": project_warning,
+        "style_reference_configured": config.resume.reference_path is not None,
+        "defaults": {
+            "max_pages": config.resume.max_pages,
+            "project_count": config.resume.project_count,
+            "experience_bullets": [
+                config.resume.experience_min_bullets,
+                config.resume.experience_max_bullets,
+            ],
+            "project_bullets": [
+                config.resume.project_min_bullets,
+                config.resume.project_max_bullets,
+            ],
+            "minimum_page_fill_ratio": config.resume.minimum_page_fill_ratio,
+        },
+    }
+
+
+def _render_resume_readiness(readiness: dict[str, object]) -> str:
+    defaults = cast(dict[str, object], readiness["defaults"])
+    experience = cast(list[int], defaults["experience_bullets"])
+    projects = cast(list[int], defaults["project_bullets"])
+    lines = [
+        "Erga résumé review",
+        "",
+        f"{'✓' if readiness['master_ready'] else '!'} Factual master résumé",
+        f"{'✓' if readiness['template_ready'] else '!'} Layout-preserving LaTeX template",
+        f"✓ Approved evidence: {readiness['approved_evidence_count']} source(s)",
+        f"{'✓' if readiness['project_count'] else '○'} Approved projects: "
+        f"{readiness['project_count']}",
+        (
+            "✓ Separate style reference is configured"
+            if readiness["style_reference_configured"]
+            else "○ Using the master/default layout; no separate style reference"
+        ),
+        "",
+        "Generation defaults",
+        f"  Pages: {defaults['max_pages']}",
+        f"  Projects selected: {defaults['project_count']}",
+        f"  Experience bullets per entry: {experience[0]}–{experience[1]}",
+        f"  Project bullets per entry: {projects[0]}–{projects[1]}",
+        f"  Minimum one-page fill: {cast(float, defaults['minimum_page_fill_ratio']):.0%}",
+    ]
+    if readiness["project_warning"]:
+        lines.extend(("", f"Needs attention: {readiness['project_warning']}"))
+    elif not readiness["project_count"]:
+        lines.extend(
+            (
+                "",
+                "No projects were parsed from the master. Erga will not invent them; add "
+                "approved project evidence before expecting project selection.",
+            )
+        )
+    lines.extend(("", "Next: erga tailor <job link>"))
     return "\n".join(lines)
 
 
@@ -937,13 +1056,97 @@ def _render_application_notes(application: Application, package_dir: Path | None
     return rendered
 
 
+def _tailor_job_input(args: argparse.Namespace) -> tuple[str, str]:
+    """Resolve exactly one safe job source for both friendly and advanced CLI routes."""
+    sources = [
+        bool(getattr(args, "job_url", None)),
+        bool(getattr(args, "job_text", None)),
+        getattr(args, "job_file", None) is not None,
+    ]
+    if sum(sources) != 1:
+        raise ValueError("provide exactly one job source: a job link, --job-text, or --job-file")
+    job_url = getattr(args, "job_url", None)
+    if job_url:
+        return fetch_job_snapshot(str(job_url)), str(job_url)
+    job_file = getattr(args, "job_file", None)
+    if job_file is not None:
+        path = Path(job_file).expanduser().absolute()
+        if not path.is_file():
+            raise ValueError(f"job description file does not exist: {path}")
+        if path.stat().st_size > 2_000_000:
+            raise ValueError("job description file must be 2 MB or smaller")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError("job description file must be UTF-8 text") from error
+        source = f"https://local.invalid/{path.stem or 'job-description'}"
+    else:
+        text = str(getattr(args, "job_text", ""))
+        source = "https://local.invalid/job-description"
+    normalized = text.strip()
+    if len(normalized) < 40:
+        raise ValueError("job description must contain at least 40 characters")
+    return normalized, source
+
+
+def _tailor_limits(args: argparse.Namespace, settings: ResumeSettings) -> dict[str, object]:
+    """Resolve per-job controls without mutating the user's saved defaults."""
+    preset = getattr(args, "preset", "balanced")
+    project_count = getattr(args, "project_count", None) or settings.project_count
+    max_pages = getattr(args, "max_pages", None) or settings.max_pages
+    experience_min = (
+        getattr(args, "experience_min_bullets", None) or settings.experience_min_bullets
+    )
+    experience_max = (
+        getattr(args, "experience_max_bullets", None) or settings.experience_max_bullets
+    )
+    project_min = getattr(args, "project_min_bullets", None) or settings.project_min_bullets
+    project_max = getattr(args, "project_max_bullets", None) or settings.project_max_bullets
+    minimum_fill = cast(
+        float,
+        getattr(args, "minimum_page_fill", None)
+        if getattr(args, "minimum_page_fill", None) is not None
+        else settings.minimum_page_fill_ratio,
+    )
+    if preset == "concise":
+        max_pages = 1
+        project_count = min(project_count, 2)
+        experience_max = min(experience_max, 3)
+        project_max = min(project_max, 3)
+    elif preset == "technical":
+        project_count = max(project_count, 3)
+    if project_count < 1 or max_pages < 1:
+        raise ValueError("project count and page limit must be positive")
+    if not 1 <= experience_min <= experience_max:
+        raise ValueError("experience bullet limits must be ordered positive values")
+    if not 1 <= project_min <= project_max:
+        raise ValueError("project bullet limits must be ordered positive values")
+    if not 0 <= minimum_fill <= 1:
+        raise ValueError("minimum page fill must be between zero and one")
+    return {
+        "preset": preset,
+        "project_count": project_count,
+        "max_pages": max_pages,
+        "experience_min_bullets": experience_min,
+        "experience_max_bullets": experience_max,
+        "project_min_bullets": project_min,
+        "project_max_bullets": project_max,
+        "minimum_page_fill_ratio": minimum_fill,
+    }
+
+
+def _tailor_progress(enabled: bool, message: str) -> None:
+    if enabled:
+        print(f"  {message}", file=sys.stderr, flush=True)
+
+
 def main(arguments: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(arguments)
     if args.command is None:
         print(_welcome_text())
         return 0
-    friendly_tailor = args.command == "tailor"
-    if friendly_tailor:
+    friendly_tailor = args.command == "tailor" and not getattr(args, "json", False)
+    if args.command == "tailor":
         args.command = "resume"
         args.resume_command = "tailor-job"
     if args.command == "update":
@@ -1002,40 +1205,6 @@ def main(arguments: Sequence[str] | None = None) -> int:
             print(f"Setup could not continue: {error}", file=sys.stderr)
             return 1
         print(render_core_setup_report(report))
-        try:
-            if collect_optional_discord():
-                print(
-                    render_discord_setup_report(
-                        configure_discord_interactive(
-                            config_path=args.config,
-                            default_project_dir=Path.cwd(),
-                        )
-                    )
-                )
-        except WizardCancelled as error:
-            print(str(error))
-            return 0
-        except (
-            FileNotFoundError,
-            NotADirectoryError,
-            OSError,
-            RuntimeError,
-            ValueError,
-        ) as error:
-            print(
-                f"Erga's private workspace is ready, but Discord setup failed: {error}",
-                file=sys.stderr,
-            )
-            return 1
-        try:
-            if collect_optional_keryx():
-                _print_json(enable_keryx(args.config).as_json())
-        except (OSError, ValueError) as error:
-            print(
-                f"Erga's core remains ready, but optional Keryx setup failed: {error}",
-                file=sys.stderr,
-            )
-            return 1
         return 0
     if args.command == "connect":
         hosts = (
@@ -1257,12 +1426,20 @@ def main(arguments: Sequence[str] | None = None) -> int:
         else:
             print(_render_human_status(config, store))
         return 0
+    if args.command == "review":
+        readiness = _resume_readiness(load_config(args.config), store)
+        if args.json:
+            _print_json(readiness)
+        else:
+            print(_render_resume_readiness(readiness))
+        return 0
     if args.command == "tracker" and args.tracker_command is None:
         applications = store.list_applications()
         if not applications:
             print(
                 "No applications tracked yet.\n\n"
-                "In Discord, say: Track this job for me: <paste link>"
+                "Add one with:\n"
+                "  erga applications add --company NAME --role ROLE --source-url URL"
             )
         else:
             print(f"Applications tracked: {len(applications)}")
@@ -1309,9 +1486,16 @@ def main(arguments: Sequence[str] | None = None) -> int:
         application = _notes_application(args.query, store.list_applications())
         package_dir = _package_for_application(config.resume.output_root, application)
         if package_dir is None:
-            raise ValueError(
-                "research requires an existing local Erga package for this application"
+            package = create_job_package(
+                output_root=config.resume.output_root,
+                cycle="unsorted",
+                application_slug=slug_with_identifier(
+                    f"{application.company}-{application.role}",
+                    posting_identifier(application.source_url),
+                ),
+                job_url=application.source_url,
             )
+            package_dir = package.package_dir
         result = discover_job_research(application=application, package_dir=package_dir)
         lead_word = "lead" if result.outreach_leads == 1 else "leads"
         print(
@@ -1621,6 +1805,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "experience_max_bullets": args.experience_max_bullets,
             "project_min_bullets": args.project_min_bullets,
             "project_max_bullets": args.project_max_bullets,
+            "project_count": args.project_count,
+            "minimum_page_fill_ratio": args.minimum_page_fill_ratio,
+            "require_unique_lead_verbs": args.require_unique_lead_verbs,
             "output_root": args.output_root,
             "output_pdf_name": args.output_pdf_name,
             "latexmk": args.latexmk,
@@ -1779,6 +1966,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         _print_json(asdict(proposal))
         return 0
     if args.command == "resume" and args.resume_command == "tailor-job":
+        _tailor_progress(friendly_tailor, "Reading the job description…")
         config = load_config(args.config)
         settings = config.resume
         if settings.template_path is None and settings.master_path is None:
@@ -1792,16 +1980,24 @@ def main(arguments: Sequence[str] | None = None) -> int:
             settings = load_config(args.config).resume
         if settings.template_path is None:
             raise ValueError("resume template could not be generated from the approved master")
-        snapshot = fetch_job_snapshot(args.job_url)
-        research = analyze_job_snapshot(snapshot, job_url=args.job_url)
+        snapshot, job_source = _tailor_job_input(args)
+        research = analyze_job_snapshot(snapshot, job_url=job_source)
+        if args.company or args.role:
+            research = replace(
+                research,
+                company=(args.company or research.company).strip(),
+                role=(args.role or research.role).strip(),
+            )
+        limits = _tailor_limits(args, settings)
         output_dir = args.output_dir or (
             settings.output_root
             / "tailored"
             / slug_with_identifier(
-                f"{research.company}-{research.role}-{posting_identifier(args.job_url)}",
+                f"{research.company}-{research.role}-{posting_identifier(job_source)}",
                 secrets.token_hex(4),
             )
         )
+        _tailor_progress(friendly_tailor, "Matching approved evidence and projects…")
         resume_approved = tuple(item for item in store.list_evidence() if item.approved)
         selected = select_relevant_evidence(
             snapshot,
@@ -1824,6 +2020,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             if settings.project_inventory_path is not None
             else ()
         )
+        _tailor_progress(friendly_tailor, "Building the strongest supported one-page draft…")
         automatic = create_automatic_resume_proposal(
             resume_path=settings.template_path,
             output_dir=output_dir,
@@ -1834,29 +2031,44 @@ def main(arguments: Sequence[str] | None = None) -> int:
             bullet_target_chars=settings.bullet_target_chars,
             bullet_max_chars=settings.bullet_max_chars,
             project_candidates=resume_candidates,
-            project_count=settings.project_count,
-            experience_min_bullets=settings.experience_min_bullets,
-            experience_max_bullets=settings.experience_max_bullets,
-            project_min_bullets=settings.project_min_bullets,
-            project_max_bullets=settings.project_max_bullets,
+            project_count=cast(int, limits["project_count"]),
+            experience_min_bullets=cast(int, limits["experience_min_bullets"]),
+            experience_max_bullets=cast(int, limits["experience_max_bullets"]),
+            project_min_bullets=cast(int, limits["project_min_bullets"]),
+            project_max_bullets=cast(int, limits["project_max_bullets"]),
             require_unique_lead_verbs=settings.require_unique_lead_verbs,
-            minimum_page_fill_ratio=settings.minimum_page_fill_ratio,
-            max_pages=settings.max_pages,
+            minimum_page_fill_ratio=cast(float, limits["minimum_page_fill_ratio"]),
+            max_pages=cast(int, limits["max_pages"]),
         )
-        validation = (
-            asdict(
-                validate_latex_proposal(
-                    automatic.proposal.proposed_tex_path,
-                    latexmk=Path(settings.latexmk),
-                )
+        validation: dict[str, object] | None = None
+        if args.validate:
+            _tailor_progress(friendly_tailor, "Checking pages, fill, spacing, and bullet layout…")
+            validation = validate_resume_render(
+                automatic.proposal.proposed_tex_path,
+                latexmk=Path(settings.latexmk),
+                output_pdf_name=settings.output_pdf_name,
+                max_pages=cast(int, limits["max_pages"]),
+                minimum_page_fill_ratio=(
+                    cast(float, limits["minimum_page_fill_ratio"])
+                    if cast(int, limits["max_pages"]) == 1
+                    else 0
+                ),
+                compiler=validate_latex_proposal,
+            ).as_dict()
+            quality_path = automatic.proposal.proposed_tex_path.with_name(
+                "application-quality.json"
             )
-            if args.validate
-            else None
-        )
+            quality_path.write_text(
+                json.dumps(validation, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            restrict_private_file(quality_path)
         tailoring_result = {
             **asdict(automatic.proposal),
             "company": research.company,
             "role": research.role,
+            "job_source": job_source,
+            "preset": limits["preset"],
+            "resolved_limits": limits,
             "selected_evidence_ids": [item.id for item in selected],
             "meaningful_change": automatic.meaningful_change,
             "changed_sections": list(automatic.changed_sections),
@@ -1867,19 +2079,33 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "validation": validation,
         }
         if friendly_tailor:
-            validation_ok = isinstance(validation, dict) and validation.get("returncode") == 0
+            validation_ok = isinstance(validation, dict) and validation.get("passed") is True
+            validation_reason = validation.get("reason") if isinstance(validation, dict) else None
+            validation_pdf = validation.get("pdf") if isinstance(validation, dict) else None
+            project_titles = automatic.project_selection.get("selected_titles", [])
+            selected_projects = (
+                ", ".join(str(item) for item in project_titles)
+                if isinstance(project_titles, list) and project_titles
+                else "master projects retained"
+            )
             print(
                 "\n".join(
                     (
-                        "Résumé draft complete." if validation_ok else "Résumé draft created.",
+                        (
+                            "Résumé is application-ready."
+                            if validation_ok
+                            else "Résumé draft needs one more review."
+                        ),
                         f"Job: {research.role} at {research.company}",
                         f"Draft: {automatic.proposal.proposed_tex_path}",
                         (
-                            f"PDF: {automatic.proposal.proposed_tex_path.with_suffix('.pdf')}"
+                            f"PDF: {validation_pdf}"
                             if validation_ok
-                            else "PDF check: needs attention; the draft is still reviewable"
+                            else f"Quality check: {validation_reason or 'not run'}"
                         ),
                         f"Changes: {', '.join(automatic.changed_sections) or 'none needed'}",
+                        f"Projects: {selected_projects}",
+                        f"Preset: {limits['preset']} · max {limits['max_pages']} page(s)",
                         "Nothing was sent or submitted.",
                     )
                 )
@@ -2005,7 +2231,14 @@ def _run_console(arguments: Sequence[str] | None = None) -> int:
         RuntimeError,
         ValueError,
     ) as error:
-        print(f"Erga could not complete the command: {error}", file=sys.stderr)
+        if isinstance(error, FileNotFoundError) and "config.toml" in str(error):
+            print(
+                "Erga is not set up on this computer yet. Run `erga setup` to add your résumé "
+                "and create the private workspace.",
+                file=sys.stderr,
+            )
+        else:
+            print(f"Erga could not complete the command: {error}", file=sys.stderr)
         return 1
 
 

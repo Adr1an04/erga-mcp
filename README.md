@@ -56,15 +56,23 @@ optional second résumé can explicitly override layout measurements only, and i
 wording never becomes evidence. The generated configuration uses the least-privilege `career` MCP
 profile.
 
-After setup, normal use can stay in Discord. Send `help` for examples, or paste a job link and ask
-Erga to tailor your résumé. The one-command local equivalent is:
+After setup, normal use is one local command:
 
 ```bash
 uv run erga tailor https://jobs.example.com/role
 ```
 
-Erga chooses a private output folder, checks the PDF, and reports exactly where the reviewable
-draft lives. `uv run erga status` shows a plain-language readiness summary.
+If the posting cannot be fetched, save or paste its description instead:
+
+```bash
+uv run erga tailor --job-file job.txt --company Acme --role "Software Engineering Intern"
+```
+
+Erga shows progress, chooses the strongest approved experience/project evidence, preserves the
+master's LaTeX layout, and rejects drafts with extra pages, low page fill, wrapping, short tails, or
+TeX overflow. Use `--preset concise|balanced|technical` plus per-run project, page, and bullet
+limits when needed. `uv run erga review` gives a plain-language readiness summary without exposing
+internal IDs or JSON files. Discord and every other integration remain separately optional.
 
 Use `uv run erga --help` and `uv run erga <command> --help` for the complete CLI surface.
 

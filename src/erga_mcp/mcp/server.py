@@ -4,7 +4,7 @@ import json
 import os
 import re
 import shutil
-import subprocess
+import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
@@ -165,6 +165,7 @@ from erga_mcp.resumes.planning import (
     tailoring_plan_preferences,
 )
 from erga_mcp.resumes.quality import portfolio_quality_report
+from erga_mcp.resumes.render_validation import validate_resume_render
 from erga_mcp.resumes.tailoring import (
     TAILORING_VERSION,
     AutomaticResumeProposal,
@@ -174,7 +175,6 @@ from erga_mcp.resumes.tailoring import (
     pdf_page_count,
     pdf_page_fill,
     plan_resume_project_selection,
-    semantic_resume_structure_issues,
 )
 from erga_mcp.resumes.template import ensure_resume_template
 from erga_mcp.store import ErgaStore, SQLiteStoreFactory, StoreFactory
@@ -1496,99 +1496,26 @@ def _compile_intake_proposal(
     max_pages: int,
     minimum_page_fill_ratio: float = 0,
 ) -> IntakeValidationResult:
-    """Compile, enforce page geometry constraints, and select the exact attachment PDF."""
-    proposal_source = proposal_path.read_text(encoding="utf-8")
-    structure_issues = semantic_resume_structure_issues(proposal_source)
-    if structure_issues:
-        return IntakeValidationResult(
-            returncode=1,
-            pdf=None,
-            skipped="Semantic resume structure failed: " + "; ".join(structure_issues),
-        )
-    try:
-        checked = validate_latex_proposal(proposal_path, latexmk=Path(latexmk))
-    except (OSError, subprocess.TimeoutExpired) as error:
-        return IntakeValidationResult(
-            returncode=None,
-            pdf=None,
-            skipped=f"LaTeX validation did not complete: {error}",
-        )
-
-    proposal_pdf = proposal_path.with_suffix(".pdf")
-    if checked.returncode != 0:
-        proposal_pdf.unlink(missing_ok=True)
-        return IntakeValidationResult(returncode=checked.returncode, pdf=None)
-    if not proposal_pdf.is_file():
-        return IntakeValidationResult(
-            returncode=0,
-            pdf=None,
-            skipped="LaTeX validation returned success but did not produce a PDF.",
-        )
-
-    page_count: int | None = None
-    if max_pages or minimum_page_fill_ratio:
-        try:
-            page_count = pdf_page_count(proposal_pdf)
-        except ValueError as error:
-            proposal_pdf.unlink(missing_ok=True)
-            return IntakeValidationResult(
-                returncode=1,
-                pdf=None,
-                skipped=f"PDF page validation failed: {error}",
-            )
-        if max_pages and page_count > max_pages:
-            proposal_pdf.unlink(missing_ok=True)
-            return IntakeValidationResult(
-                returncode=1,
-                pdf=None,
-                page_count=page_count,
-                skipped=(
-                    f"Tailored resume has {page_count} pages; configured maximum is {max_pages}."
-                ),
-            )
-
-    # A user-supplied visual reference owns its measured section, entry, and line spacing. Erga
-    # expands with approved content before rendering but never stretches those template gaps.
-    effective_minimum_fill = (
-        0 if _VISUAL_SPACING_MARKER in proposal_source else minimum_page_fill_ratio
+    """Compile through the interface-neutral resume validation pipeline."""
+    rendered = validate_resume_render(
+        proposal_path,
+        latexmk=Path(latexmk),
+        output_pdf_name=output_pdf_name,
+        max_pages=max_pages,
+        minimum_page_fill_ratio=minimum_page_fill_ratio,
+        # Intake already performs bounded layout repair before this final compile.
+        check_item_layout=False,
+        compiler=validate_latex_proposal,
+        page_counter=pdf_page_count,
+        fill_reader=pdf_page_fill,
     )
-    page_fill_ratio: float | None = None
-    if effective_minimum_fill:
-        try:
-            fill = pdf_page_fill(proposal_pdf)
-        except ValueError as error:
-            proposal_pdf.unlink(missing_ok=True)
-            return IntakeValidationResult(
-                returncode=1,
-                pdf=None,
-                page_count=page_count,
-                minimum_page_fill_ratio=effective_minimum_fill,
-                skipped=f"PDF page-fill validation failed: {error}",
-            )
-        page_fill_ratio = fill.fill_ratio
-        if page_fill_ratio < effective_minimum_fill:
-            proposal_pdf.unlink(missing_ok=True)
-            return IntakeValidationResult(
-                returncode=1,
-                pdf=None,
-                page_count=page_count,
-                page_fill_ratio=page_fill_ratio,
-                minimum_page_fill_ratio=effective_minimum_fill,
-                skipped=(
-                    f"Tailored resume fills {page_fill_ratio:.1%} of the page; required minimum "
-                    f"is {effective_minimum_fill:.1%}."
-                ),
-            )
-
-    output_pdf = proposal_pdf.with_name(output_pdf_name)
-    if output_pdf != proposal_pdf:
-        proposal_pdf.replace(output_pdf)
     return IntakeValidationResult(
-        returncode=0,
-        pdf=str(output_pdf),
-        page_count=page_count,
-        page_fill_ratio=page_fill_ratio,
-        minimum_page_fill_ratio=(effective_minimum_fill or None),
+        returncode=rendered.returncode,
+        pdf=rendered.pdf,
+        page_count=rendered.page_count,
+        page_fill_ratio=rendered.page_fill_ratio,
+        minimum_page_fill_ratio=rendered.minimum_page_fill_ratio,
+        skipped=rendered.reason,
     )
 
 
@@ -3397,9 +3324,23 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
 
 
 def main() -> None:
+    if any(argument in {"-h", "--help"} for argument in sys.argv[1:]):
+        print(
+            "Erga MCP server\n\n"
+            "Normally started by an MCP-compatible app. For everyday use, run `erga --help`.\n"
+            "Set ERGA_MCP_CONFIG only when using a non-default private configuration."
+        )
+        return
     raw_path = os.environ.get("ERGA_MCP_CONFIG")
     config_path = Path(raw_path).expanduser() if raw_path else DEFAULT_CONFIG_PATH
-    server = build_server(config_path)
+    try:
+        server = build_server(config_path)
+    except FileNotFoundError:
+        print(
+            "Erga MCP is not configured. Run `erga setup` in a terminal first.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
     transport = os.environ.get("ERGA_MCP_TRANSPORT", "stdio").strip().casefold()
     if transport == "stdio":
         server.run()

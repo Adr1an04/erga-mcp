@@ -95,6 +95,7 @@ class CoreSetupReport:
     next_steps: list[str]
     skill_seed_count: int = 0
     portfolio_root_count: int = 0
+    project_inventory_count: int = 0
 
     def as_json(self) -> dict[str, object]:
         return asdict(self)
@@ -194,6 +195,13 @@ def _style_example(value: str, *, required: bool) -> bool | str:
     return True
 
 
+def _scannable_bullet_length(value: str) -> bool | str:
+    valid = _positive_integer(value)
+    if valid is True and int(value.strip()) > 180:
+        return "Use 180 characters or fewer so bullets remain scannable."
+    return valid
+
+
 def bullet_lengths_from_examples(examples: tuple[str, ...]) -> tuple[int, int, int]:
     """Derive a practical character range without retaining style-example wording."""
     raw_examples = tuple(example.strip() for example in examples if example.strip())
@@ -234,7 +242,7 @@ def collect_core_setup_selections(
     questionary.print("\nErga Setup", style="bold fg:#7c5cff")
     questionary.print(
         "Set up your private career workspace, résumé knowledge, and application tracking.\n"
-        "At the end, Erga can connect to Discord so you can use normal conversation from then on.",
+        "When this finishes, you can tailor directly with one Erga command.",
         style="fg:#aaaaaa",
     )
     questionary.print(
@@ -344,7 +352,7 @@ def collect_core_setup_selections(
                         questionary.text(
                             "Minimum bullet characters:",
                             default=str(bullet_lengths[0]),
-                            validate=_positive_integer,
+                            validate=_scannable_bullet_length,
                         ).ask()
                     )
                 )
@@ -352,6 +360,8 @@ def collect_core_setup_selections(
 
             def target_length(value: str) -> bool | str:
                 valid = _positive_integer(value)
+                if valid is True and int(value.strip()) > 180:
+                    return "Use 180 characters or fewer so bullets remain scannable."
                 return (
                     valid
                     if valid is not True or int(value.strip()) >= minimum
@@ -372,6 +382,8 @@ def collect_core_setup_selections(
 
             def maximum_length(value: str) -> bool | str:
                 valid = _positive_integer(value)
+                if valid is True and int(value.strip()) > 180:
+                    return "Use 180 characters or fewer so bullets remain scannable."
                 return (
                     valid
                     if valid is not True or int(value.strip()) >= target
@@ -783,7 +795,7 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         source_name=master.path.name,
     )
     inventory_path = _project_inventory_path(selections.config_path, erga_vault_dir, vault_path)
-    inventory_created, inventory_added, inventory_count = _write_project_inventory(
+    _, _, inventory_count = _write_project_inventory(
         inventory_path,
         master_latex=master.text if master.format == "tex" else "",
         evidence_id=evidence.id,
@@ -832,31 +844,25 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         "Managed master resume knowledge",
         "Generated private LaTeX resume template",
         "Template-derived section and content profile",
-        "Required project inventory with approved per-bullet evidence",
-        "Private local assistant connection",
     ]
+    if inventory_count:
+        completed.append("Approved project inventory with per-bullet evidence")
     if managed_style is not None:
         completed.append("Managed resume style preference")
     if vault_path is not None:
         completed.append("Optional Obsidian workspace and tracker view")
-    if inventory_created:
-        inventory_origin = "created from your master resume"
-    elif inventory_added:
-        inventory_origin = (
-            f"preserved existing entries and added {inventory_added} master project(s)"
-        )
-    else:
-        inventory_origin = "existing catalogue already matched the master resume"
     next_steps = [
         "Run `erga status` to confirm your local setup.",
-        (
-            f"Review {inventory_path} ({inventory_count} project entries; {inventory_origin}) "
-            "before your first intake."
-        ),
-        "Optionally connect any MCP-capable coding assistant you already use.",
+        "Run `erga tailor <job link>` or `erga tailor --job-file job.txt`.",
+        "Run `erga review` for a plain-language résumé and evidence readiness check.",
         "Optionally add Obsidian, communication, or mail integrations later.",
-        f"Approved master evidence is ready as {evidence.id}.",
     ]
+    if not inventory_count:
+        next_steps.insert(
+            2,
+            "No project entries were found in the master; tailoring will keep supported "
+            "experience content until projects are added.",
+        )
     if erga_vault_dir is not None:
         next_steps.insert(0, "Open the vault in Obsidian and read Erga/Start Here.md.")
     return CoreSetupReport(
@@ -874,6 +880,7 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         next_steps=next_steps,
         skill_seed_count=len(skill_seeds),
         portfolio_root_count=len(portfolio_roots),
+        project_inventory_count=inventory_count,
     )
 
 

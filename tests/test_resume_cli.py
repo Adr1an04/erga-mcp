@@ -225,7 +225,8 @@ class ResumeCliTests(unittest.TestCase):
 
             rendered = output.getvalue()
             self.assertEqual(exit_code, 0)
-            self.assertIn("Résumé draft complete", rendered)
+            self.assertIn("Résumé draft needs one more review", rendered)
+            self.assertIn("did not produce a PDF", rendered)
             self.assertIn("Nothing was sent or submitted", rendered)
             self.assertIn(str(root / "output" / "tailored"), rendered)
             validation.assert_called_once()
@@ -295,6 +296,78 @@ class ResumeCliTests(unittest.TestCase):
             self.assertEqual(lengths["violations"], [])
             self.assertEqual(lengths["soft_deviations"][0]["length"], 9)
             self.assertTrue((root / "proposal" / "proposal.tex").exists())
+
+    def test_friendly_tailor_accepts_a_job_file_without_fetching_the_web(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.toml"
+            template = root / "resume.tex"
+            template.write_text(
+                "\\section{Experience}\n"
+                "\\resumeSubheading{Engineer}{2026}{Synthetic}{Remote}\n"
+                "\\resumeItemListStart\n"
+                "\\resumeItem{Built Python services with PostgreSQL for internal users.}\n"
+                "\\resumeItemListEnd\n",
+                encoding="utf-8",
+            )
+            job = root / "job.txt"
+            job.write_text(
+                "Platform Engineering Intern. Build Python services backed by PostgreSQL and "
+                "support reliable production systems.",
+                encoding="utf-8",
+            )
+            main(["init", "--config", str(config)])
+            self._json_command(
+                [
+                    "resume",
+                    "settings",
+                    "set",
+                    "--config",
+                    str(config),
+                    "--template-path",
+                    str(template),
+                    "--editable-section",
+                    "Experience",
+                ]
+            )
+            self._json_command(
+                [
+                    "evidence",
+                    "add",
+                    "--config",
+                    str(config),
+                    "--source-ref",
+                    "synthetic:platform",
+                    "--text",
+                    "Built Python services with PostgreSQL for internal users.",
+                    "--approved",
+                ]
+            )
+
+            with patch("erga_mcp.cli.fetch_job_snapshot") as fetch:
+                result = self._json_command(
+                    [
+                        "tailor",
+                        "--job-file",
+                        str(job),
+                        "--company",
+                        "Acme",
+                        "--role",
+                        "Platform Intern",
+                        "--preset",
+                        "concise",
+                        "--no-validate",
+                        "--json",
+                        "--config",
+                        str(config),
+                    ]
+                )
+
+            fetch.assert_not_called()
+            self.assertEqual(result["company"], "Acme")
+            self.assertEqual(result["role"], "Platform Intern")
+            self.assertEqual(result["preset"], "concise")
+            self.assertEqual(result["resolved_limits"]["max_pages"], 1)
 
 
 if __name__ == "__main__":

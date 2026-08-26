@@ -1070,6 +1070,7 @@ def validate_latex_proposal(
     if latexmk_executable.name.casefold() == "tectonic":
         command = (
             str(latexmk_executable),
+            "--untrusted",
             "--keep-logs",
             proposal_path.name,
         )
@@ -1154,7 +1155,7 @@ def validate_single_line_resume_items(
             temporary.write(instrumented)
             temporary_path = Path(temporary.name)
         command = (
-            (str(latexmk_executable), "--keep-logs", temporary_path.name)
+            (str(latexmk_executable), "--untrusted", "--keep-logs", temporary_path.name)
             if latexmk_executable.name.casefold() == "tectonic"
             else (
                 str(latexmk_executable),

@@ -408,7 +408,9 @@ def build_orbit_snapshot(
     recorded_history_count = 0
     snapshot_only_count = 0
     corrected_transition_count = 0
-    local_application_count = 0
+    # Count every canonical local record, including drafts/research, even though the outcome
+    # funnel intentionally starts only after an application is actually submitted.
+    local_application_count = len(selected_applications)
     tracker_only_count = 0
 
     def add_path(
@@ -441,7 +443,6 @@ def build_orbit_snapshot(
         if not pipeline:
             continue
         corrected_transition_count += corrected
-        local_application_count += 1
         path_is_recorded = recorded and applied_was_recorded
         if path_is_recorded:
             recorded_history_count += 1

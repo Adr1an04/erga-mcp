@@ -94,7 +94,7 @@ class OrbitTests(unittest.TestCase):
         links = {(link.source, link.target): link.count for link in snapshot.links}
 
         self.assertEqual(snapshot.tracked_count, 3)
-        self.assertEqual(snapshot.local_application_count, 3)
+        self.assertEqual(snapshot.local_application_count, 4)
         self.assertEqual(snapshot.recorded_history_count, 3)
         self.assertEqual(snapshot.snapshot_only_count, 0)
         self.assertEqual(links[("applications", "open")], 2)
@@ -295,7 +295,7 @@ class OrbitTests(unittest.TestCase):
         snapshot = build_orbit_snapshot(applications, [])
 
         self.assertEqual(snapshot.tracked_count, 0)
-        self.assertEqual(snapshot.local_application_count, 0)
+        self.assertEqual(snapshot.local_application_count, 2)
         self.assertEqual(snapshot.nodes, ())
         self.assertEqual(snapshot.links, ())
 

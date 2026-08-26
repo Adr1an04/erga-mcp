@@ -215,7 +215,7 @@ class ResumeValidationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(
                 run.call_args.args[0],
-                (str(tectonic), "--keep-logs", "proposal.tex"),
+                (str(tectonic), "--untrusted", "--keep-logs", "proposal.tex"),
             )
 
     def test_adds_compiler_directory_to_child_path(self) -> None:

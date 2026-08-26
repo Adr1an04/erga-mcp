@@ -23,8 +23,8 @@ erga setup --config ~/.config/erga-mcp/config.toml
 ```
 
 Running `erga` with no arguments shows the first-run path instead of a command error. The arrow-key
-setup initializes Erga's private state and local application tracking, imports a complete master
-résumé, and prepares its private assistant connection. The generated
+setup initializes Erga's private state and local application tracking and imports a complete master
+résumé. It does not prompt for or require Discord, mail, or another assistant. The generated
 configuration and SQLite data directory live outside the repository. Do not place personal paths,
 tokens, or imports in Git.
 
@@ -90,8 +90,19 @@ uv run erga resume settings set \
   --max-pages 1 \
   --experience-min-bullets 2 \
   --experience-max-bullets 4 \
-  --project-min-bullets 2 \
-  --project-max-bullets 4
+   --project-min-bullets 2 \
+  --project-max-bullets 4 \
+  --project-count 4 \
+  --minimum-page-fill-ratio 0.82 \
+  --require-unique-lead-verbs
+```
+
+These are defaults, not a lock-in. Override them for one role without changing saved settings:
+
+```bash
+uv run erga tailor --job-file job.txt \
+  --company Acme --role "Platform Intern" \
+  --preset technical --project-count 3 --max-pages 1
 ```
 
 After initialization, replace the master independently with:

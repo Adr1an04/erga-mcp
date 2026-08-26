@@ -2826,7 +2826,7 @@ Bottom of the approved master template.
             self.assertIn("fills 67.0%", result.skipped or "")
             self.assertFalse(proposal.with_suffix(".pdf").exists())
 
-    def test_compile_accepts_the_fullest_page_when_visual_template_owns_spacing(self) -> None:
+    def test_compile_still_enforces_fill_when_visual_template_owns_spacing(self) -> None:
         with TemporaryDirectory() as directory:
             proposal = Path(directory) / "proposal.tex"
             proposal.write_text(
@@ -2847,7 +2847,10 @@ Bottom of the approved master template.
                     side_effect=compile_sparse_page,
                 ),
                 patch("erga_mcp.mcp.server.pdf_page_count", return_value=1),
-                patch("erga_mcp.mcp.server.pdf_page_fill") as page_fill,
+                patch(
+                    "erga_mcp.mcp.server.pdf_page_fill",
+                    return_value=SimpleNamespace(fill_ratio=0.67),
+                ) as page_fill,
             ):
                 result = _compile_intake_proposal(
                     proposal,
@@ -2857,10 +2860,11 @@ Bottom of the approved master template.
                     minimum_page_fill_ratio=0.82,
                 )
 
-            self.assertEqual(result.returncode, 0)
-            self.assertIsNone(result.minimum_page_fill_ratio)
-            self.assertFalse(page_fill.called)
-            self.assertTrue((proposal.parent / "Candidate_Resume.pdf").is_file())
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.minimum_page_fill_ratio, 0.82)
+            self.assertEqual(result.page_fill_ratio, 0.67)
+            self.assertTrue(page_fill.called)
+            self.assertFalse((proposal.parent / "Candidate_Resume.pdf").exists())
 
     def test_primary_intake_writes_research_application_and_multicycle_obsidian_note(self) -> None:
         with TemporaryDirectory() as directory:

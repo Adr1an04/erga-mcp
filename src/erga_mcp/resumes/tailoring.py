@@ -20,6 +20,7 @@ from erga_mcp.portfolio.inventory import (
 )
 from erga_mcp.resumes.artifacts import ResumeProposal, latex_to_text, resolve_section_name
 from erga_mcp.resumes.bullet_editor import analyze_resume_editorially
+from erga_mcp.resumes.bullet_graph import build_evidence_bullet_graph
 from erga_mcp.resumes.claims import (
     SupportedSkill,
     index_evidence_claims,
@@ -1221,6 +1222,39 @@ def _claim_records(
     return records
 
 
+def _resume_claim_graphs(
+    claims: list[dict[str, object]], project_claims: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    """Expose the same bottom-up action/object/method/scope/outcome graph for every entry."""
+    grouped: dict[tuple[str, int], list[dict[str, object]]] = {}
+    for claim in (*claims, *project_claims):
+        section = claim.get("section")
+        group = claim.get("output_group_index")
+        text = claim.get("text")
+        evidence_ids = claim.get("evidence_ids")
+        if (
+            not isinstance(section, str)
+            or not isinstance(group, int)
+            or not isinstance(text, str)
+            or not isinstance(evidence_ids, list)
+            or any(not isinstance(item, str) for item in evidence_ids)
+        ):
+            continue
+        grouped.setdefault((section, group), []).append(
+            {"text": text, "evidence_ids": evidence_ids}
+        )
+    graphs: list[dict[str, object]] = []
+    for (section, group), sources in sorted(grouped.items()):
+        graph = build_evidence_bullet_graph(
+            f"{section.casefold().replace(' ', '-')}-{group + 1}", sources
+        )
+        payload = graph.as_prompt_dict()
+        payload["section"] = section
+        payload["entry_index"] = group
+        graphs.append(payload)
+    return graphs
+
+
 def _compact_generated_section(
     section: str,
     *,
@@ -2119,10 +2153,13 @@ def create_automatic_resume_proposal(
         if generated_section_entry_item_minimums is not None
         else configured_entry_minimums or None
     )
+    resolved_section_item_limits = generated_section_item_limits
+    if resolved_section_item_limits is None and project_candidates and project_min_bullets > 0:
+        resolved_section_item_limits = {"Projects": project_count * project_min_bullets}
     proposed, compacted_sections, page_target_omissions = _compact_generated_resume(
         proposed,
         max_pages=max_pages,
-        section_item_limits=generated_section_item_limits,
+        section_item_limits=resolved_section_item_limits,
         section_entry_item_limits=resolved_entry_limits,
         section_entry_item_minimums=resolved_entry_minimums,
         job_description=job_description,
@@ -2131,6 +2168,18 @@ def create_automatic_resume_proposal(
     for compacted_section in compacted_sections:
         if compacted_section not in changed_sections:
             changed_sections.append(compacted_section)
+    if project_selection.get("mode") == "inventory":
+        retained_after_compaction = _projects_present_in_section(proposed, project_candidates)
+        retained_ids = [item.id for item in retained_after_compaction]
+        project_selection["selected_ids"] = retained_ids
+        project_selection["selected_titles"] = [item.title for item in retained_after_compaction]
+        raw_selected = project_selection.get("selected")
+        if isinstance(raw_selected, list):
+            project_selection["selected"] = [
+                item
+                for item in raw_selected
+                if isinstance(item, dict) and item.get("id") in retained_ids
+            ]
 
     rewrite_sections = editable_sections
     if project_selection["mode"] == "inventory_no_match":
@@ -2188,7 +2237,7 @@ def create_automatic_resume_proposal(
         proposed, compacted_sections, page_target_omissions = _compact_generated_resume(
             proposed,
             max_pages=max_pages,
-            section_item_limits=generated_section_item_limits,
+            section_item_limits=resolved_section_item_limits,
             section_entry_item_limits=resolved_entry_limits,
             section_entry_item_minimums=resolved_entry_minimums,
             job_description=job_description,
@@ -2230,13 +2279,20 @@ def create_automatic_resume_proposal(
     quality_baseline, _, _ = _compact_generated_resume(
         quality_baseline,
         max_pages=max_pages,
-        section_item_limits=generated_section_item_limits,
+        section_item_limits=resolved_section_item_limits,
         section_entry_item_limits=resolved_entry_limits,
         section_entry_item_minimums=resolved_entry_minimums,
         job_description=job_description,
     )
     if minimum_page_fill_ratio:
         quality_baseline = apply_adaptive_single_page_fill(quality_baseline)
+
+    # An explicit inventory count is a deliberate relevance budget, not accidental content loss.
+    # Candidate-level evidence/editorial gates already protect rewritten inventory bullets; compare
+    # the selected draft to its selected baseline so the master-retention score cannot silently
+    # restore weaker, unselected projects and override the user's project-count setting.
+    if project_selection.get("mode") == "inventory":
+        quality_baseline = proposed
 
     meaningful_change = proposed != original
     rejected_master_comparison: dict[str, object] | None = None
@@ -2328,6 +2384,7 @@ def create_automatic_resume_proposal(
                     for item in evidence
                 ],
                 "evidence_claims": [item.as_dict() for item in evidence_claims],
+                "evidence_bullet_graphs": _resume_claim_graphs(claims, project_claims),
                 "role_profile": role_profile.as_dict(),
                 "claims": claims,
                 "constraints": {
