@@ -1823,6 +1823,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 resume_source_context(
                     master_path=config.resume.master_path,
                     reference_path=config.resume.reference_path,
+                    template_path=config.resume.template_path,
                 )
             )
             return 0
@@ -1877,13 +1878,16 @@ def main(arguments: Sequence[str] | None = None) -> int:
             master,
             source_name=original_master_name,
         )
-        settings = update_settings(
-            args.config,
-            {
-                "master_path": str(master.path),
-                "template_path": "",
-            },
-        )
+        updates = {
+            "master_path": str(master.path),
+            "template_path": "",
+        }
+        if master.format == "tex":
+            # A real LaTeX master owns both facts and presentation. Retaining an
+            # older style override here silently routes it through Erga's generic
+            # reconstruction and defeats the user's explicit master replacement.
+            updates["reference_path"] = ""
+        settings = update_settings(args.config, updates)
         template_path = ensure_resume_template(args.config)
         _print_json(
             {

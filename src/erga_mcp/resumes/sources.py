@@ -8,6 +8,7 @@ import os
 import tempfile
 import zipfile
 from dataclasses import dataclass, replace
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Literal
 
@@ -25,6 +26,7 @@ _MAX_SOURCE_BYTES = 25 * 1024 * 1024
 _MAX_EXTRACTED_CHARS = 500_000
 _MAX_DOCX_DOCUMENT_BYTES = 8 * 1024 * 1024
 _COPY_CHUNK_BYTES = 1024 * 1024
+_MAX_SPACING_ALIGNMENT_CHARACTERS = 25_000
 _WORD_NAMESPACE = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _DEFAULT_STYLE: dict[str, object] = {
     "page_size": "US Letter",
@@ -42,6 +44,65 @@ class ResumeSource:
     sha256: str
     page_count: int | None
     text: str
+
+
+def _restore_pdf_layout_spacing(layout_text: str, reading_order_text: str) -> str:
+    """Restore word boundaries lost where PDF font spans touch.
+
+    ``pypdf``'s layout mode is valuable for headings, columns, and bullets, but some
+    résumé generators split bold metrics and surrounding words into adjacent glyph
+    runs without a space.  The ordinary reading-order extractor usually retains
+    those boundaries.  Transfer only its whitespace boundaries between characters
+    that align exactly, leaving every existing layout newline and column gap intact.
+    """
+    if not layout_text or not reading_order_text or layout_text == reading_order_text:
+        return layout_text
+    layout_characters = [
+        (index, character) for index, character in enumerate(layout_text) if not character.isspace()
+    ]
+    reading_characters = [
+        (index, character)
+        for index, character in enumerate(reading_order_text)
+        if not character.isspace()
+    ]
+    if len(layout_characters) < 2 or len(reading_characters) < 2:
+        return layout_text
+    if max(len(layout_characters), len(reading_characters)) > _MAX_SPACING_ALIGNMENT_CHARACTERS:
+        return layout_text
+    matcher = SequenceMatcher(
+        None,
+        "".join(character for _, character in layout_characters),
+        "".join(character for _, character in reading_characters),
+        autojunk=True,
+    )
+    aligned: dict[int, int] = {}
+    for block in matcher.get_matching_blocks():
+        for offset in range(block.size):
+            aligned[block.a + offset] = block.b + offset
+
+    insertions: set[int] = set()
+    for left in range(len(layout_characters) - 1):
+        left_offset, _ = layout_characters[left]
+        right_offset, _ = layout_characters[left + 1]
+        if right_offset != left_offset + 1:
+            continue
+        reading_left = aligned.get(left)
+        reading_right = aligned.get(left + 1)
+        if reading_left is None or reading_right != reading_left + 1:
+            continue
+        reading_left_offset = reading_characters[reading_left][0]
+        reading_right_offset = reading_characters[reading_right][0]
+        gap = reading_order_text[reading_left_offset + 1 : reading_right_offset]
+        if gap and gap.isspace():
+            insertions.add(right_offset)
+
+    # Refuse pathological reading-order output that separates nearly every glyph.
+    if len(insertions) > max(8, len(layout_characters) // 4):
+        return layout_text
+    return "".join(
+        (" " if index in insertions else "") + character
+        for index, character in enumerate(layout_text)
+    )
 
 
 def _sha256_file(path: Path) -> str:
@@ -92,6 +153,12 @@ def _pdf_text(path: Path) -> tuple[str, int]:
             # Lightweight test doubles and older pypdf-compatible readers may expose only the
             # no-argument API; keeping this fallback does not weaken production extraction.
             extracted = page.extract_text() or ""
+        else:
+            try:
+                reading_order = page.extract_text() or ""
+            except TypeError:
+                reading_order = extracted
+            extracted = _restore_pdf_layout_spacing(extracted, reading_order)
         pages.append(f"[Page {index}]\n{extracted.rstrip()}")
     return "\n\n".join(pages).strip(), len(reader.pages)
 
@@ -333,12 +400,15 @@ def resume_source_context(
     layout_profile: dict[str, object] | None = None
     style_layout_profile: dict[str, object] | None = None
     visual_style_profile: dict[str, object] | None = None
+    template_metadata: dict[str, object] | None = None
     if template_path is not None:
         metadata_path = template_path.with_name("template.json")
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             metadata = None
+        if isinstance(metadata, dict):
+            template_metadata = metadata
         if isinstance(metadata, dict) and isinstance(metadata.get("layout_profile"), dict):
             layout_profile = metadata["layout_profile"]
             preferences["section_order"] = layout_profile.get("section_order", [])
@@ -369,6 +439,38 @@ def resume_source_context(
                     )
                     if value not in profile_applied
                 )
+    direct_master_match = False
+    if template_path is not None and master.format == "tex":
+        try:
+            direct_master_match = template_path.read_text(encoding="utf-8").strip() == master.text
+        except OSError:
+            direct_master_match = False
+    exact_master_latex = bool(
+        reference is None
+        and master.format == "tex"
+        and (
+            direct_master_match
+            or (
+                template_metadata is not None
+                and template_metadata.get("master_latex_preserved") is True
+            )
+        )
+    )
+    template_fidelity = {
+        "mode": "exact-master-latex" if exact_master_latex else "reconstructed",
+        "preserves_master_layout": exact_master_latex,
+        "preserves_source_hyperlinks": exact_master_latex,
+        "reason": (
+            "The approved LaTeX master is the visual template."
+            if exact_master_latex
+            else "PDF/DOCX sources provide facts, not recoverable LaTeX structure."
+            if master.format != "tex"
+            else "A separate style override is rebuilding the LaTeX master."
+            if reference is not None
+            else "The configured template is not verified as the approved LaTeX master."
+        ),
+    }
+    preferences["template_fidelity"] = template_fidelity
     return {
         "master": {
             "format": master.format,
@@ -381,5 +483,6 @@ def resume_source_context(
         "layout_profile": layout_profile,
         "style_layout_profile": style_layout_profile,
         "visual_style_profile": visual_style_profile,
+        "template_fidelity": template_fidelity,
         "preferences": preferences,
     }

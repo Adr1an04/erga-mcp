@@ -210,7 +210,7 @@ class ResumeSettingsCliTests(unittest.TestCase):
                 after.template_path.read_text(encoding="utf-8"),  # type: ignore[union-attr]
             )
 
-    def test_master_set_adds_and_replaces_the_master_while_preserving_style(self) -> None:
+    def test_latex_master_set_clears_style_and_preserves_the_exact_source(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "config.toml"
@@ -222,7 +222,17 @@ class ResumeSettingsCliTests(unittest.TestCase):
                 encoding="utf-8",
             )
             second_master.write_text(
-                "Jane Candidate\nExperience\nBuilt the replacement approved service.\n",
+                r"""\documentclass{article}
+\usepackage{hyperref}
+\newcommand{\resumeItem}[1]{\item #1}
+\begin{document}
+\href{https://example.test}{Jane Candidate}
+\section{Experience}
+\begin{itemize}
+\resumeItem{Built the replacement approved service.}
+\end{itemize}
+\end{document}
+""",
                 encoding="utf-8",
             )
             style.write_text(
@@ -237,7 +247,6 @@ class ResumeSettingsCliTests(unittest.TestCase):
             styled = self._json_command(
                 ["resume", "template", "set", str(style), "--config", str(config_path)]
             )
-            before = load_config(config_path).resume
             replacement = self._json_command(
                 ["resume", "master", "set", str(second_master), "--config", str(config_path)]
             )
@@ -247,11 +256,15 @@ class ResumeSettingsCliTests(unittest.TestCase):
             )
 
             self.assertEqual(context["master"]["text"], second_master.read_text().strip())  # type: ignore[index]
-            self.assertEqual(after.reference_path, before.reference_path)
-            self.assertEqual(replacement["style_path"], styled["style_path"])
+            self.assertIsNone(after.reference_path)
+            self.assertIsNone(replacement["style_path"])
             self.assertNotEqual(replacement["master_path"], first["master_path"])
             self.assertNotEqual(replacement["template_path"], styled["template_path"])
             self.assertTrue(Path(str(styled["template_path"])).is_file())
+            template = Path(str(replacement["template_path"])).read_text(encoding="utf-8")
+            self.assertIn(r"\href{https://example.test}{Jane Candidate}", template)
+            self.assertIn(r"\newcommand{\resumeItem}[1]{\item #1}", template)
+            self.assertEqual(context["template_fidelity"]["mode"], "exact-master-latex")  # type: ignore[index]
 
     def test_template_set_adds_and_replaces_style_without_replacing_master(self) -> None:
         with TemporaryDirectory() as directory:

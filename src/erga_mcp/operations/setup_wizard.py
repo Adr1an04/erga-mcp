@@ -250,8 +250,9 @@ def collect_core_setup_selections(
         "This is the knowledge base Erga may use for claims. PDF, DOCX, and .tex files all work, "
         "including multi-page master resumes. Erga reads every page, creates a private "
         "hash-verified copy, and never modifies the original.\n"
-        "To generate compiled LaTeX resumes later, you can add an editable .tex template after "
-        "setup.",
+        "Use your .tex source when you want generated resumes to preserve its exact macros, "
+        "links, spacing, and layout. A PDF or DOCX preserves facts, but its original LaTeX "
+        "structure cannot be recovered from the compiled document.",
         style="fg:#e0aa55",
     )
     master_resume = normalize_dropped_path(
@@ -581,6 +582,9 @@ def render_core_setup_review(selections: CoreSetupSelections) -> str:
         if selections.style_resume is not None
         else "use Erga's clean one-page layout (recommended)"
     )
+    exact_latex = (
+        selections.master_resume.suffix.casefold() == ".tex" and selections.style_resume is None
+    )
     bullets = (
         "not enforced"
         if selections.bullet_min_chars == 0
@@ -595,6 +599,12 @@ def render_core_setup_review(selections: CoreSetupSelections) -> str:
             "",
             f"  Your master resume: copied privately from {selections.master_resume}",
             f"  Resume style: {style}",
+            "  Template fidelity: "
+            + (
+                "preserve the master LaTeX exactly"
+                if exact_latex
+                else "rebuild an editable layout from the selected document(s)"
+            ),
             "  Maximum resume length: "
             + (
                 f"{selections.max_pages} page(s)"

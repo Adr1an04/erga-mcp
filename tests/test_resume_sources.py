@@ -56,8 +56,37 @@ class ResumeSourceTests(unittest.TestCase):
             with patch("erga_mcp.resumes.sources.PdfReader", return_value=reader):
                 source = load_resume_source(master)
 
-            self.assertEqual(calls, [{"extraction_mode": "layout"}])
+            self.assertEqual(calls, [{"extraction_mode": "layout"}, {}])
             self.assertIn("\n   Built a service\n", source.text)
+
+    def test_pdf_extraction_restores_spaces_lost_between_font_spans(self) -> None:
+        with TemporaryDirectory() as directory:
+            master = Path(directory) / "master.pdf"
+            master.write_bytes(b"%PDF synthetic")
+
+            class Page:
+                def extract_text(self, **kwargs: str) -> str:
+                    if kwargs.get("extraction_mode") == "layout":
+                        return (
+                            "Experience\n"
+                            "   Led an88-personteam for a1,000+ memberorganization, "
+                            "delivering53 eventsfor2,000+ attendees."
+                        )
+                    return (
+                        "Experience\nLed an 88-person team for a 1,000+ member organization, "
+                        "delivering 53 events for 2,000+ attendees."
+                    )
+
+            reader = SimpleNamespace(is_encrypted=False, pages=[Page()])
+            with patch("erga_mcp.resumes.sources.PdfReader", return_value=reader):
+                source = load_resume_source(master)
+
+            self.assertIn(
+                "Led an 88-person team for a 1,000+ member organization, "
+                "delivering 53 events for 2,000+ attendees.",
+                source.text,
+            )
+            self.assertIn("\n   Led", source.text)
 
     def test_master_import_is_approved_and_idempotent(self) -> None:
         with TemporaryDirectory() as directory:

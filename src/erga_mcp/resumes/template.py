@@ -21,7 +21,7 @@ from erga_mcp.resumes.settings import update_settings
 from erga_mcp.resumes.sources import ResumeSource, load_resume_source
 from erga_mcp.resumes.tailoring import latex_to_text
 
-TEMPLATE_GENERATION_VERSION = 19
+TEMPLATE_GENERATION_VERSION = 20
 _PAGE_MARKER = re.compile(r"^\[Page \d+\]$")
 _BULLET_PREFIX = re.compile(r"^(?:[•●▪◦‣⁃*]|[-–—]\s)\s*")
 _SPACE = re.compile(r"\s+")
@@ -29,7 +29,7 @@ _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?;])\s+(?=[A-Z0-9])")
 _SECTION_KEY = re.compile(r"[^a-z0-9]+")
 _LAYOUT_INDENT_MARKER = "[[ERGA-LAYOUT-INDENT]]"
 _LAYOUT_COLUMN_MARKER = "[[ERGA-LAYOUT-COLUMN]]"
-_SEMANTIC_TEMPLATE_MARKER = "% Erga semantic resume template version: 19"
+_SEMANTIC_TEMPLATE_MARKER = "% Erga semantic resume template version: 20"
 _VISUAL_SPACING_MARKER = "% Erga visual spacing is template-controlled."
 _SECTION_ALIASES = {
     "activities": "Activities",

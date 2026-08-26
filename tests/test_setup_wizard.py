@@ -396,6 +396,7 @@ folder = "Recruiting"
 
         self.assertIn("What Erga will set up", review)
         self.assertIn("Your master resume: copied privately", review)
+        self.assertIn("Template fidelity: rebuild an editable layout", review)
         self.assertIn("Maximum resume length: 1 page (recommended)", review)
         self.assertIn("90 / 105 / 120 characters", review)
         self.assertIn("Obsidian: not set up", review)
@@ -413,6 +414,14 @@ folder = "Recruiting"
         )
         self.assertIn("non-factual style metadata", style_review)
         self.assertNotIn("use style.pdf as a style reference", style_review)
+
+        latex_review = render_core_setup_review(
+            CoreSetupSelections(
+                config_path=Path("/private/config.toml"),
+                master_resume=Path("/master.tex"),
+            )
+        )
+        self.assertIn("Template fidelity: preserve the master LaTeX exactly", latex_review)
 
     def test_core_setup_persists_custom_resume_shape_constraints(self) -> None:
         with TemporaryDirectory() as directory:

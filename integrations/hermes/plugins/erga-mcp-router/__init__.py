@@ -2380,8 +2380,9 @@ def register(
             return (
                 "**Set up the master résumé**\n"
                 "On the computer running Erga, run:\n"
-                '`uv run erga resume master set "/path/to/master-resume.pdf"`\n\n'
-                "Erga keeps the file local and uses it as the quality/template baseline."
+                '`uv run erga resume master set "/path/to/master-resume.tex"`\n\n'
+                "Use the real `.tex` source to preserve its links, macros, spacing, and layout. "
+                "A PDF still works as factual evidence, but cannot retain source formatting."
             )
         if action == "onboarding.skills.import":
             try:
