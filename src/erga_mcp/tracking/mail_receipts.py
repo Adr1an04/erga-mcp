@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from email.utils import parseaddr
 
-RECEIPT_PARSER_VERSION = 3
+RECEIPT_PARSER_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -15,6 +15,7 @@ class ApplicationReceipt:
     company: str = ""
     role: str = ""
     requisition_ids: tuple[str, ...] = ()
+    recruiting_cycle_hints: tuple[str, ...] = ()
 
 
 _HTML_TAG = re.compile(r"<[^>]+>")
@@ -97,6 +98,15 @@ _GENERIC_SENDER_PARTS = frozenset(
         "talent",
     }
 )
+_FULL_CYCLE_PATTERN = re.compile(r"\b(Winter|Spring|Summer|Fall)\s+(20\d{2})\b", re.I)
+_REVERSED_CYCLE_PATTERN = re.compile(r"\b(20\d{2})\s+(Winter|Spring|Summer|Fall)\b", re.I)
+_LOOSE_CYCLE_PATTERN = re.compile(
+    r"\b(Winter|Spring|Summer|Fall)\b"
+    r"(?:\s+(?:internship|intern|co-?op|program|role|position|engineering|"
+    r"undergraduate|graduate|campus|software)){0,5}\s*[-–—,:]?\s*(20\d{2})\b",
+    re.I,
+)
+_SEASON_PATTERN = re.compile(r"\b(Winter|Spring|Summer|Fall)\b", re.I)
 
 
 def _plain_text(value: str) -> str:
@@ -183,6 +193,38 @@ def _strip_receipt_prefix(value: str, *, company: str, requisitions: tuple[str, 
     return _bounded_display(normalized, limit=200)
 
 
+def _recruiting_cycle_hints(*values: str) -> tuple[str, ...]:
+    """Retain only recruiting terms stated by the message, never a date-based guess."""
+    for value in values:
+        if not value:
+            continue
+        hints: list[str] = []
+        keys: set[str] = set()
+
+        def add(hint: str) -> None:
+            normalized = " ".join(hint.split()).title()
+            if normalized.casefold() not in keys:
+                hints.append(normalized)
+                keys.add(normalized.casefold())
+
+        for season, year in _FULL_CYCLE_PATTERN.findall(value):
+            add(f"{season} {year}")
+        for year, season in _REVERSED_CYCLE_PATTERN.findall(value):
+            add(f"{season} {year}")
+        for season, year in _LOOSE_CYCLE_PATTERN.findall(value):
+            add(f"{season} {year}")
+        if hints:
+            return tuple(hints)
+
+    for value in values:
+        if not value:
+            continue
+        seasons = {season.title() for season in _SEASON_PATTERN.findall(value)}
+        if len(seasons) == 1:
+            return (seasons.pop(),)
+    return ()
+
+
 def parse_application_receipt(
     *, sender: str, subject: str, preview: str = "", content: str = ""
 ) -> ApplicationReceipt:
@@ -217,4 +259,10 @@ def parse_application_receipt(
                 candidate = re.sub(r"\s+-\s+\d{6,}\s*$", "", match.group(1))
                 role = _strip_receipt_prefix(candidate, company=company, requisitions=requisitions)
                 break
-    return ApplicationReceipt(company=company, role=role, requisition_ids=requisitions)
+    recruiting_cycle_hints = _recruiting_cycle_hints(role, subject, body_plain)
+    return ApplicationReceipt(
+        company=company,
+        role=role,
+        requisition_ids=requisitions,
+        recruiting_cycle_hints=recruiting_cycle_hints,
+    )

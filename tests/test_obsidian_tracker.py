@@ -285,6 +285,7 @@ class ObsidianTrackerTests(unittest.TestCase):
                     requires_review=False,
                     company_hint="Example Systems",
                     role_hint="Platform Engineering Intern",
+                    recruiting_cycle_hints=("Fall 2026",),
                 ),
                 MailEvent(
                     message_id="second-current",
@@ -296,6 +297,7 @@ class ObsidianTrackerTests(unittest.TestCase):
                     requires_review=False,
                     company_hint="Example Devices",
                     role_hint="Systems Software Intern",
+                    recruiting_cycle_hints=("Fall 2026",),
                 ),
                 MailEvent(
                     message_id="legacy",
@@ -352,6 +354,7 @@ class ObsidianTrackerTests(unittest.TestCase):
                     requires_review=False,
                     company_hint="Example Financial",
                     role_hint="Engineering Internship",
+                    recruiting_cycle_hints=("Fall 2026",),
                 ),
                 MailEvent(
                     message_id="non-job-registration",
@@ -446,6 +449,18 @@ class ObsidianTrackerTests(unittest.TestCase):
                     requires_review=False,
                     company_hint="Example Compute",
                     role_hint="2027 Internships: Systems Software Engineering",
+                    recruiting_cycle_hints=("Summer 2027",),
+                ),
+                MailEvent(
+                    message_id="ambiguous-year-only-receipt",
+                    received_at=datetime(2026, 8, 19, tzinfo=UTC),
+                    sender="careers@example.test",
+                    subject="Application received",
+                    kind="application.acknowledgement",
+                    confidence=0.95,
+                    requires_review=False,
+                    company_hint="Example Robotics",
+                    role_hint="2027 Internships: Robotics Engineering",
                 ),
             ]
 
@@ -473,8 +488,10 @@ class ObsidianTrackerTests(unittest.TestCase):
             self.assertNotIn("Example Entertainment", fall_rendered)
             self.assertNotIn("Example Metrics", fall_rendered)
             self.assertNotIn("Example Compute", fall_rendered)
+            self.assertNotIn("Example Robotics", fall_rendered)
             self.assertIn("| Example Financial | Campus Undergraduate Summer", summer_rendered)
             self.assertIn("| Example Compute | 2027 Internships:", summer_rendered)
+            self.assertNotIn("Example Robotics", summer_rendered)
             self.assertIn("| Example Entertainment | Platform Engineering", spring_rendered)
             self.assertIn("| Example Metrics | Software Engineering Intern", winter_rendered)
 
@@ -581,6 +598,7 @@ class ObsidianTrackerTests(unittest.TestCase):
                     company_hint="Acme GPU Labs",
                     role_hint=role,
                     requisition_ids=(requisition,),
+                    recruiting_cycle_hints=("Fall 2026",),
                 )
                 for index, (role, requisition) in enumerate(
                     (

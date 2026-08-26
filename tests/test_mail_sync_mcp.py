@@ -36,7 +36,8 @@ class MailSyncMcpTests(unittest.TestCase):
                 preview="",
                 content=(
                     "Thank you for taking the time to submit your application for AI Software "
-                    "Engineering Intern - Edge (Job number: 900050373). Unsubscribe"
+                    "Engineering Intern - Edge (Job number: 900050373). This opening belongs "
+                    "to the Summer 2027 university recruiting cycle. Unsubscribe"
                 ),
             )
             store.record_mail_event(
@@ -72,6 +73,7 @@ class MailSyncMcpTests(unittest.TestCase):
             self.assertEqual(payload["historical_events_reparsed"], 1)
             self.assertEqual(retained.kind, "application.acknowledgement")
             self.assertEqual(retained.role_hint, "AI Software Engineering Intern - Edge")
+            self.assertEqual(retained.recruiting_cycle_hints, ("Summer 2027",))
             self.assertTrue(retained.receipt_parsed)
             self.assertEqual(retained.receipt_parser_version, RECEIPT_PARSER_VERSION)
             self.assertIn("1 recovered recruiting", payload["message"])

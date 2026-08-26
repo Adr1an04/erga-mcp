@@ -46,6 +46,7 @@ class MailReceiptTests(unittest.TestCase):
 
         self.assertEqual(receipt.company, "Example Payments")
         self.assertEqual(receipt.role, "Software Engineer Intern, Summer 2027 – United States")
+        self.assertEqual(receipt.recruiting_cycle_hints, ("Summer 2027",))
 
     def test_extracts_role_from_interest_template(self) -> None:
         receipt = parse_application_receipt(
@@ -85,6 +86,20 @@ class MailReceiptTests(unittest.TestCase):
 
         self.assertEqual(receipt.company, "Example Computing")
         self.assertEqual(receipt.role, "Software Developer Intern 2027")
+        self.assertEqual(receipt.recruiting_cycle_hints, ())
+
+    def test_reads_cycle_from_full_body_instead_of_guessing_from_role_year(self) -> None:
+        receipt = parse_application_receipt(
+            sender="careers@example.test",
+            subject="Application received",
+            content=(
+                "We received your application for 2027 Internships: Systems Engineering. "
+                "This application is for our Summer 2027 university recruiting cycle."
+            ),
+        )
+
+        self.assertEqual(receipt.role, "2027 Internships: Systems Engineering")
+        self.assertEqual(receipt.recruiting_cycle_hints, ("Summer 2027",))
 
     def test_greenhouse_relay_uses_subject_company_and_body_role(self) -> None:
         receipt = parse_application_receipt(

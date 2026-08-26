@@ -43,6 +43,7 @@ class StoreTests(unittest.TestCase):
                 {
                     "company_hint",
                     "role_hint",
+                    "recruiting_cycle_hints_json",
                     "receipt_parsed",
                     "receipt_parser_version",
                 }.issubset(columns)
@@ -65,6 +66,27 @@ class StoreTests(unittest.TestCase):
                 store.record_mail_event(event)
             with self.assertRaisesRegex(ValueError, "timezone-aware"):
                 store.update_mail_event_classification(event)
+
+    def test_persists_only_bounded_recruiting_cycle_hints(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = ErgaStore(Path(directory) / "erga.sqlite3")
+            event = MailEvent(
+                message_id="cycle-evidence",
+                received_at=datetime(2026, 8, 13, tzinfo=UTC),
+                sender="talent@example.test",
+                subject="Application received",
+                kind="application.acknowledgement",
+                confidence=0.9,
+                requires_review=False,
+                recruiting_cycle_hints=("summer 2027", "not a recruiting term"),
+            )
+
+            store.record_mail_event(event)
+
+            self.assertEqual(
+                store.list_mail_events()[0].recruiting_cycle_hints,
+                ("Summer 2027",),
+            )
 
     def test_persists_one_live_orbit_dashboard_per_discord_channel(self) -> None:
         with TemporaryDirectory() as directory:

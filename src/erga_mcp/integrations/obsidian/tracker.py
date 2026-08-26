@@ -36,8 +36,6 @@ _LOOSE_ROLE_CYCLE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _ROLE_SEASON_PATTERN = re.compile(r"\b(Winter|Spring|Summer|Fall)\b", re.IGNORECASE)
-_ROLE_YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
-_INTERNSHIP_ROLE_PATTERN = re.compile(r"\b(?:intern|internship|internships|co-?op)\b", re.I)
 _SEASON_INFERENCE_CUTOFF_MONTH = {"winter": 2, "spring": 5, "summer": 6, "fall": 8}
 _SOURCE_URL_PATTERN = re.compile(r"https?://[^)\s|]+", re.IGNORECASE)
 _MANAGED_MAIL_SOURCE = "email acknowledgement"
@@ -217,19 +215,9 @@ def reconcile_application_status_tracker_rows(
     return updates
 
 
-def _fallback_cycle_for_received_at(
-    received_at_year: int, received_at_month: int, active_cycles: Sequence[str]
-) -> str | None:
-    season = "Fall" if received_at_month >= 7 else "Spring"
-    candidate = f"{season} {received_at_year}"
-    return next(
-        (cycle for cycle in active_cycles if cycle.casefold() == candidate.casefold()), None
-    )
-
-
 def _explicit_event_cycles(event: MailEvent) -> tuple[str, ...]:
     """Extract bounded recruiting terms from receipt identity, never arbitrary filenames."""
-    text = f"{event.role_hint}\n{event.subject}"
+    text = "\n".join((*event.recruiting_cycle_hints, event.role_hint, event.subject))
     found: list[str] = []
     found_keys: set[str] = set()
 
@@ -251,7 +239,12 @@ def _explicit_event_cycles(event: MailEvent) -> tuple[str, ...]:
     if found:
         return tuple(found)
 
-    seasons = {season.casefold() for season in _ROLE_SEASON_PATTERN.findall(event.role_hint)}
+    seasons = {
+        season.casefold()
+        for season in _ROLE_SEASON_PATTERN.findall("\n".join(event.recruiting_cycle_hints))
+    }
+    if not seasons:
+        seasons = {season.casefold() for season in _ROLE_SEASON_PATTERN.findall(event.role_hint)}
     if len(seasons) == 1:
         season = seasons.pop()
         inferred_year = event.received_at.year + int(
@@ -260,9 +253,6 @@ def _explicit_event_cycles(event: MailEvent) -> tuple[str, ...]:
         add(season, str(inferred_year))
         return tuple(found)
 
-    years = set(_ROLE_YEAR_PATTERN.findall(text))
-    if len(years) == 1 and _INTERNSHIP_ROLE_PATTERN.search(event.role_hint):
-        add("Summer", years.pop())
     return tuple(found)
 
 
@@ -352,11 +342,6 @@ def import_confirmed_application_tracker_rows(
             )
             if len(existing_cycles) == 1:
                 event_cycles = existing_cycles
-        if not event_cycles:
-            fallback = _fallback_cycle_for_received_at(
-                event.received_at.year, event.received_at.month, projection_cycles
-            )
-            event_cycles = (fallback,) if fallback is not None else ()
         if not event_cycles:
             continue
         for cycle in event_cycles:

@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS mail_events (
     reference_ids_json TEXT NOT NULL DEFAULT '[]',
     company_hint TEXT NOT NULL DEFAULT '',
     role_hint TEXT NOT NULL DEFAULT '',
+    recruiting_cycle_hints_json TEXT NOT NULL DEFAULT '[]',
     receipt_parsed INTEGER NOT NULL DEFAULT 0,
     receipt_parser_version INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
@@ -312,6 +313,19 @@ def _bounded_mail_hint(value: str, *, limit: int) -> str:
     return normalized[:limit].rstrip()
 
 
+def _safe_recruiting_cycle_hints(event: MailEvent) -> tuple[str, ...]:
+    pattern = re.compile(r"^(?:Winter|Spring|Summer|Fall)(?: 20\d{2})?$", re.I)
+    return tuple(
+        sorted(
+            {
+                normalized.title()
+                for value in event.recruiting_cycle_hints
+                if (normalized := " ".join(value.split())) and pattern.fullmatch(normalized)
+            }
+        )
+    )[:8]
+
+
 def _safe_mail_signals(event: MailEvent) -> tuple[tuple[str, ...], tuple[str, ...]]:
     urls = tuple(
         sorted({safe for value in event.job_urls if (safe := _canonical_mail_job_url(value))})
@@ -389,6 +403,7 @@ class ErgaStore:
                 ("reference_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
                 ("company_hint", "TEXT NOT NULL DEFAULT ''"),
                 ("role_hint", "TEXT NOT NULL DEFAULT ''"),
+                ("recruiting_cycle_hints_json", "TEXT NOT NULL DEFAULT '[]'"),
                 ("receipt_parsed", "INTEGER NOT NULL DEFAULT 0"),
                 ("receipt_parser_version", "INTEGER NOT NULL DEFAULT 0"),
             ):
@@ -1617,15 +1632,16 @@ class ErgaStore:
             raise ValueError("mail event received_at must be timezone-aware")
         self.initialize()
         job_urls, requisition_ids = _safe_mail_signals(event)
+        recruiting_cycle_hints = _safe_recruiting_cycle_hints(event)
         with closing(self._connection()) as connection:
             result = connection.execute(
                 """
                 INSERT INTO mail_events (
                     message_id, received_at, sender, subject, kind, confidence,
                     requires_review, sender_domain, job_urls_json, requisition_ids_json,
-                    thread_id, reference_ids_json, company_hint, role_hint, receipt_parsed,
-                    receipt_parser_version, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    thread_id, reference_ids_json, company_hint, role_hint,
+                    recruiting_cycle_hints_json, receipt_parsed, receipt_parser_version, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(message_id) DO NOTHING
                 """,
                 (
@@ -1651,6 +1667,7 @@ class ErgaStore:
                     ),
                     _bounded_mail_hint(event.company_hint, limit=100),
                     _bounded_mail_hint(event.role_hint, limit=200),
+                    json.dumps(recruiting_cycle_hints),
                     event.receipt_parsed,
                     max(0, event.receipt_parser_version),
                     _as_text(_now()),
@@ -1672,20 +1689,22 @@ class ErgaStore:
             raise ValueError("mail event received_at must be timezone-aware")
         self.initialize()
         job_urls, requisition_ids = _safe_mail_signals(event)
+        recruiting_cycle_hints = _safe_recruiting_cycle_hints(event)
         with closing(self._connection()) as connection:
             result = connection.execute(
                 """
                 UPDATE mail_events
                 SET kind = ?, confidence = ?, requires_review = ?, sender_domain = ?,
                     job_urls_json = ?, requisition_ids_json = ?, thread_id = ?,
-                    reference_ids_json = ?, company_hint = ?, role_hint = ?, receipt_parsed = ?,
-                    receipt_parser_version = ?
+                    reference_ids_json = ?, company_hint = ?, role_hint = ?,
+                    recruiting_cycle_hints_json = ?, receipt_parsed = ?, receipt_parser_version = ?
                 WHERE message_id = ?
                   AND (
                     kind != ? OR confidence != ? OR requires_review != ? OR
                     sender_domain != ? OR job_urls_json != ? OR requisition_ids_json != ? OR
                     thread_id != ? OR reference_ids_json != ? OR company_hint != ? OR
-                    role_hint != ? OR receipt_parsed != ? OR receipt_parser_version != ?
+                    role_hint != ? OR recruiting_cycle_hints_json != ? OR receipt_parsed != ? OR
+                    receipt_parser_version != ?
                   )
                 """,
                 (
@@ -1707,6 +1726,7 @@ class ErgaStore:
                     ),
                     _bounded_mail_hint(event.company_hint, limit=100),
                     _bounded_mail_hint(event.role_hint, limit=200),
+                    json.dumps(recruiting_cycle_hints),
                     event.receipt_parsed,
                     max(0, event.receipt_parser_version),
                     event.message_id,
@@ -1728,6 +1748,7 @@ class ErgaStore:
                     ),
                     _bounded_mail_hint(event.company_hint, limit=100),
                     _bounded_mail_hint(event.role_hint, limit=200),
+                    json.dumps(recruiting_cycle_hints),
                     event.receipt_parsed,
                     max(0, event.receipt_parser_version),
                 ),
@@ -1764,6 +1785,9 @@ class ErgaStore:
                 reference_ids=tuple(str(value) for value in json.loads(row["reference_ids_json"])),
                 company_hint=str(row["company_hint"]),
                 role_hint=str(row["role_hint"]),
+                recruiting_cycle_hints=tuple(
+                    str(value) for value in json.loads(row["recruiting_cycle_hints_json"])
+                ),
                 receipt_parsed=bool(row["receipt_parsed"]),
                 receipt_parser_version=int(row["receipt_parser_version"]),
             )

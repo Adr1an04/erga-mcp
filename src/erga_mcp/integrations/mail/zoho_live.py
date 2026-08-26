@@ -107,6 +107,7 @@ def _event_from_message(message: MailMessageMetadata) -> MailEvent:
         reference_ids=signals["reference_ids"],
         company_hint=receipt.company if receipt is not None else "",
         role_hint=receipt.role if receipt is not None else "",
+        recruiting_cycle_hints=(receipt.recruiting_cycle_hints if receipt is not None else ()),
         receipt_parsed=True,
         receipt_parser_version=RECEIPT_PARSER_VERSION,
     )
@@ -141,12 +142,16 @@ def refresh_known_metadata(
             ),
             company_hint=candidate.company_hint or existing.company_hint,
             role_hint=candidate.role_hint or existing.role_hint,
+            recruiting_cycle_hints=(
+                candidate.recruiting_cycle_hints or existing.recruiting_cycle_hints
+            ),
         )
         identity_changed = bool(
             merged.company_hint != existing.company_hint
             or merged.role_hint != existing.role_hint
             or set(merged.requisition_ids) != set(existing.requisition_ids)
             or set(merged.job_urls) != set(existing.job_urls)
+            or set(merged.recruiting_cycle_hints) != set(existing.recruiting_cycle_hints)
         )
         changed = store.update_mail_event_classification(merged)
         reparsed += int(existing.receipt_parser_version < RECEIPT_PARSER_VERSION)

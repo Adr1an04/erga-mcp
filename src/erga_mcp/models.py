@@ -154,6 +154,7 @@ class MailEvent:
     reference_ids: tuple[str, ...] = ()
     company_hint: str = ""
     role_hint: str = ""
+    recruiting_cycle_hints: tuple[str, ...] = ()
     receipt_parsed: bool = False
     receipt_parser_version: int = 0
 
