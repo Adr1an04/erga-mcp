@@ -1227,6 +1227,23 @@ class HermesJobUrlRouterTests(unittest.TestCase):
 
         self.assertEqual(self.router.extract_job_url(url), url)
 
+    def test_extracts_a_lifeattiktok_numeric_job_route_unchanged(self) -> None:
+        url = (
+            "https://lifeattiktok.com/search/7672671220798818613"
+            "?spread=5MWH5CQ&jr_id=6a8e595beb0ee5374a47d0af"
+        )
+
+        self.assertEqual(self.router.extract_job_url(url), url)
+
+    def test_extracts_a_clean_url_from_a_markdown_lifeattiktok_link(self) -> None:
+        url = (
+            "https://lifeattiktok.com/search/7672671220798818613"
+            "?spread=5MWH5CQ&jr_id=6a8e595beb0ee5374a47d0af"
+        )
+        message = f"[{url}]({url})\nAI Infra Engineer Intern — 2027 Summer"
+
+        self.assertEqual(self.router.extract_job_url(message), url)
+
     def test_extracts_angle_bracket_link_before_unfurled_job_text(self) -> None:
         url = "https://careers.example.com/openings/software-engineering-intern"
         message = (
@@ -2261,6 +2278,19 @@ class HermesJobUrlRouterTests(unittest.TestCase):
         self.assertEqual(len(context.calls), 1)
         self.assertEqual(context.calls[0][0], "mcp__erga_mcp__create_tailoring_plan")
         self.assertEqual(context.calls[0][1], {"job_url": url})
+
+    def test_explicit_slash_command_accepts_an_opaque_company_job_route(self) -> None:
+        context = _FakePluginContext(result="{}")
+        self.router.register(context)
+        url = "https://company.example.test/search/opaque-posting-reference"
+
+        result = context.commands["intake-job"](url)
+
+        self.assertNotIn("Usage:", result)
+        self.assertEqual(
+            context.calls,
+            [("mcp__erga_mcp__create_tailoring_plan", {"job_url": url})],
+        )
 
     def test_monitor_command_installs_scripts_and_delivers_cron_to_origin(self) -> None:
         context = _FakePluginContext(

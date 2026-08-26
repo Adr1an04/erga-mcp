@@ -66,7 +66,9 @@ _DEFAULT_RETRY_INTERVAL_SECONDS = 0.25
 _MAX_RETRY_INTERVAL_SECONDS = 5.0
 _READY_TIMEOUT_ENV = "ERGA_MCP_READY_TIMEOUT_SECONDS"
 _RETRY_INTERVAL_ENV = "ERGA_MCP_READY_RETRY_SECONDS"
-_URL = re.compile(r"https?://[^\s<>\"'`]+", re.IGNORECASE)
+# Stop before Markdown's closing label delimiter so ``[URL](URL)`` is parsed as
+# two clean candidates instead of one malformed, concatenated URL.
+_URL = re.compile(r"https?://[^\s<>\"'`\]]+", re.IGNORECASE)
 _NEGATED_SUMMARY = re.compile(
     r"\b(?:do\s+not|don't|dont|don’t|not|never)\s+"
     r"(?:(?:just|only)\s+)?summari[sz]e\b",
@@ -917,6 +919,13 @@ def _looks_like_job_url(candidate: str) -> bool:
     host = (parsed.hostname or "").rstrip(".").casefold()
     if not host or parsed.path.casefold().endswith(_NON_PAGE_SUFFIXES):
         return False
+    if host in {"lifeattiktok.com", "www.lifeattiktok.com"} and re.fullmatch(
+        r"/search/\d+/?", parsed.path
+    ):
+        # LifeAtTikTok serves job details from a numeric /search route rather
+        # than a conventional /jobs route.  Query values such as ``jr_id`` are
+        # attribution metadata and must remain intact for canonical identity.
+        return True
     if any(host == suffix or host.endswith(f".{suffix}") for suffix in _JOB_HOST_SUFFIXES):
         return True
     if (
@@ -1527,9 +1536,13 @@ def register(
         )
 
     def intake_command(raw_args: str) -> object:
-        job_url = extract_job_url(raw_args)
-        if job_url is None:
+        # The explicit slash command is already unambiguous user intent.  Do not
+        # apply the conservative bare-link heuristic here: company career sites
+        # routinely use opaque routes that the automatic detector cannot know.
+        candidates = _candidate_urls(raw_args)
+        if not candidates:
             return "Usage: /intake-job <job-posting-url>"
+        job_url = candidates[0]
         try:
             plan = ctx.dispatch_tool(tailoring_plan_create_tool, {"job_url": job_url})
         except Exception as exc:
