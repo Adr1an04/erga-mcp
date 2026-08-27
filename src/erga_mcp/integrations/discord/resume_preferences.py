@@ -80,7 +80,7 @@ def _limits_for(content: str, label: str) -> tuple[int, int] | None:
     return None
 
 
-def parse_resume_preference_update(content: str) -> dict[str, int] | None:
+def parse_resume_preference_update(content: str) -> dict[str, int | bool] | None:
     """Parse only explicit persistent-default requests, never ordinary tailoring prompts."""
     normalized = _normalize(content)
     if not _has_resume_preference_subject(normalized) or not _has_persistent_update_intent(
@@ -88,7 +88,27 @@ def parse_resume_preference_update(content: str) -> dict[str, int] | None:
     ):
         return None
 
-    updates: dict[str, int] = {}
+    updates: dict[str, int | bool] = {}
+    one_line_markers = (
+        "single line bullets",
+        "single-line bullets",
+        "one line bullets",
+        "one-line bullets",
+        "never wrap bullets",
+        "no wrapped bullets",
+        "do not wrap bullets",
+        "don't wrap bullets",
+    )
+    wrapped_markers = (
+        "allow wrapped bullets",
+        "allow bullets to wrap",
+        "multi line bullets",
+        "multi-line bullets",
+    )
+    if any(marker in normalized for marker in one_line_markers):
+        updates["single_line_bullets"] = True
+    elif any(marker in normalized for marker in wrapped_markers):
+        updates["single_line_bullets"] = False
     if "unlimited pages" in normalized or "no page limit" in normalized:
         updates["max_pages"] = 0
     else:
@@ -132,6 +152,9 @@ def render_resume_preferences(settings: ResumeSettings, *, updated: bool = False
     else:
         suffix = "page" if settings.max_pages == 1 else "pages"
         page_limit = f"up to {settings.max_pages} {suffix}"
+    wrapping = (
+        "never; every bullet must render on one line" if settings.single_line_bullets else "allowed"
+    )
     heading = "✓ Résumé defaults updated" if updated else "Your résumé defaults"
     return (
         f"**{heading}**\n"
@@ -139,6 +162,8 @@ def render_resume_preferences(settings: ResumeSettings, *, updated: bool = False
         f"• Each experience: {settings.experience_min_bullets}–"
         f"{settings.experience_max_bullets} bullets\n"
         f"• Each project: {settings.project_min_bullets}–"
-        f"{settings.project_max_bullets} bullets\n\n"
+        f"{settings.project_max_bullets} bullets\n"
+        f"• Bullet wrapping: {wrapping}"
+        "\n\n"
         "These apply to future tailored résumés. You can change them anytime in normal language."
     )

@@ -1376,6 +1376,7 @@ async def draft_evidence_backed_projects(
     bullet_target_chars: int,
     bullet_max_chars: int,
     require_unique_lead_verbs: bool,
+    single_line_bullets: bool = False,
     retry_feedback: str = "",
     required_project_ids: tuple[str, ...] = (),
     tailoring_emphasis: str = "balanced",
@@ -1566,6 +1567,7 @@ async def draft_evidence_backed_projects(
             "minimum_hard": bullet_min_chars,
             "target": bullet_target_chars,
             "maximum_hard": bullet_max_chars,
+            "single_rendered_line_hard": single_line_bullets,
         },
         "forbidden_lead_verbs": sorted(baseline_leads) if require_unique_lead_verbs else [],
         "allowed_lead_verbs": list(allowed_lead_verbs) if require_unique_lead_verbs else [],
@@ -1636,6 +1638,12 @@ async def draft_evidence_backed_projects(
         "exact list; no two bullets anywhere in the submission may share a lead verb. Return plain "
         "text, never LaTeX. Prefer concrete engineering scope and outcomes over generic prose."
     )
+    if single_line_bullets:
+        system_prompt += (
+            " Every bullet must be compact enough to render on one physical line in the user's "
+            "unchanged resume template. Rendered PDF measurement is authoritative; a character "
+            "count alone does not prove that a bullet fits."
+        )
     messages = [TailoringDraftMessage(role="user", text=json.dumps(prompt))]
     if retry_feedback:
         system_prompt += (

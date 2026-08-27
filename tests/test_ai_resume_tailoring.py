@@ -250,6 +250,7 @@ Python
         maximum_bullets: int = 2,
         minimum_bullets: int | None = None,
         minimum_characters: int = 0,
+        single_line_bullets: bool = False,
         style_preferences: ResumeStylePreferences | None = None,
         candidate: ProjectCandidate | None = None,
     ):
@@ -347,6 +348,7 @@ Python
                     bullet_target_chars=105,
                     bullet_max_chars=116,
                     require_unique_lead_verbs=True,
+                    single_line_bullets=single_line_bullets,
                     retry_feedback=retry_feedback,
                     required_project_ids=required_project_ids,
                     style_preferences=style_preferences,
@@ -653,7 +655,8 @@ Python
                         ],
                     }
                 ]
-            }
+            },
+            single_line_bullets=True,
         )
 
         self.assertEqual(result.model, "synthetic-tailor")
@@ -686,6 +689,8 @@ Python
         self.assertIn("monotonically by relevance_rank", session.calls[0]["system_prompt"])
         self.assertIn("hard character minimum and maximum", session.calls[0]["system_prompt"])
         self.assertIn("Never split one evidence graph path", session.calls[0]["system_prompt"])
+        self.assertIn("one physical line", session.calls[0]["system_prompt"])
+        self.assertTrue(prompt["bullet_character_preferences"]["single_rendered_line_hard"])
         self.assertEqual(
             prompt["selection_objective"]["priority_order"][0],
             "required-role coverage",

@@ -73,6 +73,23 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(resume.experience_max_bullets, 4)
             self.assertEqual(resume.project_min_bullets, 2)
             self.assertEqual(resume.project_max_bullets, 4)
+            self.assertFalse(resume.single_line_bullets)
+
+    def test_single_line_bullets_require_an_explicit_boolean_opt_in(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(
+                "[resume]\nsingle_line_bullets = true\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(load_config(config_path).resume.single_line_bullets)
+
+            config_path.write_text(
+                '[resume]\nsingle_line_bullets = "yes"\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "single_line_bullets"):
+                load_config(config_path)
 
     def test_resume_entry_bullet_limits_must_be_ordered_and_positive(self) -> None:
         with TemporaryDirectory() as directory:

@@ -44,6 +44,7 @@ class ResumeSettingsCliTests(unittest.TestCase):
                     "105",
                     "--bullet-max-chars",
                     "120",
+                    "--single-line-bullets",
                     "--max-pages",
                     "2",
                     "--experience-min-bullets",
@@ -66,6 +67,7 @@ class ResumeSettingsCliTests(unittest.TestCase):
             self.assertEqual(settings["template_path"], str(root / "templates/master.tex"))
             self.assertEqual(settings["editable_sections"], ["experience", "projects"])
             self.assertEqual(settings["bullet_target_chars"], 105)
+            self.assertTrue(settings["single_line_bullets"])
             self.assertEqual(settings["max_pages"], 2)
             self.assertEqual(settings["experience_min_bullets"], 3)
             self.assertEqual(settings["experience_max_bullets"], 5)
@@ -77,6 +79,7 @@ class ResumeSettingsCliTests(unittest.TestCase):
             self.assertIn('template_path = "templates/master.tex"', stored_config)
             self.assertIn('output_root = "applications"', stored_config)
             self.assertIn('output_pdf_name = "Candidate_Resume.pdf"', stored_config)
+            self.assertIn("single_line_bullets = true", stored_config)
 
     def test_rejects_invalid_settings_without_changing_the_config_file(self) -> None:
         with TemporaryDirectory() as directory:

@@ -845,7 +845,7 @@ Bottom of the approved master template.
         self.assertEqual([item.id for item in enrichment.candidates], ["beta", "alpha"])
         self.assertEqual([report["project_id"] for report in enrichment.reports], ["beta", "alpha"])
 
-    def test_ai_layout_retry_lowers_the_hard_cap_and_disables_the_soft_minimum(self) -> None:
+    def test_ai_layout_retry_lowers_the_cap_without_weakening_the_hard_minimum(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             resume = root / "resume.tex"
@@ -859,7 +859,8 @@ Bottom of the approved master template.
                 .replace("project_count = 4", "project_count = 1")
                 .replace("bullet_min_chars = 0", "bullet_min_chars = 99")
                 .replace("bullet_target_chars = 0", "bullet_target_chars = 105")
-                .replace("bullet_max_chars = 0", "bullet_max_chars = 116"),
+                .replace("bullet_max_chars = 0", "bullet_max_chars = 116")
+                .replace("single_line_bullets = false", "single_line_bullets = true"),
                 encoding="utf-8",
             )
             config = load_config(config_path)
@@ -926,7 +927,10 @@ Bottom of the approved master template.
             )
             self.assertEqual(
                 [call.kwargs["bullet_min_chars"] for call in draft.await_args_list],
-                [99, 0],
+                [99, 99],
+            )
+            self.assertTrue(
+                all(call.kwargs["single_line_bullets"] for call in draft.await_args_list)
             )
             self.assertEqual(
                 [call.kwargs["required_project_ids"] for call in draft.await_args_list],
@@ -1163,6 +1167,7 @@ Bottom of the approved master template.
                 .replace("bullet_min_chars = 0", "bullet_min_chars = 1")
                 .replace("bullet_target_chars = 0", "bullet_target_chars = 60")
                 .replace("bullet_max_chars = 0", "bullet_max_chars = 116")
+                .replace("single_line_bullets = false", "single_line_bullets = true")
                 .replace("project_count = 4", "project_count = 1"),
                 encoding="utf-8",
             )
@@ -1195,15 +1200,24 @@ Bottom of the approved master template.
                 )
 
             layouts = (
-                ResumeItemLayoutValidation(
-                    ("latexmk",), 0, 1, (0,), "", "", orphan_item_indices=(0,)
-                ),
+                ResumeItemLayoutValidation(("latexmk",), 0, 1, (0,), "", ""),
                 ResumeItemLayoutValidation(("latexmk",), 0, 1, (), "", ""),
             )
-            with patch(
-                "erga_mcp.mcp.server.validate_single_line_resume_items",
-                side_effect=layouts,
-            ) as validate:
+
+            def compile_proposal(path: Path, **_: object) -> LatexValidation:
+                path.with_suffix(".pdf").write_bytes(b"synthetic")
+                return LatexValidation(("latexmk",), 0, "", "")
+
+            with (
+                patch(
+                    "erga_mcp.mcp.server.validate_latex_proposal",
+                    side_effect=compile_proposal,
+                ),
+                patch(
+                    "erga_mcp.mcp.server.inspect_compiled_resume_item_layout",
+                    side_effect=layouts,
+                ) as validate,
+            ):
                 selected, rejections = _layout_safe_project_selection(
                     resume_path=resume,
                     output_dir=root / "output",
@@ -2667,7 +2681,7 @@ Bottom of the approved master template.
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
             self.assertTrue(result["tailoring_meaningful_change"])
             self.assertEqual(result["tailoring_changed_sections"], ["Experience"])
-            self.assertEqual(result["tailoring_version"], 39)
+            self.assertEqual(result["tailoring_version"], 40)
             self.assertEqual(result["readiness"], "ready")
             self.assertEqual(result["git_project_research"], [])
             self.assertIsInstance(result["application_id"], str)
@@ -2681,7 +2695,7 @@ Bottom of the approved master template.
                 (Path(result["package_dir"]) / "package.json").read_text(encoding="utf-8")
             )
             self.assertTrue(manifest["tailoring"]["meaningful_change"])
-            self.assertEqual(manifest["tailoring"]["version"], 39)
+            self.assertEqual(manifest["tailoring"]["version"], 40)
             self.assertEqual(
                 manifest["generated_resume_version_id"], result["generated_resume_version_id"]
             )
@@ -2755,7 +2769,7 @@ Bottom of the approved master template.
             )
             manifest = json.loads((repaired / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["legacy_backup"], "legacy-backup")
-            self.assertEqual(manifest["tailoring"]["version"], 39)
+            self.assertEqual(manifest["tailoring"]["version"], 40)
             self.assertIn("Legacy package preserved", result["integration_warnings"][-1])
 
     def test_compile_rejects_a_pdf_over_the_configured_page_cap(self) -> None:

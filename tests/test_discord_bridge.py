@@ -91,14 +91,20 @@ class DiscordBridgeTests(unittest.TestCase):
         )
         self.assertEqual(
             parse_resume_preference_update(
-                "Set my resume defaults to 2-4 bullets per experience/project"
+                "Set my resume defaults to 2-4 bullets per experience/project and never wrap "
+                "bullets"
             ),
             {
                 "experience_min_bullets": 2,
                 "experience_max_bullets": 4,
                 "project_min_bullets": 2,
                 "project_max_bullets": 4,
+                "single_line_bullets": True,
             },
+        )
+        self.assertEqual(
+            parse_resume_preference_update("Change my resume preference to allow wrapped bullets"),
+            {"single_line_bullets": False},
         )
         self.assertIsNone(
             parse_resume_preference_update(
@@ -129,7 +135,7 @@ class DiscordBridgeTests(unittest.TestCase):
                 mentions=[],
                 content=(
                     "Set my resume defaults to 2 pages with 3-5 bullets per experience "
-                    "and 2-3 per project"
+                    "and 2-3 per project with single-line bullets"
                 ),
                 channel=SimpleNamespace(id=123),
                 reply=AsyncMock(),
@@ -160,10 +166,15 @@ class DiscordBridgeTests(unittest.TestCase):
             self.assertEqual(settings.experience_max_bullets, 5)
             self.assertEqual(settings.project_min_bullets, 2)
             self.assertEqual(settings.project_max_bullets, 3)
+            self.assertTrue(settings.single_line_bullets)
             backend.assert_not_called()
             message.reply.assert_awaited_once_with(
                 render_resume_preferences(settings, updated=True),
                 mention_author=False,
+            )
+            self.assertIn(
+                "every bullet must render on one line",
+                render_resume_preferences(settings),
             )
 
     def test_a_bare_job_link_defaults_to_resume_tailoring(self) -> None:

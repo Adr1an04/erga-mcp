@@ -29,6 +29,9 @@ editable_sections = []
 bullet_min_chars = 0
 bullet_target_chars = 0
 bullet_max_chars = 0
+# When enabled, compilation fails unless every rendered resume bullet fits on exactly one line.
+# This is measured from the PDF; character counts alone are never treated as proof of fit.
+single_line_bullets = false
 max_pages = 1
 # For a one-page resume, require rendered text to occupy at least this fraction of the page height.
 # Erga fills the page with supported content and never stretches whitespace or invents filler.
@@ -108,6 +111,7 @@ class ResumeSettings:
     bullet_min_chars: int
     bullet_target_chars: int
     bullet_max_chars: int
+    single_line_bullets: bool
     max_pages: int
     minimum_page_fill_ratio: float
     output_root: Path
@@ -235,6 +239,9 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
             "resume bullet maximum must be 180 characters or fewer; longer bullets are not "
             "reliably scannable"
         )
+    single_line_bullets_value = resume.get("single_line_bullets", False)
+    if not isinstance(single_line_bullets_value, bool):
+        raise ValueError("resume single_line_bullets must be true or false")
     max_pages = int(resume.get("max_pages", 1))
     if max_pages < 0:
         raise ValueError("resume max_pages must be zero or positive")
@@ -287,6 +294,7 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
         bullet_min_chars=bullet_lengths[0],
         bullet_target_chars=bullet_lengths[1],
         bullet_max_chars=bullet_lengths[2],
+        single_line_bullets=single_line_bullets_value,
         max_pages=max_pages,
         minimum_page_fill_ratio=minimum_page_fill_ratio,
         output_root=_path(str(resume.get("output_root", "output")), base_dir),

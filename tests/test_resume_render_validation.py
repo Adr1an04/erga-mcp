@@ -42,6 +42,36 @@ class ResumeRenderValidationTests(unittest.TestCase):
             self.assertEqual(compile_calls, 1)
             self.assertEqual(result.wrapped_item_indices, (0,))
 
+    def test_single_line_mode_rejects_any_rendered_wrap(self) -> None:
+        with TemporaryDirectory() as directory:
+            proposal = Path(directory) / "proposal.tex"
+            proposal.write_text(
+                "\\begin{document}\\begin{itemize}\\item Synthetic bullet."
+                "\\end{itemize}\\end{document}\n",
+                encoding="utf-8",
+            )
+
+            def compile_success(path: Path, *, latexmk: Path) -> LatexValidation:
+                del latexmk
+                path.with_suffix(".pdf").write_bytes(b"synthetic")
+                return LatexValidation(("synthetic",), 0, "", "")
+
+            result = validate_resume_render(
+                proposal,
+                latexmk=Path("synthetic"),
+                compiler=compile_success,
+                compiled_layout_checker=lambda _tex, _pdf: ResumeItemLayoutValidation(
+                    (), 0, 1, (0,), "", "", ()
+                ),
+                reject_wrapped_items=True,
+                max_pages=0,
+            )
+
+            self.assertFalse(result.passed)
+            self.assertEqual(result.wrapped_item_indices, (0,))
+            self.assertIn("wrapped bullets [0]", result.reason or "")
+            self.assertFalse(proposal.with_suffix(".pdf").exists())
+
     def test_rejects_overfull_boxes_even_when_compilation_returns_success(self) -> None:
         with TemporaryDirectory() as directory:
             proposal = Path(directory) / "proposal.tex"

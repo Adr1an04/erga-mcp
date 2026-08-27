@@ -652,6 +652,7 @@ def _parser() -> argparse.ArgumentParser:
     resume_settings_set.add_argument("--bullet-min-chars", type=int)
     resume_settings_set.add_argument("--bullet-target-chars", type=int)
     resume_settings_set.add_argument("--bullet-max-chars", type=int)
+    resume_settings_set.add_argument("--single-line-bullets", action=argparse.BooleanOptionalAction)
     resume_settings_set.add_argument("--max-pages", type=int)
     resume_settings_set.add_argument("--experience-min-bullets", type=int)
     resume_settings_set.add_argument("--experience-max-bullets", type=int)
@@ -1800,6 +1801,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "bullet_min_chars": args.bullet_min_chars,
             "bullet_target_chars": args.bullet_target_chars,
             "bullet_max_chars": args.bullet_max_chars,
+            "single_line_bullets": args.single_line_bullets,
             "max_pages": args.max_pages,
             "experience_min_bullets": args.experience_min_bullets,
             "experience_max_bullets": args.experience_max_bullets,
