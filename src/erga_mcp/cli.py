@@ -119,6 +119,10 @@ from erga_mcp.resumes.artifacts import (
 from erga_mcp.resumes.cover_letter import create_cover_letter_proposal, load_style_context
 from erga_mcp.resumes.cover_letter_settings import as_json as cover_letter_settings_as_json
 from erga_mcp.resumes.cover_letter_settings import update_settings as update_cover_letter_settings
+from erga_mcp.resumes.experience_inventory import (
+    add_user_experience_bullet,
+    load_experience_inventory,
+)
 from erga_mcp.resumes.outcomes import build_resume_outcome_report
 from erga_mcp.resumes.render_validation import validate_resume_render
 from erga_mcp.resumes.settings import as_json as resume_settings_as_json
@@ -192,6 +196,12 @@ def _parser() -> argparse.ArgumentParser:
     tailor.add_argument("--max-pages", type=int, help="page limit for this resume")
     tailor.add_argument("--experience-min-bullets", type=int)
     tailor.add_argument("--experience-max-bullets", type=int)
+    tailor.add_argument(
+        "--experience-tailoring",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="select approved alternate bullets for each experience (saved setting by default)",
+    )
     tailor.add_argument("--project-min-bullets", type=int)
     tailor.add_argument("--project-max-bullets", type=int)
     tailor.add_argument("--minimum-page-fill", type=float)
@@ -653,6 +663,10 @@ def _parser() -> argparse.ArgumentParser:
     resume_settings_set.add_argument("--bullet-target-chars", type=int)
     resume_settings_set.add_argument("--bullet-max-chars", type=int)
     resume_settings_set.add_argument("--single-line-bullets", action=argparse.BooleanOptionalAction)
+    resume_settings_set.add_argument(
+        "--experience-tailoring", action=argparse.BooleanOptionalAction
+    )
+    resume_settings_set.add_argument("--experience-inventory-path")
     resume_settings_set.add_argument("--max-pages", type=int)
     resume_settings_set.add_argument("--experience-min-bullets", type=int)
     resume_settings_set.add_argument("--experience-max-bullets", type=int)
@@ -666,6 +680,24 @@ def _parser() -> argparse.ArgumentParser:
     resume_settings_set.add_argument("--output-root")
     resume_settings_set.add_argument("--output-pdf-name")
     resume_settings_set.add_argument("--latexmk")
+    resume_experience = resume_commands.add_parser(
+        "experience", help="manage approved alternative bullets for your work experience"
+    )
+    resume_experience_commands = resume_experience.add_subparsers(
+        dest="resume_experience_command", required=True
+    )
+    resume_experience_list = resume_experience_commands.add_parser(
+        "list", help="show stored roles and available bullet counts"
+    )
+    _config_argument(resume_experience_list)
+    resume_experience_add = resume_experience_commands.add_parser(
+        "add", help="add a fact you personally confirm for one role"
+    )
+    _config_argument(resume_experience_add)
+    resume_experience_add.add_argument("--role", required=True)
+    resume_experience_add.add_argument("--company", required=True)
+    resume_experience_add.add_argument("--bullet", required=True)
+    resume_experience_add.add_argument("--tag", action="append", default=[])
     resume_sources = resume_commands.add_parser(
         "sources", help="manage durable master knowledge and style references"
     )
@@ -1103,6 +1135,12 @@ def _tailor_limits(args: argparse.Namespace, settings: ResumeSettings) -> dict[s
     )
     project_min = getattr(args, "project_min_bullets", None) or settings.project_min_bullets
     project_max = getattr(args, "project_max_bullets", None) or settings.project_max_bullets
+    experience_tailoring_arg = getattr(args, "experience_tailoring", None)
+    experience_tailoring = (
+        settings.experience_tailoring
+        if experience_tailoring_arg is None
+        else bool(experience_tailoring_arg)
+    )
     minimum_fill = cast(
         float,
         getattr(args, "minimum_page_fill", None)
@@ -1130,6 +1168,7 @@ def _tailor_limits(args: argparse.Namespace, settings: ResumeSettings) -> dict[s
         "max_pages": max_pages,
         "experience_min_bullets": experience_min,
         "experience_max_bullets": experience_max,
+        "experience_tailoring": experience_tailoring,
         "project_min_bullets": project_min,
         "project_max_bullets": project_max,
         "minimum_page_fill_ratio": minimum_fill,
@@ -1802,6 +1841,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "bullet_target_chars": args.bullet_target_chars,
             "bullet_max_chars": args.bullet_max_chars,
             "single_line_bullets": args.single_line_bullets,
+            "experience_tailoring": args.experience_tailoring,
+            "experience_inventory_path": args.experience_inventory_path,
             "max_pages": args.max_pages,
             "experience_min_bullets": args.experience_min_bullets,
             "experience_max_bullets": args.experience_max_bullets,
@@ -1814,7 +1855,63 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "output_pdf_name": args.output_pdf_name,
             "latexmk": args.latexmk,
         }
+        if (
+            args.experience_tailoring is None
+            and args.editable_section
+            and any(section.casefold() == "experience" for section in args.editable_section)
+        ):
+            updates["experience_tailoring"] = True
         _print_json(resume_settings_as_json(update_settings(args.config, updates)))
+        return 0
+    if args.command == "resume" and args.resume_command == "experience":
+        config = load_config(args.config)
+        inventory_path = config.resume.experience_inventory_path
+        if inventory_path is None:
+            raise ValueError(
+                "experience storage is not configured; run `erga setup` once to create it"
+            )
+        if args.resume_experience_command == "list":
+            experience_records = load_experience_inventory(inventory_path, store.list_evidence())
+            _print_json(
+                [
+                    {
+                        "id": item.id,
+                        "role": item.title,
+                        "company": item.company,
+                        "bullet_count": len(item.bullets),
+                    }
+                    for item in experience_records
+                ]
+            )
+            return 0
+        evidence = store.add_evidence(
+            source_ref=f"user:experience/{args.company.strip()}/{args.role.strip()}",
+            text=" ".join(args.bullet.split()),
+            approved=True,
+        )
+        candidate_id, bullet_count = add_user_experience_bullet(
+            inventory_path,
+            title=args.role,
+            company=args.company,
+            text=args.bullet,
+            evidence_id=evidence.id,
+            tags=args.tag,
+        )
+        restrict_private_file(inventory_path)
+        # Re-read through the strict evidence/metric validator before reporting success.
+        load_experience_inventory(inventory_path, store.list_evidence())
+        _print_json(
+            {
+                "role_id": candidate_id,
+                "bullet_count": bullet_count,
+                "experience_tailoring": config.resume.experience_tailoring,
+                "next": (
+                    "Experience tailoring is ready."
+                    if config.resume.experience_tailoring
+                    else "Enable it with `erga resume settings set --experience-tailoring`."
+                ),
+            }
+        )
         return 0
     if args.command == "resume" and args.resume_command == "sources":
         config = load_config(args.config)
@@ -2026,6 +2123,12 @@ def main(arguments: Sequence[str] | None = None) -> int:
             if settings.project_inventory_path is not None
             else ()
         )
+        experience_candidates = (
+            load_experience_inventory(settings.experience_inventory_path, resume_approved)
+            if cast(bool, limits["experience_tailoring"])
+            and settings.experience_inventory_path is not None
+            else ()
+        )
         _tailor_progress(friendly_tailor, "Building the strongest supported one-page draft…")
         automatic = create_automatic_resume_proposal(
             resume_path=settings.template_path,
@@ -2038,6 +2141,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
             bullet_max_chars=settings.bullet_max_chars,
             project_candidates=resume_candidates,
             project_count=cast(int, limits["project_count"]),
+            experience_candidates=experience_candidates,
+            experience_tailoring=cast(bool, limits["experience_tailoring"]),
             experience_min_bullets=cast(int, limits["experience_min_bullets"]),
             experience_max_bullets=cast(int, limits["experience_max_bullets"]),
             project_min_bullets=cast(int, limits["project_min_bullets"]),
@@ -2078,6 +2183,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "selected_evidence_ids": [item.id for item in selected],
             "meaningful_change": automatic.meaningful_change,
             "changed_sections": list(automatic.changed_sections),
+            "experience_selection": automatic.experience_selection,
             "fallback_reason": automatic.fallback_reason,
             "role_profile": (
                 research.role_profile.as_dict() if research.role_profile is not None else None
@@ -2220,6 +2326,14 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 store=store,
                 output_root=config.resume.output_root,
                 destination=args.output,
+                resume_assets={
+                    "master"
+                    + (
+                        config.resume.master_path.suffix if config.resume.master_path else ""
+                    ): config.resume.master_path,
+                    "project-inventory.json": config.resume.project_inventory_path,
+                    "experience-inventory.json": config.resume.experience_inventory_path,
+                },
             )
         )
         return 0

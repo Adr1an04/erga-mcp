@@ -162,18 +162,21 @@ _LAYOUT_MARKER = re.compile(r"ERGA-RESUME-ITEM-(?P<state>FIT|WRAP|ORPHAN):(?P<in
 _PDF_BULLET_LINE = re.compile(r"^(?P<indent>\s*)[•●▪◦‣⁃]\s+(?P<text>.*\S)\s*$")
 _STANDARD_ITEM = re.compile(r"\\item(?![A-Za-z\[])", re.MULTILINE)
 _SINGLE_LINE_LAYOUT_INSTRUMENT = r"""
-\newlength{\ergaResumeItemWidth}
 \newcounter{ergaResumeItemCounter}
 \let\ergaOriginalResumeItem\resumeItem
 \renewcommand{\resumeItem}[1]{%
   \stepcounter{ergaResumeItemCounter}%
-  \settowidth{\ergaResumeItemWidth}{\small #1}%
-  \ifdim\ergaResumeItemWidth>\linewidth
+  \ergaOriginalResumeItem{#1}%
+  % End the real item paragraph before inspecting it.  Width-only measurement misses an
+  % invisible second line created by template glue such as ``#1 \vspace{-1.6pt}`` when the
+  % visible text consumes the line.  \prevgraf counts physical paragraph lines, including that
+  % empty-looking line, using the template's actual font, list width, and macro implementation.
+  \par
+  \ifnum\prevgraf>1
     \typeout{ERGA-RESUME-ITEM-WRAP:\arabic{ergaResumeItemCounter}}%
   \else
     \typeout{ERGA-RESUME-ITEM-FIT:\arabic{ergaResumeItemCounter}}%
   \fi
-  \ergaOriginalResumeItem{#1}%
 }
 """
 

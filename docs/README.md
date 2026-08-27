@@ -9,6 +9,7 @@ Use this page as the single documentation entry point.
 | Install, onboard, and run the CLI | [Getting started](getting-started.md) |
 | Connect Claude, Codex, Cursor, VS Code, or another MCP client | [MCP clients](mcp-clients.md) |
 | Configure project discovery and approved evidence | [Project inventory](project-inventory.md) |
+| Tailor approved bullets for each work experience | [Experience tailoring](experience-tailoring.md) |
 | Enable the optional Discord interface | [Discord](discord.md) |
 | Understand data access, permissions, and trust boundaries | [Security model](security.md) |
 

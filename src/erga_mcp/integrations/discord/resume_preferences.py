@@ -32,9 +32,14 @@ def _normalize(content: str) -> str:
 
 
 def _has_resume_preference_subject(content: str) -> bool:
-    return "resume" in content or bool(
-        re.search(r"\b(?:experience|project)s?\s+bullets?\b", content)
-        or re.search(r"\bbullets?\s+(?:per|for)\s+(?:experience|project)s?\b", content)
+    return (
+        "resume" in content
+        or "experience tailoring" in content
+        or "experience unchanged" in content
+        or bool(
+            re.search(r"\b(?:experience|project)s?\s+bullets?\b", content)
+            or re.search(r"\bbullets?\s+(?:per|for)\s+(?:experience|project)s?\b", content)
+        )
     )
 
 
@@ -109,6 +114,23 @@ def parse_resume_preference_update(content: str) -> dict[str, int | bool] | None
         updates["single_line_bullets"] = True
     elif any(marker in normalized for marker in wrapped_markers):
         updates["single_line_bullets"] = False
+    enable_experience_markers = (
+        "tailor experience bullets",
+        "tailor my experience",
+        "experience tailoring on",
+        "enable experience tailoring",
+    )
+    disable_experience_markers = (
+        "do not tailor experience",
+        "don't tailor experience",
+        "experience tailoring off",
+        "disable experience tailoring",
+        "keep experience unchanged",
+    )
+    if any(marker in normalized for marker in enable_experience_markers):
+        updates["experience_tailoring"] = True
+    elif any(marker in normalized for marker in disable_experience_markers):
+        updates["experience_tailoring"] = False
     if "unlimited pages" in normalized or "no page limit" in normalized:
         updates["max_pages"] = 0
     else:
@@ -161,6 +183,7 @@ def render_resume_preferences(settings: ResumeSettings, *, updated: bool = False
         f"• Length: {page_limit}\n"
         f"• Each experience: {settings.experience_min_bullets}–"
         f"{settings.experience_max_bullets} bullets\n"
+        f"• Experience tailoring: {'on' if settings.experience_tailoring else 'off'}\n"
         f"• Each project: {settings.project_min_bullets}–"
         f"{settings.project_max_bullets} bullets\n"
         f"• Bullet wrapping: {wrapping}"

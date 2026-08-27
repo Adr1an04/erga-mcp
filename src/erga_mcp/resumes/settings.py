@@ -16,6 +16,9 @@ def as_json(settings: ResumeSettings) -> dict[str, object]:
     result["master_path"] = str(settings.master_path) if settings.master_path else None
     result["template_path"] = str(settings.template_path) if settings.template_path else None
     result["reference_path"] = str(settings.reference_path) if settings.reference_path else None
+    result["experience_inventory_path"] = (
+        str(settings.experience_inventory_path) if settings.experience_inventory_path else None
+    )
     result["output_root"] = str(settings.output_root)
     result["editable_sections"] = list(settings.editable_sections)
     return result

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -19,6 +20,34 @@ from erga_mcp.resumes.artifacts import (
 
 
 class ResumeValidationTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("tectonic"), "tectonic is not installed")
+    def test_rejects_an_invisible_second_line_created_by_template_spacing(self) -> None:
+        with TemporaryDirectory() as directory:
+            proposal = Path(directory) / "proposal.tex"
+            proposal.write_text(
+                r"""\documentclass{article}
+\newcommand{\resumeItem}[1]{\item\small{{#1 \vspace{-1.6pt}}}}
+\begin{document}
+\begin{minipage}{220pt}
+\begin{itemize}
+\resumeItem{\makebox[\linewidth][l]{Visible words remain on one rendered text line.}}
+\resumeItem{A normal second bullet.}
+\end{itemize}
+\end{minipage}
+\end{document}
+""",
+                encoding="utf-8",
+            )
+
+            result = validate_single_line_resume_items(
+                proposal,
+                latexmk=Path("tectonic"),
+            )
+
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.item_count, 2)
+            self.assertEqual(result.wrapped_item_indices, (0,))
+
     def test_inspects_an_existing_pdf_without_starting_a_second_compiler(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

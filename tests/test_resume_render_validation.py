@@ -10,6 +10,39 @@ from erga_mcp.resumes.tailoring import PdfPageFill
 
 
 class ResumeRenderValidationTests(unittest.TestCase):
+    def test_strict_mode_unions_pdf_text_and_physical_tex_line_measurements(self) -> None:
+        with TemporaryDirectory() as directory:
+            proposal = Path(directory) / "proposal.tex"
+            proposal.write_text(
+                "\\newcommand{\\resumeItem}[1]{\\item #1}"
+                "\\begin{document}\\begin{itemize}"
+                "\\resumeItem{Visible text fits but template glue does not.}"
+                "\\end{itemize}\\end{document}\n",
+                encoding="utf-8",
+            )
+
+            def compile_success(path: Path, *, latexmk: Path) -> LatexValidation:
+                del latexmk
+                path.with_suffix(".pdf").write_bytes(b"synthetic")
+                return LatexValidation(("synthetic",), 0, "", "")
+
+            result = validate_resume_render(
+                proposal,
+                latexmk=Path("synthetic"),
+                compiler=compile_success,
+                compiled_layout_checker=lambda _tex, _pdf: ResumeItemLayoutValidation(
+                    (), 0, 1, (), "", "", ()
+                ),
+                layout_checker=lambda _tex, *, latexmk: ResumeItemLayoutValidation(
+                    (str(latexmk),), 0, 1, (0,), "", "", ()
+                ),
+                reject_wrapped_items=True,
+                max_pages=0,
+            )
+
+            self.assertFalse(result.passed)
+            self.assertEqual(result.wrapped_item_indices, (0,))
+
     def test_reuses_compiled_pdf_for_layout_and_allows_healthy_wrapping(self) -> None:
         with TemporaryDirectory() as directory:
             proposal = Path(directory) / "proposal.tex"

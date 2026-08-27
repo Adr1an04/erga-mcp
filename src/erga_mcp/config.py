@@ -42,6 +42,10 @@ output_root = "output"
 project_inventory_path = ""
 project_selection_mode = "inventory_optional"
 project_count = 4
+# Select role-specific bullets from the approved experience inventory when one is available.
+# Existing master bullets remain the safe fallback, and users can disable this independently.
+experience_tailoring = true
+experience_inventory_path = ""
 # Every retained experience/project keeps this many approved bullets before extra lines compete on
 # job relevance. These are content budgets, not permission to invent unsupported claims.
 experience_min_bullets = 2
@@ -118,6 +122,8 @@ class ResumeSettings:
     project_inventory_path: Path | None
     project_selection_mode: str
     project_count: int
+    experience_tailoring: bool
+    experience_inventory_path: Path | None
     experience_min_bullets: int
     experience_max_bullets: int
     project_min_bullets: int
@@ -261,6 +267,13 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
     project_count = int(resume.get("project_count", 4))
     if project_count < 1:
         raise ValueError("resume project_count must be positive")
+    experience_tailoring = resume.get("experience_tailoring", False)
+    if not isinstance(experience_tailoring, bool):
+        raise ValueError("resume experience_tailoring must be true or false")
+    experience_inventory_value = str(resume.get("experience_inventory_path", "")).strip()
+    experience_inventory_path = (
+        _path(experience_inventory_value, base_dir) if experience_inventory_value else None
+    )
     experience_bullets = (
         int(resume.get("experience_min_bullets", 2)),
         int(resume.get("experience_max_bullets", 4)),
@@ -301,6 +314,8 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
         project_inventory_path=project_inventory_path,
         project_selection_mode=project_selection_mode,
         project_count=project_count,
+        experience_tailoring=experience_tailoring,
+        experience_inventory_path=experience_inventory_path,
         experience_min_bullets=experience_bullets[0],
         experience_max_bullets=experience_bullets[1],
         project_min_bullets=project_bullets[0],

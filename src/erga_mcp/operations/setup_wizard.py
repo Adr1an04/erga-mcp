@@ -21,6 +21,10 @@ from erga_mcp.operations.toml_edit import update_table
 from erga_mcp.portfolio.inventory import load_project_inventory, sync_project_inventory_from_master
 from erga_mcp.portfolio.roots import canonical_portfolio_roots
 from erga_mcp.portfolio.skill_inventory import parse_skill_seed_csv
+from erga_mcp.resumes.experience_inventory import (
+    load_experience_inventory,
+    sync_experience_inventory_from_master,
+)
 from erga_mcp.resumes.settings import update_settings
 from erga_mcp.resumes.sources import (
     SUPPORTED_RESUME_SUFFIXES,
@@ -96,6 +100,7 @@ class CoreSetupReport:
     skill_seed_count: int = 0
     portfolio_root_count: int = 0
     project_inventory_count: int = 0
+    experience_inventory_count: int = 0
 
     def as_json(self) -> dict[str, object]:
         return asdict(self)
@@ -678,6 +683,12 @@ def _project_inventory_path(
     return config_path.expanduser().absolute().parent / "project-inventory.json"
 
 
+def _experience_inventory_path(config_path: Path, erga_vault_dir: Path | None) -> Path:
+    if erga_vault_dir is not None:
+        return erga_vault_dir / "Experience Inventory.json"
+    return config_path.expanduser().absolute().parent / "experience-inventory.json"
+
+
 def _write_project_inventory(
     path: Path, *, master_latex: str, evidence_id: str
 ) -> tuple[bool, int, int]:
@@ -805,12 +816,24 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         source_name=master.path.name,
     )
     inventory_path = _project_inventory_path(selections.config_path, erga_vault_dir, vault_path)
+    inventory_source = (
+        master.text
+        if master.format == "tex"
+        else generated_template.path.read_text(encoding="utf-8")
+    )
     _, _, inventory_count = _write_project_inventory(
         inventory_path,
-        master_latex=master.text if master.format == "tex" else "",
+        master_latex=inventory_source,
         evidence_id=evidence.id,
     )
     load_project_inventory(inventory_path, store.list_evidence())
+    experience_inventory_path = _experience_inventory_path(selections.config_path, erga_vault_dir)
+    _, _, experience_inventory_count = sync_experience_inventory_from_master(
+        experience_inventory_path,
+        master_latex=inventory_source,
+        evidence_id=evidence.id,
+    )
+    load_experience_inventory(experience_inventory_path, store.list_evidence())
     current_resume = config.resume
     resolved_max_pages = (
         selections.max_pages
@@ -830,6 +853,8 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
             "template_path": str(generated_template.path),
             "output_root": str(output_root),
             "project_inventory_path": str(inventory_path),
+            "experience_inventory_path": str(experience_inventory_path),
+            "experience_tailoring": ("Experience" in generated_template.profile.editable_sections),
             "project_selection_mode": (
                 "inventory_required"
                 if "Projects" in generated_template.profile.editable_sections
@@ -857,6 +882,8 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
     ]
     if inventory_count:
         completed.append("Approved project inventory with per-bullet evidence")
+    if experience_inventory_count:
+        completed.append("Approved experience bullet inventory with metric provenance")
     if managed_style is not None:
         completed.append("Managed resume style preference")
     if vault_path is not None:
@@ -891,6 +918,7 @@ def apply_core_setup(selections: CoreSetupSelections) -> CoreSetupReport:
         skill_seed_count=len(skill_seeds),
         portfolio_root_count=len(portfolio_roots),
         project_inventory_count=inventory_count,
+        experience_inventory_count=experience_inventory_count,
     )
 
 

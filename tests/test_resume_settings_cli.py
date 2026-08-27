@@ -45,6 +45,9 @@ class ResumeSettingsCliTests(unittest.TestCase):
                     "--bullet-max-chars",
                     "120",
                     "--single-line-bullets",
+                    "--experience-tailoring",
+                    "--experience-inventory-path",
+                    "experience.json",
                     "--max-pages",
                     "2",
                     "--experience-min-bullets",
@@ -68,6 +71,8 @@ class ResumeSettingsCliTests(unittest.TestCase):
             self.assertEqual(settings["editable_sections"], ["experience", "projects"])
             self.assertEqual(settings["bullet_target_chars"], 105)
             self.assertTrue(settings["single_line_bullets"])
+            self.assertTrue(settings["experience_tailoring"])
+            self.assertEqual(settings["experience_inventory_path"], str(root / "experience.json"))
             self.assertEqual(settings["max_pages"], 2)
             self.assertEqual(settings["experience_min_bullets"], 3)
             self.assertEqual(settings["experience_max_bullets"], 5)
@@ -80,6 +85,55 @@ class ResumeSettingsCliTests(unittest.TestCase):
             self.assertIn('output_root = "applications"', stored_config)
             self.assertIn('output_pdf_name = "Candidate_Resume.pdf"', stored_config)
             self.assertIn("single_line_bullets = true", stored_config)
+
+    def test_adds_and_lists_user_confirmed_experience_bullets(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.toml"
+            main(["init", "--config", str(config)])
+            self._json_command(
+                [
+                    "resume",
+                    "settings",
+                    "set",
+                    "--config",
+                    str(config),
+                    "--experience-tailoring",
+                    "--experience-inventory-path",
+                    "experience.json",
+                ]
+            )
+
+            result = self._json_command(
+                [
+                    "resume",
+                    "experience",
+                    "add",
+                    "--config",
+                    str(config),
+                    "--role",
+                    "Software Engineer",
+                    "--company",
+                    "Example Labs",
+                    "--bullet",
+                    "Improved 12 services and reduced failures by 40%.",
+                    "--tag",
+                    "reliability",
+                ]
+            )
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(
+                    main(["resume", "experience", "list", "--config", str(config)]),
+                    0,
+                )
+            roles = json.loads(output.getvalue())
+
+            self.assertEqual(result["bullet_count"], 1)
+            self.assertEqual(roles[0]["role"], "Software Engineer")
+            inventory = json.loads((root / "experience.json").read_text(encoding="utf-8"))
+            self.assertIn(r"\textbf{12}", inventory[0]["bullets"][0]["latex"])
+            self.assertIn(r"\textbf{40\%}", inventory[0]["bullets"][0]["latex"])
 
     def test_rejects_invalid_settings_without_changing_the_config_file(self) -> None:
         with TemporaryDirectory() as directory:

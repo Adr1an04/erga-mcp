@@ -106,6 +106,14 @@ class DiscordBridgeTests(unittest.TestCase):
             parse_resume_preference_update("Change my resume preference to allow wrapped bullets"),
             {"single_line_bullets": False},
         )
+        self.assertEqual(
+            parse_resume_preference_update("Enable experience tailoring going forward"),
+            {"experience_tailoring": True},
+        )
+        self.assertEqual(
+            parse_resume_preference_update("Keep experience unchanged from now on"),
+            {"experience_tailoring": False},
+        )
         self.assertIsNone(
             parse_resume_preference_update(
                 "Tailor my resume for this role and use two pages if necessary"

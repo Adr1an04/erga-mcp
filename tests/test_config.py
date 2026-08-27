@@ -74,6 +74,28 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(resume.project_min_bullets, 2)
             self.assertEqual(resume.project_max_bullets, 4)
             self.assertFalse(resume.single_line_bullets)
+            self.assertTrue(resume.experience_tailoring)
+            self.assertIsNone(resume.experience_inventory_path)
+
+    def test_experience_tailoring_is_an_explicit_boolean_with_an_optional_inventory(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(
+                '[resume]\nexperience_tailoring = true\nexperience_inventory_path = "roles.json"\n',
+                encoding="utf-8",
+            )
+
+            resume = load_config(config_path).resume
+
+            self.assertTrue(resume.experience_tailoring)
+            self.assertEqual(resume.experience_inventory_path, Path(directory) / "roles.json")
+
+            config_path.write_text(
+                '[resume]\nexperience_tailoring = "yes"\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "experience_tailoring"):
+                load_config(config_path)
 
     def test_single_line_bullets_require_an_explicit_boolean_opt_in(self) -> None:
         with TemporaryDirectory() as directory:

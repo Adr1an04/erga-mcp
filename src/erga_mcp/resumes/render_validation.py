@@ -134,12 +134,50 @@ def validate_resume_render(
     wrapped: tuple[int, ...] = ()
     orphans: tuple[int, ...] = ()
     if check_item_layout:
+        used_physical_layout = False
         try:
             layout = compiled_layout_checker(proposal_path, proposal_pdf)
         except ValueError:
             # Some uncommon PDF producers omit bullet glyphs from their text layer. Preserve the
             # exact TeX-instrumented validator as a compatibility fallback, not the common path.
             layout = layout_checker(proposal_path, latexmk=latexmk)
+            used_physical_layout = True
+        # A PDF text layer can prove that visible words wrapped, but it cannot expose a physical
+        # line containing only template glue.  In strict one-line mode, also inspect TeX's actual
+        # paragraph line count for custom resume-item macros and union both measurements.
+        if (
+            reject_wrapped_items
+            and r"\resumeItem" in source
+            and not used_physical_layout
+            and not layout.wrapped_item_indices
+        ):
+            physical_layout = layout_checker(proposal_path, latexmk=latexmk)
+            if physical_layout.returncode != 0:
+                proposal_pdf.unlink(missing_ok=True)
+                return ResumeRenderValidation(
+                    passed=False,
+                    returncode=1,
+                    pdf=None,
+                    page_count=page_count,
+                    reason="Resume physical-line measurement failed.",
+                )
+            layout = ResumeItemLayoutValidation(
+                command=physical_layout.command,
+                returncode=0,
+                item_count=max(layout.item_count, physical_layout.item_count),
+                wrapped_item_indices=tuple(
+                    sorted(
+                        set(layout.wrapped_item_indices) | set(physical_layout.wrapped_item_indices)
+                    )
+                ),
+                orphan_item_indices=tuple(
+                    sorted(
+                        set(layout.orphan_item_indices) | set(physical_layout.orphan_item_indices)
+                    )
+                ),
+                stdout=physical_layout.stdout,
+                stderr=physical_layout.stderr,
+            )
         if layout.returncode != 0:
             proposal_pdf.unlink(missing_ok=True)
             return ResumeRenderValidation(

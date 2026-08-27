@@ -156,6 +156,10 @@ from erga_mcp.resumes.artifacts import (
     validate_single_line_resume_items,
 )
 from erga_mcp.resumes.cover_letter import create_cover_letter_proposal, load_style_context
+from erga_mcp.resumes.experience_inventory import (
+    ExperienceCandidate,
+    load_experience_inventory,
+)
 from erga_mcp.resumes.planning import (
     answer_tailoring_plan,
     approve_tailoring_plan,
@@ -283,6 +287,35 @@ def _inventory_candidates(
     return load_project_inventory(path, evidence)
 
 
+def _experience_candidates(
+    config: ErgaConfig, evidence: list[Evidence]
+) -> tuple[ExperienceCandidate, ...]:
+    """Load role-specific alternatives only when the user explicitly enabled them."""
+    if not config.resume.experience_tailoring:
+        return ()
+    path = config.resume.experience_inventory_path
+    if path is None:
+        return ()
+    return load_experience_inventory(path, evidence)
+
+
+def _resume_item_layout(
+    proposal_path: Path,
+    pdf_path: Path,
+    *,
+    latexmk: str,
+    strict_physical_lines: bool,
+) -> ResumeItemLayoutValidation:
+    """Use TeX paragraph counts when invisible template glue must also be rejected."""
+    try:
+        visible_layout = inspect_compiled_resume_item_layout(proposal_path, pdf_path)
+    except ValueError:
+        return validate_single_line_resume_items(proposal_path, latexmk=Path(latexmk))
+    if not strict_physical_lines or visible_layout.wrapped_item_indices:
+        return visible_layout
+    return validate_single_line_resume_items(proposal_path, latexmk=Path(latexmk))
+
+
 def _layout_safe_project_selection(
     *,
     resume_path: Path,
@@ -308,6 +341,10 @@ def _layout_safe_project_selection(
             bullet_max_chars=config.resume.bullet_max_chars,
             project_candidates=project_candidates,
             project_count=config.resume.project_count,
+            experience_candidates=_experience_candidates(config, evidence),
+            experience_tailoring=config.resume.experience_tailoring,
+            experience_min_bullets=config.resume.experience_min_bullets,
+            experience_max_bullets=config.resume.experience_max_bullets,
             require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
             minimum_page_fill_ratio=(
                 config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
@@ -323,16 +360,12 @@ def _layout_safe_project_selection(
         proposal_pdf = automatic.proposal.proposed_tex_path.with_suffix(".pdf")
         if checked.returncode != 0 or not proposal_pdf.is_file():
             raise ValueError("single-line resume layout preflight did not compile")
-        try:
-            layout = inspect_compiled_resume_item_layout(
-                automatic.proposal.proposed_tex_path,
-                proposal_pdf,
-            )
-        except ValueError:
-            layout = validate_single_line_resume_items(
-                automatic.proposal.proposed_tex_path,
-                latexmk=Path(config.resume.latexmk),
-            )
+        layout = _resume_item_layout(
+            automatic.proposal.proposed_tex_path,
+            proposal_pdf,
+            latexmk=config.resume.latexmk,
+            strict_physical_lines=config.resume.single_line_bullets,
+        )
         if layout.returncode != 0:
             raise ValueError("single-line resume layout preflight could not measure bullets")
         rejected_item_indices = (
@@ -406,6 +439,10 @@ def _project_density_trial(
         bullet_max_chars=config.resume.bullet_max_chars,
         project_candidates=project_candidates,
         project_count=config.resume.project_count,
+        experience_candidates=_experience_candidates(config, evidence),
+        experience_tailoring=config.resume.experience_tailoring,
+        experience_min_bullets=config.resume.experience_min_bullets,
+        experience_max_bullets=config.resume.experience_max_bullets,
         preserve_project_candidate_order=True,
         require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
         minimum_page_fill_ratio=0,
@@ -424,16 +461,12 @@ def _project_density_trial(
     if checked.returncode != 0 or not proposal_pdf.is_file():
         return False, 0
     try:
-        try:
-            layout = inspect_compiled_resume_item_layout(
-                automatic.proposal.proposed_tex_path,
-                proposal_pdf,
-            )
-        except ValueError:
-            layout = validate_single_line_resume_items(
-                automatic.proposal.proposed_tex_path,
-                latexmk=Path(config.resume.latexmk),
-            )
+        layout = _resume_item_layout(
+            automatic.proposal.proposed_tex_path,
+            proposal_pdf,
+            latexmk=config.resume.latexmk,
+            strict_physical_lines=config.resume.single_line_bullets,
+        )
         if layout.returncode != 0 or layout.orphan_item_indices:
             return False, 0
         if config.resume.single_line_bullets and layout.wrapped_item_indices:
@@ -473,16 +506,12 @@ def _layout_balanced_generated_proposal(
                 ),
                 tuple(rejected),
             )
-        try:
-            layout = inspect_compiled_resume_item_layout(
-                automatic.proposal.proposed_tex_path,
-                proposal_pdf,
-            )
-        except ValueError:
-            layout = validate_single_line_resume_items(
-                automatic.proposal.proposed_tex_path,
-                latexmk=Path(latexmk),
-            )
+        layout = _resume_item_layout(
+            automatic.proposal.proposed_tex_path,
+            proposal_pdf,
+            latexmk=latexmk,
+            strict_physical_lines=single_line_bullets,
+        )
         rejected_indices = (
             layout.wrapped_item_indices if single_line_bullets else layout.orphan_item_indices
         )
@@ -530,6 +559,10 @@ def _generated_density_trial(
             bullet_target_chars=config.resume.bullet_target_chars,
             bullet_max_chars=config.resume.bullet_max_chars,
             project_count=config.resume.project_count,
+            experience_candidates=_experience_candidates(config, evidence),
+            experience_tailoring=config.resume.experience_tailoring,
+            experience_min_bullets=config.resume.experience_min_bullets,
+            experience_max_bullets=config.resume.experience_max_bullets,
             require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
             max_pages=1,
             generated_section_item_limits=section_item_limits,
@@ -783,6 +816,12 @@ def _create_render_packed_automatic_resume_proposal(
         "bullet_max_chars": config.resume.bullet_max_chars,
         "project_candidates": project_candidates,
         "project_count": config.resume.project_count,
+        "experience_candidates": _experience_candidates(config, evidence),
+        "experience_tailoring": config.resume.experience_tailoring,
+        "experience_min_bullets": config.resume.experience_min_bullets,
+        "experience_max_bullets": config.resume.experience_max_bullets,
+        "project_min_bullets": config.resume.project_min_bullets,
+        "project_max_bullets": config.resume.project_max_bullets,
         "preserve_project_candidate_order": preserve_project_candidate_order,
         "require_unique_lead_verbs": config.resume.require_unique_lead_verbs,
         "max_pages": config.resume.max_pages,
@@ -1876,6 +1915,7 @@ def _upgrade_existing_tailoring(
             automatic.project_selection.get("strategy", "weighted_role_signal_coverage")
         ),
         "project_selections": automatic.project_selection.get("selected", []),
+        "experience_selections": automatic.experience_selection.get("selected", []),
         "git_project_research": list(enrichment.reports),
         "integration_warnings": list(enrichment.warnings),
         "tailoring": {
