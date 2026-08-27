@@ -124,6 +124,71 @@ class ResumeTemplateTests(unittest.TestCase):
             )
             self.assertTrue(metadata["master_latex_preserved"])
 
+    def test_preserved_latex_uses_its_observed_one_page_content_budget(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            experience = "\n".join(
+                rf"""\resumeSubheading{{Engineer {index}}}{{2026}}{{Example}}{{Remote}}
+\resumeItemListStart
+\resumeItem{{Built Python service {index} for production users.}}
+\resumeItem{{Improved API reliability {index} with automated tests.}}
+\resumeItemListEnd"""
+                for index in range(1, 5)
+            )
+            projects = "\n".join(
+                rf"""\resumeProjectHeading{{\textbf{{Project {index}}}}}{{}}
+\resumeItemListStart
+\resumeItem{{Built project {index} with Python APIs.}}
+\resumeItem{{Tested project {index} across production workflows.}}
+\resumeItemListEnd"""
+                for index in range(1, 5)
+            )
+            source_text = rf"""\documentclass{{article}}
+\newcommand{{\resumeItem}}[1]{{\item #1}}
+\newcommand{{\resumeSubheading}}[4]{{\item[] #1 #2 #3 #4}}
+\newcommand{{\resumeProjectHeading}}[2]{{\item[] #1 #2}}
+\newcommand{{\resumeItemListStart}}{{\begin{{itemize}}}}
+\newcommand{{\resumeItemListEnd}}{{\end{{itemize}}}}
+\newcommand{{\resumeSubHeadingListStart}}{{\begin{{itemize}}}}
+\newcommand{{\resumeSubHeadingListEnd}}{{\end{{itemize}}}}
+\begin{{document}}
+\section{{Experience}}
+\resumeSubHeadingListStart
+{experience}
+\resumeSubHeadingListEnd
+\section{{Projects}}
+\resumeSubHeadingListStart
+{projects}
+\resumeSubHeadingListEnd
+\section{{Technical Skills}}
+Python
+\end{{document}}"""
+            master = ResumeSource(
+                path=root / "master.tex",
+                format="tex",
+                sha256="e" * 64,
+                page_count=None,
+                text=source_text,
+            )
+            generated = generate_latex_template(master, data_dir=root / "state")
+
+            proposal = create_automatic_resume_proposal(
+                resume_path=generated.path,
+                output_dir=root / "proposal",
+                job_description="Python API production reliability testing",
+                evidence=[],
+                editable_sections=("Experience", "Projects"),
+                experience_min_bullets=2,
+                experience_max_bullets=2,
+                project_min_bullets=2,
+                project_max_bullets=2,
+                max_pages=1,
+            ).proposal.proposed_tex_path.read_text(encoding="utf-8")
+
+            self.assertEqual(proposal.count(r"\resumeSubheading{"), 4)
+            self.assertEqual(proposal.count(r"\resumeProjectHeading{"), 4)
+            self.assertEqual(proposal.count(r"\resumeItem{"), 16)
+
     def test_default_jake_style_is_independent_of_master_layout(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
