@@ -93,7 +93,7 @@ uv run erga resume settings set \
    --project-min-bullets 2 \
   --project-max-bullets 4 \
   --project-count 4 \
-  --minimum-page-fill-ratio 0.82 \
+  --minimum-page-fill-ratio 0.90 \
   --require-unique-lead-verbs
 ```
 

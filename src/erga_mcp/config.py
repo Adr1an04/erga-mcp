@@ -35,7 +35,7 @@ single_line_bullets = false
 max_pages = 1
 # For a one-page resume, require rendered text to occupy at least this fraction of the page height.
 # Erga fills the page with supported content and never stretches whitespace or invents filler.
-minimum_page_fill_ratio = 0.82
+minimum_page_fill_ratio = 0.90
 output_root = "output"
 # Local JSON arsenal of approved LaTeX project blocks. Onboarding creates and requires one
 # so intake cannot silently fall back to reordering only the template's existing projects.
@@ -286,7 +286,7 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
         raise ValueError("resume experience bullet limits must be ordered positive values")
     if not 1 <= project_bullets[0] <= project_bullets[1]:
         raise ValueError("resume project bullet limits must be ordered positive values")
-    minimum_page_fill_ratio = float(resume.get("minimum_page_fill_ratio", 0.82))
+    minimum_page_fill_ratio = float(resume.get("minimum_page_fill_ratio", 0.90))
     if not 0 <= minimum_page_fill_ratio <= 1:
         raise ValueError("resume minimum_page_fill_ratio must be between zero and one")
     require_unique_lead_verbs_value = resume.get("require_unique_lead_verbs", True)

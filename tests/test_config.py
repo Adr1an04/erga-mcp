@@ -242,7 +242,7 @@ latexmk = "latexmk"
             self.assertEqual(config.resume.bullet_min_chars, 90)
             self.assertEqual(config.resume.bullet_target_chars, 105)
             self.assertEqual(config.resume.bullet_max_chars, 120)
-            self.assertEqual(config.resume.minimum_page_fill_ratio, 0.82)
+            self.assertEqual(config.resume.minimum_page_fill_ratio, 0.90)
             self.assertTrue(config.resume.require_unique_lead_verbs)
             self.assertEqual(config.resume.output_root, config_path.parent / "applications")
         self.assertEqual(config.resume.output_pdf_name, "Firstname_Lastname_Resume.pdf")

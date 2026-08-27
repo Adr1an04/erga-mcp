@@ -534,6 +534,8 @@ def _generated_density_trial(
     output_dir: Path,
     job_description: str,
     evidence: list[Evidence],
+    project_candidates: tuple[ProjectCandidate, ...],
+    preserve_project_candidate_order: bool,
     section_item_limits: Mapping[str, int],
     section_entry_item_limits: Mapping[str, tuple[int, ...]],
     config: ErgaConfig,
@@ -558,11 +560,15 @@ def _generated_density_trial(
             bullet_min_chars=config.resume.bullet_min_chars,
             bullet_target_chars=config.resume.bullet_target_chars,
             bullet_max_chars=config.resume.bullet_max_chars,
+            project_candidates=project_candidates,
             project_count=config.resume.project_count,
             experience_candidates=_experience_candidates(config, evidence),
             experience_tailoring=config.resume.experience_tailoring,
             experience_min_bullets=config.resume.experience_min_bullets,
             experience_max_bullets=config.resume.experience_max_bullets,
+            project_min_bullets=config.resume.project_min_bullets,
+            project_max_bullets=config.resume.project_max_bullets,
+            preserve_project_candidate_order=preserve_project_candidate_order,
             require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
             max_pages=1,
             generated_section_item_limits=section_item_limits,
@@ -696,6 +702,35 @@ def _generated_section_entry_counts(resume_path: Path) -> dict[str, int]:
     }
 
 
+def _generated_section_entry_item_caps(resume_path: Path) -> dict[str, tuple[int, ...]]:
+    """Read factual bullets available per entry from generated-template metadata."""
+    metadata_path = resume_path.with_name("template.json")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(metadata, dict):
+        return {}
+    layout_profile = metadata.get("layout_profile")
+    if not isinstance(layout_profile, dict):
+        return {}
+    raw_patterns = layout_profile.get("section_entry_item_counts")
+    if not isinstance(raw_patterns, dict):
+        return {}
+    patterns: dict[str, tuple[int, ...]] = {}
+    for section, raw_counts in raw_patterns.items():
+        if not isinstance(raw_counts, list):
+            continue
+        counts = tuple(
+            count
+            for count in raw_counts
+            if isinstance(count, int) and not isinstance(count, bool) and count > 0
+        )
+        if counts:
+            patterns[str(section)] = counts
+    return patterns
+
+
 def _repeat_entry_patterns(
     patterns: Mapping[str, tuple[int, ...]],
     entry_counts: Mapping[str, int],
@@ -806,6 +841,7 @@ def _create_render_packed_automatic_resume_proposal(
     preserve_project_candidate_order: bool = False,
 ) -> AutomaticResumeProposal:
     """Create the fullest valid generated-template proposal, independent of the caller agent."""
+    experience_candidates = _experience_candidates(config, evidence)
     common: dict[str, Any] = {
         "resume_path": resume_path,
         "job_description": job_description,
@@ -816,7 +852,7 @@ def _create_render_packed_automatic_resume_proposal(
         "bullet_max_chars": config.resume.bullet_max_chars,
         "project_candidates": project_candidates,
         "project_count": config.resume.project_count,
-        "experience_candidates": _experience_candidates(config, evidence),
+        "experience_candidates": experience_candidates,
         "experience_tailoring": config.resume.experience_tailoring,
         "experience_min_bullets": config.resume.experience_min_bullets,
         "experience_max_bullets": config.resume.experience_max_bullets,
@@ -851,19 +887,43 @@ def _create_render_packed_automatic_resume_proposal(
         minimums=entry_minimums,
         maximums=entry_maximums,
     )
-    entry_item_minimums = {
+    style_entry_item_minimums = {
         section: tuple(entry_minimums[section] for _ in pattern)
         for section, pattern in style_entry_caps.items()
         if section in entry_minimums
     }
-    common["generated_section_entry_item_minimums"] = entry_item_minimums
+
+    # A style reference describes the visual starting point; it must never become a hard content
+    # ceiling. Build separate factual caps so the renderer can backfill approved bullets across
+    # both experiences and projects until the configured page-density target is reached.
+    available_entry_caps = {
+        section: tuple(
+            min(max(count, entry_minimums.get(section, 1)), entry_maximums.get(section, count))
+            for count in pattern
+        )
+        for section, pattern in _generated_section_entry_item_caps(profile_path).items()
+    }
+    if experience_candidates and factual_entry_counts.get("Experience", 0):
+        available_entry_caps["Experience"] = tuple(
+            config.resume.experience_max_bullets for _ in range(factual_entry_counts["Experience"])
+        )
+    if project_candidates:
+        available_entry_caps["Projects"] = tuple(
+            config.resume.project_max_bullets for _ in range(config.resume.project_count)
+        )
+    for section, pattern in style_entry_caps.items():
+        available_entry_caps.setdefault(section, pattern)
+
+    state_item_counts = dict(item_counts)
+    for section, pattern in available_entry_caps.items():
+        state_item_counts[section] = sum(pattern)
     should_pack = (
         config.resume.max_pages == 1
         and bool(config.resume.minimum_page_fill_ratio)
-        and bool(item_counts)
-        and not project_candidates
+        and bool(state_item_counts)
     )
     if not should_pack:
+        common["generated_section_entry_item_minimums"] = style_entry_item_minimums
         if not item_counts:
             return create_automatic_resume_proposal(
                 output_dir=output_dir,
@@ -887,10 +947,9 @@ def _create_render_packed_automatic_resume_proposal(
     # The reference provides a visual target, not a hard factual-section quota. Search all
     # approved content so a user with fewer experiences can fill the same geometry with projects,
     # while the repeated per-entry pattern still controls one-vs-two-vs-three bullet styling.
-    state_item_counts = item_counts
     states = _generated_density_states(
         state_item_counts,
-        entry_counts={section: len(pattern) for section, pattern in style_entry_caps.items()},
+        entry_counts={section: len(pattern) for section, pattern in available_entry_caps.items()},
         minimum_items_per_entry=entry_minimums,
     )
     best_index = -1
@@ -908,9 +967,11 @@ def _create_render_packed_automatic_resume_proposal(
                 output_dir=root / f"trial-{trial_number}",
                 job_description=job_description,
                 evidence=evidence,
+                project_candidates=project_candidates,
+                preserve_project_candidate_order=preserve_project_candidate_order,
                 section_item_limits=states[middle],
                 section_entry_item_limits=_entry_limits_for_item_state(
-                    style_entry_caps,
+                    available_entry_caps,
                     states[middle],
                     minimums=entry_minimums,
                 ),
@@ -929,10 +990,15 @@ def _create_render_packed_automatic_resume_proposal(
 
     underfilled = best_fill < config.resume.minimum_page_fill_ratio
     final_entry_limits = _entry_limits_for_item_state(
-        style_entry_caps,
+        available_entry_caps,
         states[best_index],
         minimums=entry_minimums,
     )
+    common["generated_section_entry_item_minimums"] = {
+        section: tuple(entry_minimums[section] for _ in pattern)
+        for section, pattern in available_entry_caps.items()
+        if section in entry_minimums
+    }
     automatic = create_automatic_resume_proposal(
         output_dir=output_dir,
         minimum_page_fill_ratio=0,
@@ -990,29 +1056,30 @@ def _select_rendered_project_bullet_density(
             )
             for limit in style_limits
         )
-    density_candidates = (
-        tuple(
-            limit_project_candidate_bullets(candidate, style_limits[index])
-            for index, candidate in enumerate(selected_candidates)
-        )
+    starting_tier = (
+        max(config.resume.project_min_bullets, max(style_limits))
         if style_limits is not None
-        else selected_candidates
+        else config.resume.project_min_bullets
     )
     maximum_count = max(
-        (len(candidate.bullet_evidence_ids) for candidate in density_candidates),
+        (
+            min(len(candidate.bullet_evidence_ids), config.resume.project_max_bullets)
+            for candidate in selected_candidates
+        ),
         default=config.resume.project_min_bullets,
     )
+    starting_tier = min(starting_tier, maximum_count)
 
     def candidates_for_tier(tier: int) -> tuple[ProjectCandidate, ...]:
         return tuple(
-            limit_project_candidate_bullets(candidate, tier) for candidate in density_candidates
+            limit_project_candidate_bullets(candidate, tier) for candidate in selected_candidates
         )
 
     with TemporaryDirectory(prefix="erga-project-density-") as density_directory:
         root = Path(density_directory)
         current: tuple[ProjectCandidate, ...] | None = None
         fill_ratio = 0.0
-        for tier in range(config.resume.project_min_bullets, maximum_count + 1):
+        for tier in range(starting_tier, maximum_count + 1):
             trial = candidates_for_tier(tier)
             valid, trial_fill = _project_density_trial(
                 resume_path=resume_path,
