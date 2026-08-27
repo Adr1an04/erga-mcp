@@ -435,6 +435,10 @@ class DiscordBridgeTests(unittest.TestCase):
 
         self.assertIn("use intake_job_url as the canonical end-to-end operation", prompt)
         self.assertIn("do not hand-edit proposal files", prompt)
+        self.assertIn("make the smallest change the user requested", prompt)
+        self.assertIn("preserve every unmentioned section", prompt)
+        self.assertIn("does not require a job description", prompt)
+        self.assertIn("Never claim a file changed", prompt)
         self.assertIn("one-page fill check", prompt)
         self.assertIn("exact PDF artifact path returned by Erga", prompt)
 

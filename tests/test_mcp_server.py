@@ -446,7 +446,7 @@ Bottom of the approved master template.
             proposed = result.proposal.proposed_tex_path.read_text(encoding="utf-8")
             self.assertNotIn("ERGA-ADAPTIVE-PAGE-FILL", proposed)
 
-    def test_project_bullet_density_adds_supported_bullets_until_page_is_filled(self) -> None:
+    def test_project_bullet_density_stops_at_first_balanced_filled_tier(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "config.toml"
@@ -498,10 +498,7 @@ Bottom of the approved master template.
                 "erga_mcp.mcp.server._project_density_trial",
                 side_effect=[
                     (True, 0.68),
-                    (True, 0.73),
-                    (True, 0.77),
-                    (True, 0.80),
-                    (True, 0.81),
+                    (True, 0.84),
                 ],
             ) as trial:
                 selected, requires_spacing, fill_ratio = _select_rendered_project_bullet_density(
@@ -512,10 +509,10 @@ Bottom of the approved master template.
                     config=config,
                 )
 
-            self.assertEqual([len(item.bullet_evidence_ids) for item in selected], [4, 4])
+            self.assertEqual([len(item.bullet_evidence_ids) for item in selected], [3, 3])
             self.assertFalse(requires_spacing)
-            self.assertEqual(fill_ratio, 0.81)
-            self.assertEqual(trial.call_count, 5)
+            self.assertEqual(fill_ratio, 0.84)
+            self.assertEqual(trial.call_count, 2)
 
     def test_project_bullet_density_stops_at_visual_template_budget(self) -> None:
         with TemporaryDirectory() as directory:
@@ -576,7 +573,7 @@ Bottom of the approved master template.
                 )
 
             self.assertEqual([len(item.bullet_evidence_ids) for item in selected], [2, 2])
-            self.assertFalse(requires_spacing)
+            self.assertTrue(requires_spacing)
             self.assertEqual(fill_ratio, 0.60)
             self.assertEqual(trial.call_count, 1)
 

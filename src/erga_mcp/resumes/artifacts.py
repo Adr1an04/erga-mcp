@@ -215,6 +215,36 @@ def _pdf_resume_item_lines(pdf_path: Path) -> tuple[tuple[str, ...], ...] | None
     return tuple(items)
 
 
+def inspect_compiled_resume_item_layout(
+    proposal_path: Path,
+    pdf_path: Path,
+) -> ResumeItemLayoutValidation:
+    """Measure bullet wrapping from an already compiled PDF without invoking LaTeX again."""
+    if proposal_path.suffix.lower() != ".tex" or not proposal_path.is_file():
+        raise ValueError("proposal_path must point to an existing .tex proposal")
+    if pdf_path.suffix.lower() != ".pdf" or not pdf_path.is_file():
+        raise ValueError("pdf_path must point to an existing compiled PDF")
+    item_count = len(resume_item_texts(proposal_path.read_text(encoding="utf-8")))
+    pdf_items = _pdf_resume_item_lines(pdf_path)
+    if pdf_items is None or len(pdf_items) != item_count:
+        raise ValueError("compiled PDF layout did not expose every resume bullet")
+    wrapped = tuple(index for index, lines in enumerate(pdf_items) if len(lines) > 1)
+    orphans = tuple(
+        index
+        for index, lines in enumerate(pdf_items)
+        if len(lines) > 1 and len(lines[-1].split()) <= 2
+    )
+    return ResumeItemLayoutValidation(
+        command=(),
+        returncode=0,
+        item_count=item_count,
+        wrapped_item_indices=wrapped,
+        orphan_item_indices=orphans,
+        stdout="",
+        stderr="",
+    )
+
+
 def _section_key(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.casefold())
 

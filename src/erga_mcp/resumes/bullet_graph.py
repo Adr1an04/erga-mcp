@@ -83,6 +83,9 @@ class EvidenceBulletGraph:
         return asdict(self)
 
     def as_prompt_dict(self) -> dict[str, object]:
+        # Paths already encode connectivity, so repeating the complete edge list and internal
+        # claim ownership on every node only burns model context. Keep the full graph in memory
+        # for deterministic validation and send the writer the smallest lossless blueprint.
         return {
             "project_id": self.project_id,
             "assembly_rule": (
@@ -90,9 +93,27 @@ class EvidenceBulletGraph:
                 "slots, choose the lead action last, then write one sentence in render_order. "
                 "Never combine disconnected paths."
             ),
-            "nodes": [node.as_dict() for node in self.nodes],
-            "edges": [edge.as_dict() for edge in self.edges],
-            "paths": [path.as_dict() for path in self.paths],
+            "nodes": [
+                {
+                    "id": node.id,
+                    "kind": node.kind,
+                    "text": node.text,
+                    "evidence_ids": list(node.evidence_ids),
+                }
+                for node in self.nodes
+            ],
+            "paths": [
+                {
+                    "id": path.id,
+                    "node_ids": list(path.node_ids),
+                    "evidence_ids": list(path.evidence_ids),
+                    "slots": list(path.slots),
+                    "assembly_order": list(path.assembly_order),
+                    "render_order": list(path.render_order),
+                    "completeness": path.completeness,
+                }
+                for path in self.paths
+            ],
         }
 
 

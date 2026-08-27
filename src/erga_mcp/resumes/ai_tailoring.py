@@ -871,9 +871,66 @@ def _latex_text(value: str) -> str:
     return escaped.replace("~", "-").replace("^", "")
 
 
+def _master_bolds_project_metrics(resume_path: Path) -> bool:
+    """Detect the master's inline quantitative-emphasis convention in project bullets."""
+    source = resume_path.read_text(encoding="utf-8")
+    match = re.search(r"^\\section\{Projects\}\s*$", source, re.MULTILINE | re.IGNORECASE)
+    if match is None:
+        return False
+    following = re.search(r"^\\section\{[^}]+\}\s*$", source[match.end() :], re.MULTILINE)
+    end = match.end() + following.start() if following is not None else len(source)
+    project_source = source[match.end() : end]
+    return any(
+        _resume_quality_numbers(latex_to_text(emphasized))
+        for emphasized in re.findall(r"\\textbf\{([^{}]*)\}", project_source)
+    )
+
+
+def _latex_bullet_text(value: str, *, bold_metric_tokens: bool) -> str:
+    """Escape model text and reapply the master's supported metric-emphasis convention."""
+    if not bold_metric_tokens:
+        return _latex_text(value)
+    rendered: list[str] = []
+    cursor = 0
+    quality_numbers = _resume_quality_numbers(value)
+    for match in _NUMBER.finditer(value):
+        if match.start() < cursor:
+            continue
+        rendered.append(_latex_text(value[cursor : match.start()]))
+        emphasis_end = match.end()
+        following = value[match.end() : match.end() + 64]
+        descriptor = _METRIC_DESCRIPTOR.search(following)
+        if descriptor is not None and not re.search(
+            r"[,;.]|\b(?:and|but|with|using|via|across|by|for|to|in|on)\b",
+            following[: descriptor.start()],
+            re.IGNORECASE,
+        ):
+            emphasis_end = match.end() + descriptor.end()
+        elif match.group(0).rstrip(".,").endswith("%"):
+            outcome = re.match(
+                r"\s+(?:faster|slower|higher|lower|less|more|reduced|improved)"
+                r"(?:\s+[A-Za-z][A-Za-z0-9/-]*){0,2}",
+                following,
+                re.IGNORECASE,
+            )
+            if outcome is not None:
+                emphasis_end = match.end() + outcome.end()
+        escaped = _latex_text(value[match.start() : emphasis_end])
+        rendered.append(
+            rf"\textbf{{{escaped}}}"
+            if _normalized_number(match.group(0)) in quality_numbers
+            else escaped
+        )
+        cursor = emphasis_end
+    rendered.append(_latex_text(value[cursor:]))
+    return "".join(rendered)
+
+
 def _replace_candidate_bullets(
     candidate: ProjectCandidate,
     bullets: list[tuple[str, tuple[str, ...]]],
+    *,
+    bold_metric_tokens: bool = False,
 ) -> ProjectCandidate:
     start_marker = r"\resumeItemListStart"
     end_marker = r"\resumeItemListEnd"
@@ -883,7 +940,10 @@ def _replace_candidate_bullets(
         raise ValueError("project candidate is missing its resume item list")
     prefix = candidate.latex[: start + len(start_marker)].rstrip()
     suffix = candidate.latex[end:].lstrip()
-    rendered = "\n".join(rf"\resumeItem{{{_latex_text(text)}}}" for text, _ in bullets)
+    rendered = "\n".join(
+        rf"\resumeItem{{{_latex_bullet_text(text, bold_metric_tokens=bold_metric_tokens)}}}"
+        for text, _ in bullets
+    )
     evidence_ids = tuple(dict.fromkeys(item for _, ids in bullets for item in ids))
     return replace(
         candidate,
@@ -910,6 +970,7 @@ def _validate_submission(
     allowed_leads: frozenset[str],
     require_unique_lead_verbs: bool,
     required_project_ids: tuple[str, ...],
+    bold_metric_tokens: bool = False,
 ) -> tuple[ProjectCandidate, ...]:
     raw_projects = submission.get("projects")
     if not isinstance(raw_projects, list) or len(raw_projects) != project_count:
@@ -1150,6 +1211,7 @@ def _validate_submission(
         candidate = _replace_candidate_bullets(
             candidate_by_id[project_id],
             rendered_bullets,
+            bold_metric_tokens=bold_metric_tokens,
         )
         issues = project_quality_issues(candidate)
         if issues:
@@ -1241,6 +1303,7 @@ async def draft_evidence_backed_projects(
     allowed_ids_by_project: dict[str, frozenset[str]] = {}
     quantitative_tokens_by_project: dict[str, frozenset[str]] = {}
     master_quantitative_coverage = _master_project_quantitative_coverage(resume_path)
+    bold_metric_tokens = _master_bolds_project_metrics(resume_path)
     minimum_required_quantified_bullets = min(
         1,
         resolved_minimum_bullets,
@@ -1300,7 +1363,18 @@ async def draft_evidence_backed_projects(
                 "minimum_required_quantified_bullets": minimum_required_quantified_bullets,
                 "quality_metric_sources": quality_metric_sources,
                 "meets_master_metric_requirement": True,
-                "sources": sources,
+                # The graph contains the exact source clauses and evidence IDs. Sending both
+                # representations roughly doubles prompt size and distracts the writer with two
+                # equivalent factual interfaces.
+                "evidence_kinds": {
+                    evidence_id: kind
+                    for source in sources
+                    if isinstance((kind := source.get("kind")), str)
+                    for raw_evidence_ids in (source.get("evidence_ids"),)
+                    if isinstance(raw_evidence_ids, list)
+                    for evidence_id in raw_evidence_ids
+                    if isinstance(evidence_id, str)
+                },
                 "evidence_graph": evidence_graph.as_prompt_dict(),
             }
         )
@@ -1502,6 +1576,7 @@ async def draft_evidence_backed_projects(
                 allowed_leads=frozenset(verb.casefold() for verb in allowed_lead_verbs),
                 require_unique_lead_verbs=require_unique_lead_verbs,
                 required_project_ids=required_project_ids,
+                bold_metric_tokens=bold_metric_tokens,
             )
         except ValueError as error:
             if index == 0:

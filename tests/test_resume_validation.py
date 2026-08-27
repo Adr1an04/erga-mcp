@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 from erga_mcp.resumes.artifacts import (
     _pdf_resume_item_lines,
+    inspect_compiled_resume_item_layout,
     resolve_latexmk_executable,
     resume_item_texts,
     validate_latex_proposal,
@@ -18,6 +19,30 @@ from erga_mcp.resumes.artifacts import (
 
 
 class ResumeValidationTests(unittest.TestCase):
+    def test_inspects_an_existing_pdf_without_starting_a_second_compiler(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            proposal = root / "proposal.tex"
+            proposal.write_text(
+                "\\begin{document}\n\\begin{itemize}\n"
+                "\\item First bullet.\n\\item Second bullet.\n"
+                "\\end{itemize}\n\\end{document}\n",
+                encoding="utf-8",
+            )
+            pdf = root / "proposal.pdf"
+            pdf.write_bytes(b"synthetic")
+
+            with patch(
+                "erga_mcp.resumes.artifacts._pdf_resume_item_lines",
+                return_value=(("First bullet.",), ("Long first line", "two words")),
+            ):
+                result = inspect_compiled_resume_item_layout(proposal, pdf)
+
+            self.assertEqual(result.item_count, 2)
+            self.assertEqual(result.command, ())
+            self.assertEqual(result.wrapped_item_indices, (1,))
+            self.assertEqual(result.orphan_item_indices, (1,))
+
     def test_standard_skills_container_is_not_treated_as_an_achievement_bullet(self) -> None:
         source = r"""\begin{document}
 \section{Projects}

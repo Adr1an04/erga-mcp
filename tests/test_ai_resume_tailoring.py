@@ -15,7 +15,9 @@ from erga_mcp.resumes.ai_tailoring import (
     ResumeStylePreferences,
     TailoringDraftRequest,
     TailoringDraftResponse,
+    _latex_bullet_text,
     _latex_text,
+    _master_bolds_project_metrics,
     _metric_claims,
     _normalized_number,
     _resume_quality_numbers,
@@ -70,6 +72,39 @@ def _candidate() -> ProjectCandidate:
 
 
 class AIResumeTailoringTests(unittest.TestCase):
+    def test_reapplies_the_master_project_metric_bolding_convention(self) -> None:
+        with TemporaryDirectory() as directory:
+            resume = Path(directory) / "resume.tex"
+            resume.write_text(
+                r"""\begin{document}
+\section{Projects}
+\resumeItem{Won an award among \textbf{85 projects} in 2026.}
+\section{Technical Skills}
+Python
+\end{document}
+""",
+                encoding="utf-8",
+            )
+
+            self.assertTrue(_master_bolds_project_metrics(resume))
+            self.assertEqual(
+                _latex_bullet_text(
+                    "Built an API serving 100 users with 99.3% accuracy in 2027.",
+                    bold_metric_tokens=True,
+                ),
+                (
+                    r"Built an API serving \textbf{100 users} with "
+                    r"\textbf{99.3\% accuracy} in 2027."
+                ),
+            )
+            self.assertEqual(
+                _latex_bullet_text(
+                    "Added health telemetry for 40% faster incident detection.",
+                    bold_metric_tokens=True,
+                ),
+                r"Added health telemetry for \textbf{40\% faster incident detection}.",
+            )
+
     def test_numeric_normalization_ignores_sentence_punctuation_but_preserves_decimals(
         self,
     ) -> None:
@@ -464,6 +499,8 @@ class AIResumeTailoringTests(unittest.TestCase):
         self.assertGreater(len(evidence_graph["nodes"]), 0)
         self.assertGreater(len(evidence_graph["paths"]), 0)
         self.assertEqual(evidence_graph["paths"][0]["assembly_order"][0], "object")
+        self.assertNotIn("sources", prompt["projects"][0])
+        self.assertNotIn("edges", evidence_graph)
         self.assertIn("performance", prompt["preferred_metric_categories"])
         self.assertTrue(prompt["projects"][0]["git_engineering_signals"][0]["has_test_changes"])
         self.assertFalse(

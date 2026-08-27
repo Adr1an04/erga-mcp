@@ -8,6 +8,7 @@ from pathlib import Path
 from erga_mcp.resumes.artifacts import (
     LatexValidation,
     ResumeItemLayoutValidation,
+    inspect_compiled_resume_item_layout,
     validate_latex_proposal,
     validate_single_line_resume_items,
 )
@@ -46,8 +47,12 @@ def validate_resume_render(
     max_pages: int = 1,
     minimum_page_fill_ratio: float = 0,
     check_item_layout: bool = True,
+    reject_wrapped_items: bool = True,
     compiler: Callable[..., LatexValidation] = validate_latex_proposal,
     layout_checker: Callable[..., ResumeItemLayoutValidation] = validate_single_line_resume_items,
+    compiled_layout_checker: Callable[
+        [Path, Path], ResumeItemLayoutValidation
+    ] = inspect_compiled_resume_item_layout,
     page_counter: Callable[[Path], int] = pdf_page_count,
     fill_reader: Callable[[Path], PdfPageFill] = pdf_page_fill,
 ) -> ResumeRenderValidation:
@@ -129,7 +134,12 @@ def validate_resume_render(
     wrapped: tuple[int, ...] = ()
     orphans: tuple[int, ...] = ()
     if check_item_layout:
-        layout = layout_checker(proposal_path, latexmk=latexmk)
+        try:
+            layout = compiled_layout_checker(proposal_path, proposal_pdf)
+        except ValueError:
+            # Some uncommon PDF producers omit bullet glyphs from their text layer. Preserve the
+            # exact TeX-instrumented validator as a compatibility fallback, not the common path.
+            layout = layout_checker(proposal_path, latexmk=latexmk)
         if layout.returncode != 0:
             proposal_pdf.unlink(missing_ok=True)
             return ResumeRenderValidation(
@@ -141,10 +151,10 @@ def validate_resume_render(
             )
         wrapped = layout.wrapped_item_indices
         orphans = layout.orphan_item_indices
-        if wrapped or orphans:
+        if (reject_wrapped_items and wrapped) or orphans:
             proposal_pdf.unlink(missing_ok=True)
             details = []
-            if wrapped:
+            if reject_wrapped_items and wrapped:
                 details.append(f"wrapped bullets {list(wrapped)}")
             if orphans:
                 details.append(f"stranded short tails {list(orphans)}")

@@ -148,6 +148,7 @@ from erga_mcp.resumes.ai_tailoring import (
 from erga_mcp.resumes.artifacts import (
     ResumeItemLayoutValidation,
     create_section_resume_proposal,
+    inspect_compiled_resume_item_layout,
     record_validated_resume_version,
     resume_item_texts,
     update_private_manifest,
@@ -386,12 +387,6 @@ def _project_density_trial(
         candidate.id for candidate in project_candidates
     }:
         return False, 0
-    layout = validate_single_line_resume_items(
-        automatic.proposal.proposed_tex_path,
-        latexmk=Path(config.resume.latexmk),
-    )
-    if layout.returncode != 0 or layout.orphan_item_indices:
-        return False, 0
     checked = validate_latex_proposal(
         automatic.proposal.proposed_tex_path,
         latexmk=Path(config.resume.latexmk),
@@ -400,6 +395,18 @@ def _project_density_trial(
     if checked.returncode != 0 or not proposal_pdf.is_file():
         return False, 0
     try:
+        try:
+            layout = inspect_compiled_resume_item_layout(
+                automatic.proposal.proposed_tex_path,
+                proposal_pdf,
+            )
+        except ValueError:
+            layout = validate_single_line_resume_items(
+                automatic.proposal.proposed_tex_path,
+                latexmk=Path(config.resume.latexmk),
+            )
+        if layout.returncode != 0 or layout.orphan_item_indices:
+            return False, 0
         if pdf_page_count(proposal_pdf) != 1:
             return False, 0
         return True, pdf_page_fill(proposal_pdf).fill_ratio
@@ -416,10 +423,34 @@ def _layout_balanced_generated_proposal(
     rejected: list[str] = []
     while True:
         automatic = factory(tuple(rejected))
-        layout = validate_single_line_resume_items(
+        checked = validate_latex_proposal(
             automatic.proposal.proposed_tex_path,
             latexmk=Path(latexmk),
         )
+        proposal_pdf = automatic.proposal.proposed_tex_path.with_suffix(".pdf")
+        if checked.returncode != 0 or not proposal_pdf.is_file():
+            return (
+                automatic,
+                ResumeItemLayoutValidation(
+                    command=checked.command,
+                    returncode=checked.returncode or 1,
+                    item_count=0,
+                    wrapped_item_indices=(),
+                    stdout=checked.stdout,
+                    stderr=checked.stderr,
+                ),
+                tuple(rejected),
+            )
+        try:
+            layout = inspect_compiled_resume_item_layout(
+                automatic.proposal.proposed_tex_path,
+                proposal_pdf,
+            )
+        except ValueError:
+            layout = validate_single_line_resume_items(
+                automatic.proposal.proposed_tex_path,
+                latexmk=Path(latexmk),
+            )
         if layout.returncode != 0 or not layout.orphan_item_indices:
             return automatic, layout, tuple(rejected)
         texts = resume_item_texts(automatic.proposal.proposed_tex_path.read_text(encoding="utf-8"))
@@ -477,12 +508,8 @@ def _generated_density_trial(
         return False, 0, rejected
     if layout.returncode != 0 or layout.orphan_item_indices:
         return False, 0, rejected
-    checked = validate_latex_proposal(
-        automatic.proposal.proposed_tex_path,
-        latexmk=Path(config.resume.latexmk),
-    )
     proposal_pdf = automatic.proposal.proposed_tex_path.with_suffix(".pdf")
-    if checked.returncode != 0 or not proposal_pdf.is_file():
+    if not proposal_pdf.is_file():
         return False, 0, rejected
     try:
         if pdf_page_count(proposal_pdf) != 1:
@@ -865,7 +892,7 @@ def _select_rendered_project_bullet_density(
     selected_candidates: tuple[ProjectCandidate, ...],
     config: ErgaConfig,
 ) -> tuple[tuple[ProjectCandidate, ...], bool, float]:
-    """Add every supported bullet that fits, then report whether spacing is still required."""
+    """Select the smallest balanced bullet tier that fills one page cleanly."""
     if config.resume.max_pages != 1 or not config.resume.minimum_page_fill_ratio:
         return selected_candidates, False, 0
     if len(selected_candidates) != config.resume.project_count:
@@ -891,86 +918,43 @@ def _select_rendered_project_bullet_density(
         if style_limits is not None
         else selected_candidates
     )
-    counts = [config.resume.project_min_bullets for _ in density_candidates]
+    maximum_count = max(
+        (len(candidate.bullet_evidence_ids) for candidate in density_candidates),
+        default=config.resume.project_min_bullets,
+    )
 
-    def candidates_for_counts() -> tuple[ProjectCandidate, ...]:
+    def candidates_for_tier(tier: int) -> tuple[ProjectCandidate, ...]:
         return tuple(
-            limit_project_candidate_bullets(candidate, counts[index])
-            for index, candidate in enumerate(density_candidates)
+            limit_project_candidate_bullets(candidate, tier) for candidate in density_candidates
         )
 
     with TemporaryDirectory(prefix="erga-project-density-") as density_directory:
         root = Path(density_directory)
-        current = candidates_for_counts()
-        valid, fill_ratio = _project_density_trial(
-            resume_path=resume_path,
-            output_dir=root / "minimum",
-            job_description=job_description,
-            evidence=evidence,
-            project_candidates=current,
-            config=config,
-        )
-        if not valid:
-            raise ValueError("minimum project bullet density did not fit the one-page layout")
-        tier = 2
-        blocked_indices: set[int] = set()
-        while any(
-            index not in blocked_indices and count < len(candidate.bullet_evidence_ids)
-            for index, (count, candidate) in enumerate(zip(counts, density_candidates, strict=True))
-        ):
-            accepted_in_tier = False
-            for index, candidate in enumerate(density_candidates):
-                if index in blocked_indices or counts[index] >= len(candidate.bullet_evidence_ids):
-                    continue
-                counts[index] += 1
-                trial = candidates_for_counts()
-                valid, trial_fill = _project_density_trial(
-                    resume_path=resume_path,
-                    output_dir=root / f"tier-{tier}-project-{index + 1}",
-                    job_description=job_description,
-                    evidence=evidence,
-                    project_candidates=trial,
-                    config=config,
-                )
-                if not valid:
-                    counts[index] -= 1
-                    blocked_indices.add(index)
-                    continue
-                accepted_in_tier = True
-                current = trial
-                fill_ratio = trial_fill
-            if not accepted_in_tier:
+        current: tuple[ProjectCandidate, ...] | None = None
+        fill_ratio = 0.0
+        for tier in range(config.resume.project_min_bullets, maximum_count + 1):
+            trial = candidates_for_tier(tier)
+            valid, trial_fill = _project_density_trial(
+                resume_path=resume_path,
+                output_dir=root / f"tier-{tier}",
+                job_description=job_description,
+                evidence=evidence,
+                project_candidates=trial,
+                config=config,
+            )
+            if not valid:
                 break
-            tier += 1
+            current = trial
+            fill_ratio = trial_fill
+            if fill_ratio >= config.resume.minimum_page_fill_ratio:
+                break
+    if current is None:
+        raise ValueError("minimum project bullet density did not fit the one-page layout")
     return (
         current,
-        False,
+        fill_ratio < config.resume.minimum_page_fill_ratio,
         fill_ratio,
     )
-
-
-def _require_single_line_resume_layout(
-    proposal_path: Path,
-    *,
-    latexmk: str,
-    enabled: bool,
-) -> None:
-    """Refuse publication when a rendered bullet strands only one or two final-line words."""
-    if not enabled:
-        return
-    # Some adapter/unit-test fixtures intentionally use opaque non-LaTeX proposal payloads; the
-    # normal compiler remains their validation authority. Layout inspection applies to documents.
-    if r"\begin{document}" not in proposal_path.read_text(encoding="utf-8"):
-        return
-    layout = validate_single_line_resume_items(proposal_path, latexmk=Path(latexmk))
-    if layout.returncode != 0:
-        raise ValueError("single-line resume layout validation did not compile")
-    if layout.orphan_item_indices:
-        rendered = ", ".join(str(index + 1) for index in layout.orphan_item_indices)
-        raise ValueError(
-            "tailored resume contains bullets with only one or two words on the final line "
-            f"(document bullet indexes: {rendered})"
-        )
 
 
 def _ai_research_shortlist_ids(
@@ -1497,14 +1481,19 @@ def _compile_intake_proposal(
     minimum_page_fill_ratio: float = 0,
 ) -> IntakeValidationResult:
     """Compile through the interface-neutral resume validation pipeline."""
+    # Generated/package test adapters may intentionally carry an opaque proposal payload. This
+    # matches the previous preflight boundary: only complete LaTeX documents support item layout
+    # inspection, while the configured compiler remains authoritative for fragments.
+    check_item_layout = r"\begin{document}" in proposal_path.read_text(encoding="utf-8")
     rendered = validate_resume_render(
         proposal_path,
         latexmk=Path(latexmk),
         output_pdf_name=output_pdf_name,
         max_pages=max_pages,
         minimum_page_fill_ratio=minimum_page_fill_ratio,
-        # Intake already performs bounded layout repair before this final compile.
-        check_item_layout=False,
+        check_item_layout=check_item_layout,
+        # Natural two-line bullets are fine; only one/two-word final-line tails are rejected.
+        reject_wrapped_items=False,
         compiler=validate_latex_proposal,
         page_counter=pdf_page_count,
         fill_reader=pdf_page_fill,
@@ -1814,11 +1803,6 @@ def _upgrade_existing_tailoring(
     )
     _require_git_research_alignment(automatic.project_selection, enrichment)
     _require_constraint_valid_proposal(automatic)
-    _require_single_line_resume_layout(
-        automatic.proposal.proposed_tex_path,
-        latexmk=config.resume.latexmk,
-        enabled=True,
-    )
     validation = _compile_intake_proposal(
         automatic.proposal.proposed_tex_path,
         latexmk=config.resume.latexmk,
@@ -2729,15 +2713,6 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             _require_git_research_alignment(automatic.project_selection, enrichment)
             _require_constraint_valid_proposal(automatic)
             proposal = automatic.proposal
-            await anyio.to_thread.run_sync(
-                partial(
-                    _require_single_line_resume_layout,
-                    proposal.proposed_tex_path,
-                    latexmk=config.resume.latexmk,
-                    enabled=True,
-                ),
-                abandon_on_cancel=True,
-            )
             validation = await anyio.to_thread.run_sync(
                 partial(
                     _compile_intake_proposal,
@@ -3182,11 +3157,6 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
         _require_git_research_alignment(automatic.project_selection, enrichment)
         _require_constraint_valid_proposal(automatic)
         proposal = automatic.proposal
-        _require_single_line_resume_layout(
-            proposal.proposed_tex_path,
-            latexmk=config.resume.latexmk,
-            enabled=True,
-        )
         validation = _compile_intake_proposal(
             proposal.proposed_tex_path,
             latexmk=config.resume.latexmk,

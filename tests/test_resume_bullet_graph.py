@@ -77,6 +77,14 @@ class ResumeBulletGraphTests(unittest.TestCase):
 
         self.assertEqual(first, second)
 
+    def test_prompt_graph_omits_redundant_internal_connectivity(self) -> None:
+        prompt_graph = build_evidence_bullet_graph("api-platform", _sources()).as_prompt_dict()
+
+        self.assertNotIn("edges", prompt_graph)
+        self.assertNotIn("claim_id", prompt_graph["nodes"][0])
+        self.assertNotIn("claim_ids", prompt_graph["paths"][0])
+        self.assertIn("node_ids", prompt_graph["paths"][0])
+
     def test_clause_parsing_preserves_decimal_metrics_and_dotted_technologies(self) -> None:
         graph = build_evidence_bullet_graph(
             "dashboard",

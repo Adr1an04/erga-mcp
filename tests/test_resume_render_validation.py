@@ -4,12 +4,44 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from erga_mcp.resumes.artifacts import LatexValidation
+from erga_mcp.resumes.artifacts import LatexValidation, ResumeItemLayoutValidation
 from erga_mcp.resumes.render_validation import validate_resume_render
 from erga_mcp.resumes.tailoring import PdfPageFill
 
 
 class ResumeRenderValidationTests(unittest.TestCase):
+    def test_reuses_compiled_pdf_for_layout_and_allows_healthy_wrapping(self) -> None:
+        with TemporaryDirectory() as directory:
+            proposal = Path(directory) / "proposal.tex"
+            proposal.write_text(
+                "\\begin{document}\\begin{itemize}\\item Synthetic bullet."
+                "\\end{itemize}\\end{document}\n",
+                encoding="utf-8",
+            )
+            compile_calls = 0
+
+            def compile_success(path: Path, *, latexmk: Path) -> LatexValidation:
+                nonlocal compile_calls
+                del latexmk
+                compile_calls += 1
+                path.with_suffix(".pdf").write_bytes(b"synthetic")
+                return LatexValidation(("synthetic",), 0, "", "")
+
+            result = validate_resume_render(
+                proposal,
+                latexmk=Path("synthetic"),
+                compiler=compile_success,
+                compiled_layout_checker=lambda _tex, _pdf: ResumeItemLayoutValidation(
+                    (), 0, 1, (0,), "", "", ()
+                ),
+                reject_wrapped_items=False,
+                max_pages=0,
+            )
+
+            self.assertTrue(result.passed)
+            self.assertEqual(compile_calls, 1)
+            self.assertEqual(result.wrapped_item_indices, (0,))
+
     def test_rejects_overfull_boxes_even_when_compilation_returns_success(self) -> None:
         with TemporaryDirectory() as directory:
             proposal = Path(directory) / "proposal.tex"
