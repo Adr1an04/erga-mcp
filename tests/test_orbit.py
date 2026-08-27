@@ -13,11 +13,11 @@ from erga_mcp.tracking.orbit import (
     _NODE_LABEL_GAP,
     _STATUS_COLORS,
     _TREE_CHILDREN,
-    _TREE_EDGE_WIDTH,
     _TREE_NODE_HEIGHT,
     _TREE_NODE_SPECS,
     _TREE_NODE_WIDTH,
     _binary_tree_layout,
+    _sankey_node_heights,
     build_orbit_snapshot,
     render_orbit_png,
 )
@@ -155,7 +155,7 @@ class OrbitTests(unittest.TestCase):
     def test_node_counts_have_a_clear_gap_before_every_label(self) -> None:
         self.assertGreaterEqual(_NODE_LABEL_GAP, 10)
 
-    def test_renderer_uses_fixed_nodes_and_thin_forward_edges(self) -> None:
+    def test_renderer_uses_compact_proportional_sankey_geometry(self) -> None:
         journeys = {
             "pending": ("draft", "applied"),
             "interview": ("draft", "applied", "interview"),
@@ -178,6 +178,7 @@ class OrbitTests(unittest.TestCase):
         ]
         snapshot = build_orbit_snapshot(applications, audits)
         positions = _binary_tree_layout(snapshot, width=1600, height=900)
+        heights = _sankey_node_heights(snapshot, height=900)
 
         self.assertEqual(set(positions), {node.id for node in snapshot.nodes})
         self.assertTrue(
@@ -191,8 +192,16 @@ class OrbitTests(unittest.TestCase):
                     positions[visible_children[1]][1],
                     parent,
                 )
-        self.assertEqual((_TREE_NODE_WIDTH, _TREE_NODE_HEIGHT), (156, 64))
-        self.assertLessEqual(_TREE_EDGE_WIDTH, 4)
+        self.assertEqual((_TREE_NODE_WIDTH, _TREE_NODE_HEIGHT), (14, 3))
+        self.assertGreater(heights["applications"], heights["accepted"])
+        for parent, children in _TREE_CHILDREN.items():
+            visible_children = [child for child in children if child in heights]
+            if visible_children:
+                self.assertAlmostEqual(
+                    heights[parent],
+                    sum(heights[child] for child in visible_children),
+                    places=6,
+                )
 
     def test_every_orbit_color_comes_from_the_erga_brand_palette(self) -> None:
         self.assertLessEqual(set(_STATUS_COLORS.values()), _ERGA_ORBIT_PALETTE)
@@ -275,7 +284,7 @@ class OrbitTests(unittest.TestCase):
 
         self.assertEqual(
             labels,
-            {"Applications", "Open applications", "Active pipeline", "In process"},
+            {"Applications", "Still open", "Responded", "Interview process"},
         )
         self.assertEqual(
             links,

@@ -36,10 +36,10 @@ _ERGA_ORBIT_PALETTE = frozenset(
         _ERGA_SKY,
     }
 )
-_TREE_NODE_WIDTH = 156
-_TREE_NODE_HEIGHT = 64
-_TREE_EDGE_WIDTH = 3
+_TREE_NODE_WIDTH = 14
+_TREE_NODE_HEIGHT = 3
 _NODE_LABEL_GAP = 10
+_TREE_LEAF_GAP = 28
 
 _STATUS_ALIASES = {
     "assessment": "oa",
@@ -99,18 +99,18 @@ _STATUS_COLORS = {
 }
 _TREE_NODE_SPECS = {
     "applications": ("Applications", 0, _ERGA_INK),
-    "open": ("Open applications", 1, _ERGA_ORBIT_VIOLET),
-    "closed": ("Closed applications", 1, _ERGA_CORAL),
-    "active-pipeline": ("Active pipeline", 2, _ERGA_ORBIT_VIOLET),
+    "open": ("Still open", 1, _ERGA_ORBIT_VIOLET),
+    "closed": ("Closed", 1, _ERGA_CORAL),
+    "active-pipeline": ("Responded", 2, _ERGA_ORBIT_VIOLET),
     "no-response": ("No response", 2, _ERGA_SUN),
-    "offer-decided": ("Offer decided", 2, _ERGA_SKY),
-    "other-closed": ("Other closed", 2, _ERGA_CORAL),
-    "in-process": ("In process", 3, _ERGA_ORBIT_VIOLET),
-    "offer-pending": ("Pending decision", 3, _ERGA_SUN),
+    "offer-decided": ("Offer outcome", 2, _ERGA_SKY),
+    "other-closed": ("Closed without offer", 2, _ERGA_CORAL),
+    "in-process": ("Interview process", 3, _ERGA_ORBIT_VIOLET),
+    "offer-pending": ("Offer pending", 3, _ERGA_SUN),
     "accepted": ("Accepted", 3, _ERGA_LEAF),
     "declined": ("Declined", 3, _ERGA_CORAL),
-    "rejection-outcome": ("Rejection outcome", 3, _ERGA_CORAL),
-    "administrative-close": ("Administrative close", 3, _ERGA_INK),
+    "rejection-outcome": ("Rejection stage", 3, _ERGA_CORAL),
+    "administrative-close": ("Other close", 3, _ERGA_INK),
     "rejected": ("Rejected", 4, _ERGA_CORAL),
     "no-offer": ("No offer", 4, _ERGA_CORAL),
     "withdrawn": ("Withdrawn", 4, _ERGA_CORAL),
@@ -167,7 +167,7 @@ _PRE_APPLICATION_STATUSES = frozenset({"draft", "ready", "researching", "unknown
 _STATUS_AUDIT_ACTIONS = frozenset(
     {"application.status_updated", "application.status_updated_from_mail"}
 )
-_ORBIT_RENDER_VERSION = 9
+_ORBIT_RENDER_VERSION = 10
 
 
 @dataclass(frozen=True)
@@ -770,7 +770,7 @@ def _binary_tree_layout(
     width: int,
     height: int,
 ) -> dict[str, tuple[float, float]]:
-    """Lay out the visible binary tree with leaves evenly spaced and parents centered."""
+    """Lay out a compact count-weighted Sankey without crossing binary branches."""
     nodes = {node.id: node for node in snapshot.nodes}
     if "applications" not in nodes:
         return {}
@@ -791,13 +791,19 @@ def _binary_tree_layout(
             collect_leaves(child)
 
     collect_leaves("applications")
-    top = 145.0
-    bottom = height - 150.0
-    if len(leaves) == 1:
-        leaf_y = {leaves[0]: (top + bottom) / 2}
-    else:
-        step = (bottom - top) / (len(leaves) - 1)
-        leaf_y = {identifier: top + index * step for index, identifier in enumerate(leaves)}
+    top = 150.0
+    bottom = height - 135.0
+    usable_height = bottom - top
+    gap = min(float(_TREE_LEAF_GAP), usable_height / max(2, len(leaves) * 3))
+    root_count = max(1, nodes["applications"].count)
+    flow_height = max(1.0, usable_height - gap * max(0, len(leaves) - 1))
+    pixels_per_application = flow_height / root_count
+    leaf_y: dict[str, float] = {}
+    cursor = top
+    for identifier in leaves:
+        leaf_height = nodes[identifier].count * pixels_per_application
+        leaf_y[identifier] = cursor + leaf_height / 2
+        cursor += leaf_height + gap
 
     vertical: dict[str, float] = {}
 
@@ -807,15 +813,18 @@ def _binary_tree_layout(
             vertical[identifier] = leaf_y[identifier]
         else:
             child_positions = [assign_y(child) for child in visible_children]
-            vertical[identifier] = sum(child_positions) / len(child_positions)
+            child_counts = [nodes[child].count for child in visible_children]
+            vertical[identifier] = sum(
+                position * count for position, count in zip(child_positions, child_counts)
+            ) / max(1, sum(child_counts))
         return vertical[identifier]
 
     assign_y("applications")
     if set(vertical) != set(nodes):
         raise RuntimeError("Orbit binary tree contains a disconnected visible node")
     max_column = max(node.column for node in nodes.values())
-    left = _TREE_NODE_WIDTH / 2 + 48
-    right = width - _TREE_NODE_WIDTH / 2 - 48
+    left = 92.0
+    right = width - 245.0
     positions = {
         identifier: (
             left + (right - left) * node.column / max(max_column, 1),
@@ -826,6 +835,78 @@ def _binary_tree_layout(
     return positions
 
 
+def _sankey_node_heights(
+    snapshot: OrbitSnapshot,
+    *,
+    height: int,
+) -> dict[str, float]:
+    """Return globally proportional node heights so ribbon thickness conserves counts."""
+    nodes = {node.id: node for node in snapshot.nodes}
+    if "applications" not in nodes:
+        return {}
+    children: dict[str, list[str]] = defaultdict(list)
+    for link in snapshot.links:
+        children[link.source].append(link.target)
+    leaves: list[str] = []
+
+    def collect_leaves(identifier: str) -> None:
+        visible_children = children.get(identifier, ())
+        if not visible_children:
+            leaves.append(identifier)
+            return
+        for child in visible_children:
+            collect_leaves(child)
+
+    collect_leaves("applications")
+    usable_height = height - 285.0
+    gap = min(float(_TREE_LEAF_GAP), usable_height / max(2, len(leaves) * 3))
+    flow_height = max(1.0, usable_height - gap * max(0, len(leaves) - 1))
+    unit = flow_height / max(1, nodes["applications"].count)
+    return {identifier: node.count * unit for identifier, node in nodes.items()}
+
+
+def _tinted_color(value: str, *, strength: float = 0.66) -> tuple[int, int, int, int]:
+    """Blend an Erga color with white while keeping the exported PNG fully opaque."""
+    red, green, blue, _ = _hex_color(value)
+    return (
+        round(255 - (255 - red) * strength),
+        round(255 - (255 - green) * strength),
+        round(255 - (255 - blue) * strength),
+        255,
+    )
+
+
+def _sankey_ribbon(
+    *,
+    source_x: float,
+    source_top: float,
+    target_x: float,
+    target_top: float,
+    thickness: float,
+) -> tuple[tuple[float, float], ...]:
+    """Build one smooth, closed Sankey ribbon with matching source/target thickness."""
+    horizontal = (target_x - source_x) * 0.48
+    upper = [
+        (source_x, source_top),
+        *_cubic_points(
+            (source_x, source_top),
+            (source_x + horizontal, source_top),
+            (target_x - horizontal, target_top),
+            (target_x, target_top),
+        ),
+    ]
+    lower = [
+        (source_x, source_top + thickness),
+        *_cubic_points(
+            (source_x, source_top + thickness),
+            (source_x + horizontal, source_top + thickness),
+            (target_x - horizontal, target_top + thickness),
+            (target_x, target_top + thickness),
+        ),
+    ]
+    return tuple([*upper, *reversed(lower)])
+
+
 def _draw_tree_node(
     draw: ImageDraw.ImageDraw,
     node: OrbitNode,
@@ -833,42 +914,44 @@ def _draw_tree_node(
     *,
     count_font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     label_font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    node_height: float,
     scale: int,
 ) -> None:
-    """Draw one fixed-size tree card; counts affect text, never edge or node geometry."""
+    """Draw one compact Sankey bar with a count and label separated by clear spacing."""
     center_x, center_y = center
     left = (center_x - _TREE_NODE_WIDTH / 2) * scale
-    top = (center_y - _TREE_NODE_HEIGHT / 2) * scale
+    node_height = max(float(_TREE_NODE_HEIGHT), node_height)
+    top = (center_y - node_height / 2) * scale
     right = (center_x + _TREE_NODE_WIDTH / 2) * scale
-    bottom = (center_y + _TREE_NODE_HEIGHT / 2) * scale
+    bottom = (center_y + node_height / 2) * scale
     draw.rounded_rectangle(
         (left, top, right, bottom),
-        radius=10 * scale,
-        fill=_hex_color("#FFFFFF"),
-        outline=_hex_color(node.color),
-        width=2 * scale,
-    )
-    draw.rounded_rectangle(
-        (left + 8 * scale, top + 8 * scale, left + 14 * scale, bottom - 8 * scale),
-        radius=3 * scale,
+        radius=min(3 * scale, max(1, round((bottom - top) / 2))),
         fill=_hex_color(node.color),
     )
-    text_x = left + 23 * scale
-    count_y = top + 6 * scale
+    text_x = right + 12 * scale
     count = f"{node.count:,}"
     count_box = draw.textbbox((0, 0), count, font=count_font)
     count_height = count_box[3] - count_box[1]
+    label_box = draw.textbbox((0, 0), node.label, font=label_font)
+    label_height = label_box[3] - label_box[1]
+    block_height = count_height + _NODE_LABEL_GAP * scale + label_height
+    count_y = center_y * scale - block_height / 2
     draw.text(
         (text_x, count_y),
         count,
         font=count_font,
         fill=_hex_color(_ERGA_INK),
+        stroke_width=1 * scale,
+        stroke_fill=_hex_color("#FFFFFF"),
     )
     draw.text(
         (text_x, count_y + count_height + _NODE_LABEL_GAP * scale),
         node.label,
         font=label_font,
         fill=_hex_color(_ERGA_INK),
+        stroke_width=1 * scale,
+        stroke_fill=_hex_color("#FFFFFF"),
     )
 
 
@@ -885,18 +968,32 @@ def render_orbit_png(
     scale = 2
     image = Image.new("RGBA", (width * scale, height * scale), _hex_color("#FFFFFF"))
     draw = ImageDraw.Draw(image, "RGBA")
-    title_font = _font(38 * scale)
-    count_font = _font(20 * scale, bold=True)
+    title_font = _font(34 * scale, bold=True)
+    subtitle_font = _font(14 * scale)
+    count_font = _font(19 * scale, bold=True)
     label_font = _font(13 * scale)
 
-    title = "Erga Orbit Tracker"
+    title = "Erga Orbit"
     title_box = draw.textbbox((0, 0), title, font=title_font)
     title_width = title_box[2] - title_box[0]
     draw.text(
-        ((width * scale - title_width) / 2, 32 * scale),
+        ((width * scale - title_width) / 2, 28 * scale),
         title,
         font=title_font,
         fill=_hex_color(_ERGA_INK),
+    )
+    subtitle = (
+        f"{snapshot.tracked_count:,} applications · {snapshot.cycle}"
+        if snapshot.cycle
+        else f"{snapshot.tracked_count:,} applications · complete outcome tree"
+    )
+    subtitle_box = draw.textbbox((0, 0), subtitle, font=subtitle_font)
+    subtitle_width = subtitle_box[2] - subtitle_box[0]
+    draw.text(
+        ((width * scale - subtitle_width) / 2, 75 * scale),
+        subtitle,
+        font=subtitle_font,
+        fill=_hex_color("#5B5B5B"),
     )
 
     if not snapshot.nodes:
@@ -913,27 +1010,37 @@ def render_orbit_png(
         )
     else:
         positions = _binary_tree_layout(snapshot, width=width, height=height)
+        node_heights = _sankey_node_heights(snapshot, height=height)
         node_by_id = {node.id: node for node in snapshot.nodes}
+        outgoing: dict[str, list[OrbitLink]] = defaultdict(list)
         for link in snapshot.links:
+            outgoing[link.source].append(link)
+        source_offsets: dict[tuple[str, str], float] = {}
+        for source, links in outgoing.items():
+            links.sort(key=lambda item: positions[item.target][1])
+            cursor = positions[source][1] - node_heights[source] / 2
+            for link in links:
+                source_offsets[(link.source, link.target)] = cursor
+                cursor += node_heights[link.target]
+
+        for link in sorted(
+            snapshot.links,
+            key=lambda item: (positions[item.target][1], positions[item.source][1]),
+        ):
             source_x, source_y = positions[link.source]
             target_x, target_y = positions[link.target]
-            start = (source_x + _TREE_NODE_WIDTH / 2, source_y)
-            end = (target_x - _TREE_NODE_WIDTH / 2, target_y)
-            horizontal = (end[0] - start[0]) * 0.46
-            points = [
-                start,
-                *_cubic_points(
-                    start,
-                    (start[0] + horizontal, start[1]),
-                    (end[0] - horizontal, end[1]),
-                    end,
-                ),
-            ]
-            draw.line(
+            del source_y
+            thickness = node_heights[link.target]
+            points = _sankey_ribbon(
+                source_x=source_x + _TREE_NODE_WIDTH / 2,
+                source_top=source_offsets[(link.source, link.target)],
+                target_x=target_x - _TREE_NODE_WIDTH / 2,
+                target_top=target_y - thickness / 2,
+                thickness=thickness,
+            )
+            draw.polygon(
                 [(round(x * scale), round(y * scale)) for x, y in points],
-                fill=_hex_color(node_by_id[link.target].color, alpha=196),
-                width=_TREE_EDGE_WIDTH * scale,
-                joint="curve",
+                fill=_tinted_color(node_by_id[link.target].color),
             )
 
         for node in snapshot.nodes:
@@ -943,6 +1050,7 @@ def render_orbit_png(
                 positions[node.id],
                 count_font=count_font,
                 label_font=label_font,
+                node_height=node_heights[node.id],
                 scale=scale,
             )
     _draw_erga_logo(draw, x=width - 280, y=height - 96, width=248, scale=scale)
