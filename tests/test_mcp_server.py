@@ -319,6 +319,10 @@ class McpServerTests(unittest.TestCase):
             self.assertEqual(packing["style_reference_item_budget"], 4)
             self.assertFalse(packing["spacing_fallback"])
 
+    @unittest.skipUnless(
+        shutil.which("latexmk") or shutil.which("tectonic"),
+        "a LaTeX compiler is required for rendered packing",
+    )
     def test_generated_template_packer_omits_sparse_experience_instead_of_failing_intake(
         self,
     ) -> None:
