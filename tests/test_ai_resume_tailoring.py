@@ -24,6 +24,7 @@ from erga_mcp.resumes.ai_tailoring import (
     _resume_quality_numbers,
     _resume_safe_approved_bullet,
     _source_clauses,
+    _unsupported_claim_terms,
     _validate_relevance_ordered_bullet_allocation,
     draft_evidence_backed_projects,
 )
@@ -75,6 +76,22 @@ def _candidate() -> ProjectCandidate:
 
 
 class AIResumeTailoringTests(unittest.TestCase):
+    def test_machine_learning_and_ml_are_equivalent_claim_terms(self) -> None:
+        self.assertEqual(
+            _unsupported_claim_terms(
+                "Built an EMG machine learning system.",
+                "Built an EMG ML system.",
+            ),
+            (),
+        )
+        self.assertEqual(
+            _unsupported_claim_terms(
+                "Built an EMG ML system.",
+                "Built an EMG machine-learning system.",
+            ),
+            (),
+        )
+
     def test_rejects_bullet_allocations_that_invert_project_relevance(self) -> None:
         def candidate(project_id: str, count: int) -> ProjectCandidate:
             bullets = "\n".join(
@@ -232,6 +249,7 @@ Python
         required_project_ids: tuple[str, ...] = (),
         maximum_bullets: int = 2,
         minimum_bullets: int | None = None,
+        minimum_characters: int = 0,
         style_preferences: ResumeStylePreferences | None = None,
         candidate: ProjectCandidate | None = None,
     ):
@@ -325,7 +343,7 @@ Python
                     project_count=1,
                     bullets_per_project=maximum_bullets,
                     minimum_bullets_per_project=minimum_bullets,
-                    bullet_min_chars=90,
+                    bullet_min_chars=minimum_characters,
                     bullet_target_chars=105,
                     bullet_max_chars=116,
                     require_unique_lead_verbs=True,
@@ -365,6 +383,107 @@ Python
         ]["bullets"]
         self.assertEqual(schema["minItems"], 1)
         self.assertEqual(schema["maxItems"], 4)
+
+    def test_configured_character_minimum_is_a_hard_model_and_validator_limit(self) -> None:
+        with self.assertRaisesRegex(ValueError, "below the configured minimum 90"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": "Engineered a Python API serving 100 users safely.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": "Validated 20 API routes across request failures.",
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                minimum_characters=90,
+            )
+
+        _, session = self._draft(
+            {
+                "projects": [
+                    {
+                        "project_id": "api-platform",
+                        "bullets": [
+                            {
+                                "text": (
+                                    "Engineered a Python API serving 100 users with authenticated "
+                                    "request handling safely."
+                                ),
+                                "evidence_ids": ["ev_api"],
+                            },
+                            {
+                                "text": (
+                                    "Validated 20 API routes across request validation and "
+                                    "failure handling."
+                                ),
+                                "evidence_ids": ["ev_api"],
+                            },
+                        ],
+                    }
+                ]
+            },
+            minimum_characters=60,
+        )
+        text_schema = session.calls[0]["tools"][0].input_schema["properties"]["projects"]["items"][
+            "properties"
+        ]["bullets"]["items"]["properties"]["text"]
+        self.assertEqual(text_schema["minLength"], 60)
+
+    def test_rejects_splitting_one_evidence_path_into_multiple_bullets(self) -> None:
+        combined = ProjectCandidate(
+            id="api-platform",
+            title="API Platform",
+            latex=(
+                r"\resumeProjectHeading{\textbf{API Platform} $|$ \textit{Python}}{}"
+                "\n"
+                r"\resumeItemListStart"
+                "\n"
+                r"\resumeItem{Achieved 99.3\% accuracy and sub-30ms latency with a Python API "
+                r"serving 100 users.}"
+                "\n"
+                r"\resumeItemListEnd"
+            ),
+            evidence_ids=("ev_api",),
+            bullet_evidence_ids=(("ev_api",),),
+            tags=("python", "api", "latency"),
+        )
+
+        with self.assertRaisesRegex(ValueError, "split one evidence path"):
+            self._draft(
+                {
+                    "projects": [
+                        {
+                            "project_id": "api-platform",
+                            "bullets": [
+                                {
+                                    "text": (
+                                        "Achieved 99.3% accuracy with a Python API serving 100 "
+                                        "users."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                                {
+                                    "text": (
+                                        "Delivered sub-30ms latency with a Python API serving 100 "
+                                        "users."
+                                    ),
+                                    "evidence_ids": ["ev_api"],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                candidate=combined,
+            )
 
     def test_ranks_multiple_evidence_valid_variants_from_one_model_response(self) -> None:
         result, session = self._draft(
@@ -565,6 +684,8 @@ Python
             prompt["selection_objective"]["instruction"],
         )
         self.assertIn("monotonically by relevance_rank", session.calls[0]["system_prompt"])
+        self.assertIn("hard character minimum and maximum", session.calls[0]["system_prompt"])
+        self.assertIn("Never split one evidence graph path", session.calls[0]["system_prompt"])
         self.assertEqual(
             prompt["selection_objective"]["priority_order"][0],
             "required-role coverage",
@@ -1586,7 +1707,7 @@ Python
             )
 
     def test_rejects_name_swappable_bullets_even_when_lead_verbs_differ(self) -> None:
-        with self.assertRaisesRegex(ValueError, "semantically interchangeable"):
+        with self.assertRaisesRegex(ValueError, "split one evidence path"):
             self._draft(
                 {
                     "projects": [

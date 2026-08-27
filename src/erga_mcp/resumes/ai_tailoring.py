@@ -301,17 +301,26 @@ def _claim_terms(value: str, *, generated: bool = False) -> tuple[str, ...]:
     """Extract factual terms; generated copy may add only grammar and its lead verb."""
     words = [match.group(0) for match in _CLAIM_WORD.finditer(value)]
     terms: list[str] = []
-    for index, word in enumerate(words):
+    index = 0
+    while index < len(words):
+        word = words[index]
         normalized = word.casefold().rstrip(".")
+        following = words[index + 1].casefold().rstrip(".") if index + 1 < len(words) else ""
+        if normalized == "machine" and following == "learning":
+            normalized = "ml"
+            index += 1
         if normalized in _CLAIM_GLUE:
+            index += 1
             continue
         if (
             generated
             and index == 0
             and normalized in {action.casefold() for action in _ACTION_VERBS}
         ):
+            index += 1
             continue
         terms.append(normalized)
+        index += 1
     return tuple(terms)
 
 
@@ -732,9 +741,12 @@ def _submission_schema(
     project_count: int,
     minimum_bullets_per_project: int,
     maximum_bullets_per_project: int,
+    bullet_min_chars: int,
     bullet_max_chars: int,
 ) -> dict[str, object]:
     text_schema: dict[str, object] = {"type": "string"}
+    if bullet_min_chars:
+        text_schema["minLength"] = bullet_min_chars
     if bullet_max_chars:
         text_schema["maxLength"] = bullet_max_chars
     projects_schema: dict[str, object] = {
@@ -1049,6 +1061,7 @@ def _validate_submission(
     project_count: int,
     minimum_bullets_per_project: int,
     maximum_bullets_per_project: int,
+    bullet_min_chars: int,
     bullet_max_chars: int,
     baseline_leads: frozenset[str],
     allowed_leads: frozenset[str],
@@ -1082,6 +1095,7 @@ def _validate_submission(
                 f"{minimum_bullets_per_project} and {maximum_bullets_per_project} bullets"
             )
         rendered_bullets: list[tuple[str, tuple[str, ...]]] = []
+        used_source_paths: set[tuple[str, ...]] = set()
         quantified_bullets = 0
         for raw_bullet in raw_bullets:
             if not isinstance(raw_bullet, dict):
@@ -1092,6 +1106,11 @@ def _validate_submission(
             if not isinstance(text, str) or not " ".join(text.split()):
                 raise ValueError("AI-authored bullet text must be non-empty")
             text = " ".join(text.split())
+            if bullet_min_chars and len(text) < bullet_min_chars:
+                raise ValueError(
+                    f"AI-authored bullet length {len(text)} is below the configured minimum "
+                    f"{bullet_min_chars}: {text}"
+                )
             if bullet_max_chars and len(text) > bullet_max_chars:
                 raise ValueError(
                     f"AI-authored bullet length {len(text)} exceeds the configured maximum "
@@ -1201,6 +1220,17 @@ def _validate_submission(
             evidence_ids = tuple(dict.fromkeys((*evidence_ids, *supplemental_claim_ids)))
             cited_text = "\n".join(project_sources[item] for item in evidence_ids)
             supporting_text = "\n".join(_supporting_source_clauses(text, cited_text))
+            source_path = tuple(
+                sorted(
+                    re.sub(r"[^a-z0-9]+", " ", clause.casefold()).strip()
+                    for clause in _primary_supporting_source_clauses(text, cited_text)
+                )
+            )
+            if source_path in used_source_paths:
+                raise ValueError(
+                    "AI-authored bullets split one evidence path into multiple bullets; "
+                    "combine the supported method, metrics, and outcome into one complete bullet"
+                )
             supporting_number_tokens = {
                 _normalized_number(match.group(0)) for match in _NUMBER.finditer(supporting_text)
             }
@@ -1280,6 +1310,7 @@ def _validate_submission(
                     f"[{codes}]; score={editorial.score}; {editorial.repair_brief()}"
                 )
             used_leads.add(lead)
+            used_source_paths.add(source_path)
             rendered_bullets.append((text, evidence_ids))
         # Quantitative evidence is a useful quality signal, not a mandate to turn every bullet
         # into a metric. When the master establishes a quantified style, retain at least one
@@ -1532,7 +1563,7 @@ async def draft_evidence_backed_projects(
         "tailoring_emphasis": tailoring_emphasis,
         "style_preferences": (style_preferences or ResumeStylePreferences()).as_prompt_dict(),
         "bullet_character_preferences": {
-            "minimum_soft": bullet_min_chars,
+            "minimum_hard": bullet_min_chars,
             "target": bullet_target_chars,
             "maximum_hard": bullet_max_chars,
         },
@@ -1570,6 +1601,9 @@ async def draft_evidence_backed_projects(
         "maximum. Allocate bullet counts monotonically by relevance_rank: every higher-ranked "
         "selected project must have at least as many bullets as every lower-ranked selected "
         "project. Every "
+        "bullet must satisfy the configured hard character minimum and maximum. Never split one "
+        "evidence graph path or approved source clause into multiple bullets; combine its method, "
+        "metrics, proof, and outcome into one complete bullet. Every "
         "bullet must cite only evidence IDs supplied for that same project. Build each bullet "
         "bottom-up from one evidence_graph path: choose its object first, then attach only the "
         "connected method, scope, proof, and outcome nodes it supports, choose the action last, "
@@ -1636,6 +1670,7 @@ async def draft_evidence_backed_projects(
                         project_count=project_count,
                         minimum_bullets_per_project=resolved_minimum_bullets,
                         maximum_bullets_per_project=bullets_per_project,
+                        bullet_min_chars=bullet_min_chars,
                         bullet_max_chars=bullet_max_chars,
                     ),
                 ),
@@ -1667,6 +1702,7 @@ async def draft_evidence_backed_projects(
                 project_count=project_count,
                 minimum_bullets_per_project=resolved_minimum_bullets,
                 maximum_bullets_per_project=bullets_per_project,
+                bullet_min_chars=bullet_min_chars,
                 bullet_max_chars=bullet_max_chars,
                 baseline_leads=baseline_leads,
                 allowed_leads=frozenset(verb.casefold() for verb in allowed_lead_verbs),
