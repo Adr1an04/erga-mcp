@@ -446,8 +446,7 @@ def resume_source_context(
         except OSError:
             direct_master_match = False
     exact_master_latex = bool(
-        reference is None
-        and master.format == "tex"
+        master.format == "tex"
         and (
             direct_master_match
             or (
@@ -461,12 +460,13 @@ def resume_source_context(
         "preserves_master_layout": exact_master_latex,
         "preserves_source_hyperlinks": exact_master_latex,
         "reason": (
-            "The approved LaTeX master is the visual template."
+            "The approved LaTeX master is the visual template; the rendered reference is "
+            "used only for visual validation."
+            if exact_master_latex and reference is not None
+            else "The approved LaTeX master is the visual template."
             if exact_master_latex
             else "PDF/DOCX sources provide facts, not recoverable LaTeX structure."
             if master.format != "tex"
-            else "A separate style override is rebuilding the LaTeX master."
-            if reference is not None
             else "The configured template is not verified as the approved LaTeX master."
         ),
     }

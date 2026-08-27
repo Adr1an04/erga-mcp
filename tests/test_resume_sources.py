@@ -322,6 +322,43 @@ class ResumeSourceTests(unittest.TestCase):
                 [],
             )
 
+    def test_rendered_reference_reports_preserved_latex_template_fidelity(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            master = root / "master.tex"
+            template = root / "resume.tex"
+            style = root / "rendered-master.pdf"
+            source = r"""\documentclass{article}
+\newcommand{\resumeItem}[1]{\item #1}
+\begin{document}
+\href{https://portfolio.example}{portfolio.example}
+\section{Experience}
+\resumeItem{Won \textbf{1st place}.}
+\end{document}"""
+            master.write_text(source, encoding="utf-8")
+            template.write_text("% provenance\n" + source, encoding="utf-8")
+            template.with_name("template.json").write_text(
+                json.dumps({"master_latex_preserved": True}),
+                encoding="utf-8",
+            )
+            style.write_bytes(b"%PDF synthetic")
+            reader = SimpleNamespace(
+                is_encrypted=False,
+                pages=[SimpleNamespace(extract_text=lambda: "Experience")],
+            )
+
+            with patch("erga_mcp.resumes.sources.PdfReader", return_value=reader):
+                context = resume_source_context(
+                    master_path=master,
+                    reference_path=style,
+                    template_path=template,
+                )
+
+            fidelity = context["template_fidelity"]
+            self.assertEqual(fidelity["mode"], "exact-master-latex")  # type: ignore[index]
+            self.assertTrue(fidelity["preserves_master_layout"])  # type: ignore[index]
+            self.assertTrue(fidelity["preserves_source_hyperlinks"])  # type: ignore[index]
+
 
 if __name__ == "__main__":
     unittest.main()

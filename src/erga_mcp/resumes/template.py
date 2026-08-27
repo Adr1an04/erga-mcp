@@ -21,7 +21,7 @@ from erga_mcp.resumes.settings import update_settings
 from erga_mcp.resumes.sources import ResumeSource, load_resume_source
 from erga_mcp.resumes.tailoring import latex_to_text
 
-TEMPLATE_GENERATION_VERSION = 20
+TEMPLATE_GENERATION_VERSION = 21
 _PAGE_MARKER = re.compile(r"^\[Page \d+\]$")
 _BULLET_PREFIX = re.compile(r"^(?:[•●▪◦‣⁃*]|[-–—]\s)\s*")
 _SPACE = re.compile(r"\s+")
@@ -1177,7 +1177,11 @@ def generate_latex_template(
     restrict_private_directory(target_dir)
     target = target_dir / "resume.tex"
     metadata_path = target_dir / "template.json"
-    preserves_master_latex = style is None and _is_tailorable_latex_master(master)
+    # A real LaTeX master is the authoritative visual template.  An accompanying
+    # PDF/DOCX style source is useful as a rendered validation reference, but it
+    # cannot preserve macros, hyperlinks, or inline emphasis and must never cause
+    # Erga to reconstruct (and flatten) editable LaTeX that it already has.
+    preserves_master_latex = _is_tailorable_latex_master(master)
     rendered = (
         _render_master_latex_template(master)
         if preserves_master_latex
@@ -1203,7 +1207,9 @@ def generate_latex_template(
         "master_sha256": master.sha256,
         "style_sha256": style.sha256 if style else None,
         "styling_source": (
-            "master-latex"
+            "master-latex-with-rendered-reference"
+            if preserves_master_latex and style is not None
+            else "master-latex"
             if preserves_master_latex
             else "user-template"
             if style

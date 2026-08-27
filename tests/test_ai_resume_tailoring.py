@@ -18,6 +18,7 @@ from erga_mcp.resumes.ai_tailoring import (
     _latex_bullet_text,
     _latex_text,
     _master_bolds_project_metrics,
+    _master_project_bold_phrases,
     _metric_claims,
     _normalized_number,
     _resume_quality_numbers,
@@ -103,6 +104,37 @@ Python
                     bold_metric_tokens=True,
                 ),
                 r"Added health telemetry for \textbf{40\% faster incident detection}.",
+            )
+
+    def test_reapplies_master_award_and_technical_emphasis_without_model_latex(self) -> None:
+        with TemporaryDirectory() as directory:
+            resume = Path(directory) / "resume.tex"
+            resume.write_text(
+                r"""\begin{document}
+\section{Projects}
+\resumeProjectHeading{\textbf{Guido}}{}
+\resumeItem{Won \textbf{Most Innovative Hack} out of \textbf{85 projects} at \textbf{HackUSF 2026}.}
+\resumeItem{Implemented \textbf{ROS2/Nav2} autonomy with \textbf{LiDAR SLAM}.}
+\section{Technical Skills}
+Python
+\end{document}
+""",
+                encoding="utf-8",
+            )
+
+            phrases = _master_project_bold_phrases(resume)
+            self.assertIn("Most Innovative Hack", phrases)
+            self.assertIn("ROS2/Nav2", phrases)
+            self.assertEqual(
+                _latex_bullet_text(
+                    "Won Most Innovative Hack out of 85 projects at HackUSF 2026 using ROS2/Nav2.",
+                    bold_metric_tokens=True,
+                    bold_phrases=phrases,
+                ),
+                (
+                    r"Won \textbf{Most Innovative Hack} out of \textbf{85 projects} at "
+                    r"\textbf{HackUSF 2026} using \textbf{ROS2/Nav2}."
+                ),
             )
 
     def test_numeric_normalization_ignores_sentence_punctuation_but_preserves_decimals(

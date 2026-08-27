@@ -886,42 +886,87 @@ def _master_bolds_project_metrics(resume_path: Path) -> bool:
     )
 
 
-def _latex_bullet_text(value: str, *, bold_metric_tokens: bool) -> str:
-    """Escape model text and reapply the master's supported metric-emphasis convention."""
-    if not bold_metric_tokens:
+def _master_project_bold_phrases(resume_path: Path) -> tuple[str, ...]:
+    """Return exact phrases emphasized inside the master's project bullets.
+
+    The model still returns plain text.  These phrases let deterministic rendering preserve
+    human-authored emphasis for awards and technical anchors without allowing model-authored
+    LaTeX or guessing what should be bold.
+    """
+    source = resume_path.read_text(encoding="utf-8")
+    match = re.search(r"^\\section\{Projects\}\s*$", source, re.MULTILINE | re.IGNORECASE)
+    if match is None:
+        return ()
+    following = re.search(r"^\\section\{[^}]+\}\s*$", source[match.end() :], re.MULTILINE)
+    end = match.end() + following.start() if following is not None else len(source)
+    project_source = source[match.end() : end]
+    phrases: list[str] = []
+    for line in project_source.splitlines():
+        if r"\resumeItem{" not in line:
+            continue
+        for emphasized in re.findall(r"\\textbf\{([^{}]*)\}", line):
+            phrase = " ".join(latex_to_text(emphasized).split())
+            if len(phrase) >= 2:
+                phrases.append(phrase)
+    return tuple(sorted(dict.fromkeys(phrases), key=lambda item: (-len(item), item.casefold())))
+
+
+def _latex_bullet_text(
+    value: str,
+    *,
+    bold_metric_tokens: bool,
+    bold_phrases: tuple[str, ...] = (),
+) -> str:
+    """Escape model text and deterministically reapply the master's inline emphasis."""
+    if not bold_metric_tokens and not bold_phrases:
         return _latex_text(value)
+    intervals: list[tuple[int, int]] = []
+    quality_numbers = _resume_quality_numbers(value)
+    if bold_metric_tokens:
+        for match in _NUMBER.finditer(value):
+            if _normalized_number(match.group(0)) not in quality_numbers:
+                continue
+            emphasis_end = match.end()
+            following = value[match.end() : match.end() + 64]
+            descriptor = _METRIC_DESCRIPTOR.search(following)
+            if descriptor is not None and not re.search(
+                r"[,;.]|\b(?:and|but|with|using|via|across|by|for|to|in|on)\b",
+                following[: descriptor.start()],
+                re.IGNORECASE,
+            ):
+                emphasis_end = match.end() + descriptor.end()
+            elif match.group(0).rstrip(".,").endswith("%"):
+                outcome = re.match(
+                    r"\s+(?:faster|slower|higher|lower|less|more|reduced|improved)"
+                    r"(?:\s+[A-Za-z][A-Za-z0-9/-]*){0,2}",
+                    following,
+                    re.IGNORECASE,
+                )
+                if outcome is not None:
+                    emphasis_end = match.end() + outcome.end()
+            intervals.append((match.start(), emphasis_end))
+    for phrase in bold_phrases:
+        pattern = re.compile(
+            rf"(?<![A-Za-z0-9]){re.escape(phrase)}(?![A-Za-z0-9])",
+            re.IGNORECASE,
+        )
+        intervals.extend((match.start(), match.end()) for match in pattern.finditer(value))
+
+    # Prefer the longest span at a shared start and never emit nested/overlapping textbf blocks.
+    selected: list[tuple[int, int]] = []
+    cursor = 0
+    for start, end in sorted(set(intervals), key=lambda item: (item[0], -(item[1] - item[0]))):
+        if start < cursor:
+            continue
+        selected.append((start, end))
+        cursor = end
+
     rendered: list[str] = []
     cursor = 0
-    quality_numbers = _resume_quality_numbers(value)
-    for match in _NUMBER.finditer(value):
-        if match.start() < cursor:
-            continue
-        rendered.append(_latex_text(value[cursor : match.start()]))
-        emphasis_end = match.end()
-        following = value[match.end() : match.end() + 64]
-        descriptor = _METRIC_DESCRIPTOR.search(following)
-        if descriptor is not None and not re.search(
-            r"[,;.]|\b(?:and|but|with|using|via|across|by|for|to|in|on)\b",
-            following[: descriptor.start()],
-            re.IGNORECASE,
-        ):
-            emphasis_end = match.end() + descriptor.end()
-        elif match.group(0).rstrip(".,").endswith("%"):
-            outcome = re.match(
-                r"\s+(?:faster|slower|higher|lower|less|more|reduced|improved)"
-                r"(?:\s+[A-Za-z][A-Za-z0-9/-]*){0,2}",
-                following,
-                re.IGNORECASE,
-            )
-            if outcome is not None:
-                emphasis_end = match.end() + outcome.end()
-        escaped = _latex_text(value[match.start() : emphasis_end])
-        rendered.append(
-            rf"\textbf{{{escaped}}}"
-            if _normalized_number(match.group(0)) in quality_numbers
-            else escaped
-        )
-        cursor = emphasis_end
+    for start, end in selected:
+        rendered.append(_latex_text(value[cursor:start]))
+        rendered.append(rf"\textbf{{{_latex_text(value[start:end])}}}")
+        cursor = end
     rendered.append(_latex_text(value[cursor:]))
     return "".join(rendered)
 
@@ -931,6 +976,7 @@ def _replace_candidate_bullets(
     bullets: list[tuple[str, tuple[str, ...]]],
     *,
     bold_metric_tokens: bool = False,
+    bold_phrases: tuple[str, ...] = (),
 ) -> ProjectCandidate:
     start_marker = r"\resumeItemListStart"
     end_marker = r"\resumeItemListEnd"
@@ -940,10 +986,15 @@ def _replace_candidate_bullets(
         raise ValueError("project candidate is missing its resume item list")
     prefix = candidate.latex[: start + len(start_marker)].rstrip()
     suffix = candidate.latex[end:].lstrip()
-    rendered = "\n".join(
-        rf"\resumeItem{{{_latex_bullet_text(text, bold_metric_tokens=bold_metric_tokens)}}}"
+    rendered_bullet_texts = (
+        _latex_bullet_text(
+            text,
+            bold_metric_tokens=bold_metric_tokens,
+            bold_phrases=bold_phrases,
+        )
         for text, _ in bullets
     )
+    rendered = "\n".join(rf"\resumeItem{{{text}}}" for text in rendered_bullet_texts)
     evidence_ids = tuple(dict.fromkeys(item for _, ids in bullets for item in ids))
     return replace(
         candidate,
@@ -971,6 +1022,7 @@ def _validate_submission(
     require_unique_lead_verbs: bool,
     required_project_ids: tuple[str, ...],
     bold_metric_tokens: bool = False,
+    bold_phrases: tuple[str, ...] = (),
 ) -> tuple[ProjectCandidate, ...]:
     raw_projects = submission.get("projects")
     if not isinstance(raw_projects, list) or len(raw_projects) != project_count:
@@ -1212,6 +1264,7 @@ def _validate_submission(
             candidate_by_id[project_id],
             rendered_bullets,
             bold_metric_tokens=bold_metric_tokens,
+            bold_phrases=bold_phrases,
         )
         issues = project_quality_issues(candidate)
         if issues:
@@ -1304,6 +1357,7 @@ async def draft_evidence_backed_projects(
     quantitative_tokens_by_project: dict[str, frozenset[str]] = {}
     master_quantitative_coverage = _master_project_quantitative_coverage(resume_path)
     bold_metric_tokens = _master_bolds_project_metrics(resume_path)
+    bold_phrases = _master_project_bold_phrases(resume_path)
     minimum_required_quantified_bullets = min(
         1,
         resolved_minimum_bullets,
@@ -1577,6 +1631,7 @@ async def draft_evidence_backed_projects(
                 require_unique_lead_verbs=require_unique_lead_verbs,
                 required_project_ids=required_project_ids,
                 bold_metric_tokens=bold_metric_tokens,
+                bold_phrases=bold_phrases,
             )
         except ValueError as error:
             if index == 0:

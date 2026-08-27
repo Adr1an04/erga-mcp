@@ -74,6 +74,56 @@ class ResumeTemplateTests(unittest.TestCase):
             self.assertIn(r"Implemented \textbf{C\#/.NET APIs} with \textbf{25+ metrics}", proposal)
             self.assertIn(r"\usepackage[margin=0.7in]{geometry}", proposal)
 
+    def test_rendered_reference_never_reconstructs_a_tailorable_latex_master(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_text = r"""\documentclass[letterpaper,11pt]{article}
+\usepackage[hidelinks]{hyperref}
+\newcommand{\resumeItem}[1]{\item\small{#1}}
+\newcommand{\resumeProjectHeading}[2]{\item[]#1\hfill #2}
+\begin{document}
+\href{https://portfolio.example}{portfolio.example}
+\section{Experience}
+\begin{itemize}
+\resumeItem{Improved reliability by \textbf{40\%}.}
+\end{itemize}
+\section{Projects}
+\resumeProjectHeading{\href{https://code.example/alpha}{\textbf{Alpha}}}{Python}
+\resumeItem{Won \textbf{1st of 245} teams.}
+\end{document}"""
+            master = ResumeSource(
+                path=root / "master.tex",
+                format="tex",
+                sha256="c" * 64,
+                page_count=None,
+                text=source_text,
+            )
+            style = ResumeSource(
+                path=root / "rendered-master.pdf",
+                format="pdf",
+                sha256="d" * 64,
+                page_count=1,
+                text="Experience\nProjects",
+            )
+
+            generated = generate_latex_template(
+                master,
+                data_dir=root / "state",
+                style=style,
+            )
+
+            template = generated.path.read_text(encoding="utf-8")
+            metadata = json.loads(generated.metadata_path.read_text(encoding="utf-8"))
+            self.assertIn(source_text, template)
+            self.assertIn(r"\href{https://portfolio.example}{portfolio.example}", template)
+            self.assertIn(r"\textbf{1st of 245}", template)
+            self.assertEqual(metadata["style_sha256"], "d" * 64)
+            self.assertEqual(
+                metadata["styling_source"],
+                "master-latex-with-rendered-reference",
+            )
+            self.assertTrue(metadata["master_latex_preserved"])
+
     def test_default_jake_style_is_independent_of_master_layout(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
