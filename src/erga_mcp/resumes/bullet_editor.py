@@ -47,6 +47,7 @@ _ACTION_WORDS = (
     "refactored",
     "resolved",
     "scaled",
+    "secured",
     "shipped",
     "standardized",
     "streamlined",
@@ -117,6 +118,7 @@ _DIRECTIONAL_ACTIONS = frozenset(
         "prevented",
         "reduced",
         "resolved",
+        "secured",
         "won",
     }
 )

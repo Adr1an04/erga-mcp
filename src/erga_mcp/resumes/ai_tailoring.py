@@ -99,6 +99,7 @@ _METRIC_QUALIFIERS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 _SUBMIT_TOOL = "submit_evidence_backed_projects"
 _ACTION_VERBS = (
+    "Achieved",
     "Architected",
     "Automated",
     "Built",
@@ -110,6 +111,7 @@ _ACTION_VERBS = (
     "Developed",
     "Engineered",
     "Established",
+    "Hardened",
     "Implemented",
     "Integrated",
     "Launched",
@@ -117,9 +119,12 @@ _ACTION_VERBS = (
     "Orchestrated",
     "Produced",
     "Refactored",
+    "Resolved",
+    "Secured",
     "Shipped",
     "Streamlined",
     "Validated",
+    "Won",
 )
 _LEAD_VERB_GROUPS = (
     frozenset(
@@ -132,6 +137,10 @@ _LEAD_VERB_GROUPS = (
     frozenset({"integrated", "orchestrated"}),
     frozenset({"optimized"}),
     frozenset({"refactored"}),
+    frozenset({"achieved", "delivered", "produced"}),
+    frozenset({"hardened", "strengthened"}),
+    frozenset({"fixed", "remediated", "resolved"}),
+    frozenset({"captured", "earned", "secured", "won"}),
 )
 _PROTECTED_QUALITATIVE_CLAIMS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("asynchronous processing", re.compile(r"\basync(?:hronous(?:ly)?)?\b", re.I)),
@@ -337,7 +346,8 @@ def _source_clauses(value: str) -> tuple[str, ...]:
     return tuple(
         clause.strip()
         for clause in re.split(
-            rf"[.;\n]+|\b(?:and|but|while)\s+(?=(?:{action_pattern})\b)",
+            rf"[;\n]+|\.(?=\s|$)|\b(?:and|but|while)\s+"
+            rf"(?=(?:{action_pattern})\b)",
             value,
             flags=re.I,
         )
@@ -439,6 +449,8 @@ def _lead_supported_by_evidence(lead: str, text: str, source_text: str) -> bool:
         for word in _WORD.findall(clause)
     }
     normalized = lead.casefold()
+    if normalized in source_words:
+        return True
     return any(
         normalized in group and not group.isdisjoint(source_words) for group in _LEAD_VERB_GROUPS
     )
@@ -1004,6 +1016,27 @@ def _replace_candidate_bullets(
     )
 
 
+def _validate_relevance_ordered_bullet_allocation(
+    candidates: tuple[ProjectCandidate, ...],
+    relevance_rank_by_project: dict[str, int],
+) -> None:
+    """Keep stronger projects at least as developed as weaker selected projects."""
+    ordered = sorted(
+        candidates,
+        key=lambda candidate: relevance_rank_by_project.get(candidate.id, len(candidates) + 1),
+    )
+    for stronger, weaker in zip(ordered, ordered[1:], strict=False):
+        stronger_count = len(resume_item_texts(stronger.latex))
+        weaker_count = len(resume_item_texts(weaker.latex))
+        if stronger_count < weaker_count:
+            raise ValueError(
+                "AI-authored bullet allocation must be non-increasing by relevance rank; "
+                f"rank {relevance_rank_by_project.get(stronger.id, '?')} received "
+                f"{stronger_count} bullets while rank "
+                f"{relevance_rank_by_project.get(weaker.id, '?')} received {weaker_count}"
+            )
+
+
 def _validate_submission(
     submission: dict[str, object],
     *,
@@ -1021,6 +1054,7 @@ def _validate_submission(
     allowed_leads: frozenset[str],
     require_unique_lead_verbs: bool,
     required_project_ids: tuple[str, ...],
+    relevance_rank_by_project: dict[str, int],
     bold_metric_tokens: bool = False,
     bold_phrases: tuple[str, ...] = (),
 ) -> tuple[ProjectCandidate, ...]:
@@ -1270,6 +1304,10 @@ def _validate_submission(
         if issues:
             raise ValueError("AI-authored project contains internal research prose")
         drafted.append(candidate)
+    _validate_relevance_ordered_bullet_allocation(
+        tuple(drafted),
+        relevance_rank_by_project,
+    )
     if required_project_ids and selected_ids != set(required_project_ids):
         raise ValueError(
             "the tailoring model must preserve the required project selection: "
@@ -1461,7 +1499,9 @@ async def draft_evidence_backed_projects(
         "selection_objective": {
             "instruction": (
                 "Choose the strongest complete portfolio globally; do not merely accept the "
-                "candidate order. Compare every eligible project before selecting."
+                "candidate order. Compare every eligible project before selecting. Bullet "
+                "counts must be non-increasing by relevance_rank: a lower-ranked selected "
+                "project can never receive more bullets than a higher-ranked selected project."
             ),
             "priority_order": [
                 "required-role coverage",
@@ -1527,7 +1567,9 @@ async def draft_evidence_backed_projects(
         "per project. Produce as many distinct, high-signal bullets as the supplied evidence can "
         "support up to the maximum; order each project's bullets from strongest and most "
         "role-relevant to least essential, and never add generic filler merely to reach the "
-        "maximum. Every "
+        "maximum. Allocate bullet counts monotonically by relevance_rank: every higher-ranked "
+        "selected project must have at least as many bullets as every lower-ranked selected "
+        "project. Every "
         "bullet must cite only evidence IDs supplied for that same project. Build each bullet "
         "bottom-up from one evidence_graph path: choose its object first, then attach only the "
         "connected method, scope, proof, and outcome nodes it supports, choose the action last, "
@@ -1630,6 +1672,7 @@ async def draft_evidence_backed_projects(
                 allowed_leads=frozenset(verb.casefold() for verb in allowed_lead_verbs),
                 require_unique_lead_verbs=require_unique_lead_verbs,
                 required_project_ids=required_project_ids,
+                relevance_rank_by_project=relevance_rank,
                 bold_metric_tokens=bold_metric_tokens,
                 bold_phrases=bold_phrases,
             )

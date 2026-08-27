@@ -23,6 +23,8 @@ from erga_mcp.resumes.ai_tailoring import (
     _normalized_number,
     _resume_quality_numbers,
     _resume_safe_approved_bullet,
+    _source_clauses,
+    _validate_relevance_ordered_bullet_allocation,
     draft_evidence_backed_projects,
 )
 from erga_mcp.resumes.artifacts import resume_item_texts
@@ -73,6 +75,41 @@ def _candidate() -> ProjectCandidate:
 
 
 class AIResumeTailoringTests(unittest.TestCase):
+    def test_rejects_bullet_allocations_that_invert_project_relevance(self) -> None:
+        def candidate(project_id: str, count: int) -> ProjectCandidate:
+            bullets = "\n".join(
+                rf"\resumeItem{{Built distinct supported system {project_id} {index}.}}"
+                for index in range(count)
+            )
+            return ProjectCandidate(
+                id=project_id,
+                title=project_id,
+                latex=(
+                    rf"\resumeProjectHeading{{\textbf{{{project_id}}}}}{{}}"
+                    "\n"
+                    r"\resumeItemListStart"
+                    "\n"
+                    f"{bullets}\n"
+                    r"\resumeItemListEnd"
+                ),
+                evidence_ids=(f"ev-{project_id}",),
+            )
+
+        inverted = tuple(
+            candidate(project_id, count)
+            for project_id, count in (("top", 2), ("second", 3), ("third", 3), ("fourth", 2))
+        )
+        ranks = {"top": 1, "second": 2, "third": 3, "fourth": 4}
+
+        with self.assertRaisesRegex(ValueError, "non-increasing by relevance rank"):
+            _validate_relevance_ordered_bullet_allocation(inverted, ranks)
+
+        valid = tuple(
+            candidate(project_id, count)
+            for project_id, count in (("top", 3), ("second", 3), ("third", 2), ("fourth", 2))
+        )
+        _validate_relevance_ordered_bullet_allocation(valid, ranks)
+
     def test_reapplies_the_master_project_metric_bolding_convention(self) -> None:
         with TemporaryDirectory() as directory:
             resume = Path(directory) / "resume.tex"
@@ -142,6 +179,10 @@ Python
     ) -> None:
         self.assertEqual(_normalized_number("2026."), "2026")
         self.assertEqual(_normalized_number("99.3%"), "99.3%")
+        self.assertEqual(
+            _source_clauses("Achieved 99.3% accuracy. Shipped the validated model."),
+            ("Achieved 99.3% accuracy", "Shipped the validated model"),
+        )
 
     def test_raw_git_filter_allows_implementation_files_but_blocks_accounting(self) -> None:
         self.assertIsNone(_FORBIDDEN_GIT_PROSE.search("Generated typed configuration files."))
@@ -519,6 +560,11 @@ Python
         self.assertIn("Validated", prompt["allowed_lead_verbs"])
         self.assertEqual(prompt["projects"][0]["relevance_rank"], 1)
         self.assertIn("every eligible project", prompt["selection_objective"]["instruction"])
+        self.assertIn(
+            "non-increasing by relevance_rank",
+            prompt["selection_objective"]["instruction"],
+        )
+        self.assertIn("monotonically by relevance_rank", session.calls[0]["system_prompt"])
         self.assertEqual(
             prompt["selection_objective"]["priority_order"][0],
             "required-role coverage",

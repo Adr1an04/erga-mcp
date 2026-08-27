@@ -41,6 +41,7 @@ class GitProjectEnrichment:
     catalogue_candidate_count: int
     quality_rejections: tuple[dict[str, object], ...] = ()
     requires_spacing_fallback: bool = True
+    project_order_is_final: bool = False
 
 
 def merge_github_project_catalogue(

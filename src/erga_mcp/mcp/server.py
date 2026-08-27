@@ -378,6 +378,7 @@ def _project_density_trial(
         bullet_max_chars=config.resume.bullet_max_chars,
         project_candidates=project_candidates,
         project_count=config.resume.project_count,
+        preserve_project_candidate_order=True,
         require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
         minimum_page_fill_ratio=0,
     )
@@ -732,6 +733,7 @@ def _create_render_packed_automatic_resume_proposal(
     project_candidates: tuple[ProjectCandidate, ...],
     config: ErgaConfig,
     additional_project_quality_rejections: tuple[dict[str, object], ...] = (),
+    preserve_project_candidate_order: bool = False,
 ) -> AutomaticResumeProposal:
     """Create the fullest valid generated-template proposal, independent of the caller agent."""
     common: dict[str, Any] = {
@@ -744,6 +746,7 @@ def _create_render_packed_automatic_resume_proposal(
         "bullet_max_chars": config.resume.bullet_max_chars,
         "project_candidates": project_candidates,
         "project_count": config.resume.project_count,
+        "preserve_project_candidate_order": preserve_project_candidate_order,
         "require_unique_lead_verbs": config.resume.require_unique_lead_verbs,
         "max_pages": config.resume.max_pages,
         "additional_project_quality_rejections": additional_project_quality_rejections,
@@ -1068,6 +1071,7 @@ def _git_enriched_inventory_candidates(
                 project_count=config.resume.project_count,
                 maximum_characters=config.resume.bullet_max_chars,
                 require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
+                preserve_candidate_order=True,
             )
             selected_project_ids = tuple(candidate.id for candidate in selection_plan.selected)
     enrichment = enrich_ranked_projects_from_git(
@@ -1273,6 +1277,7 @@ async def _ai_tailored_project_enrichment(
                 warnings=enrichment.warnings,
                 catalogue_candidate_count=enrichment.catalogue_candidate_count,
                 requires_spacing_fallback=requires_spacing,
+                project_order_is_final=True,
             )
         except ValueError as error:
             last_error = error
@@ -1460,6 +1465,7 @@ def _realign_git_project_research(
         catalogue_candidate_count=enrichment.catalogue_candidate_count,
         quality_rejections=enrichment.quality_rejections,
         requires_spacing_fallback=enrichment.requires_spacing_fallback,
+        project_order_is_final=enrichment.project_order_is_final,
     )
 
 
@@ -1792,6 +1798,7 @@ def _upgrade_existing_tailoring(
         project_candidates=project_candidates,
         config=config,
         additional_project_quality_rejections=enrichment.quality_rejections,
+        preserve_project_candidate_order=enrichment.project_order_is_final,
     )
     automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
     enrichment = _realign_git_project_research(
@@ -2695,6 +2702,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                     project_candidates=project_candidates,
                     config=config,
                     additional_project_quality_rejections=enrichment.quality_rejections,
+                    preserve_project_candidate_order=enrichment.project_order_is_final,
                 ),
                 abandon_on_cancel=True,
             )
@@ -3145,6 +3153,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
             project_candidates=project_candidates,
             config=config,
             additional_project_quality_rejections=enrichment.quality_rejections,
+            preserve_project_candidate_order=enrichment.project_order_is_final,
         )
         automatic.project_selection["candidate_count"] = enrichment.catalogue_candidate_count
         enrichment = _realign_git_project_research(
