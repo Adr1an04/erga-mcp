@@ -61,7 +61,7 @@ from erga_mcp.resumes.planning import (
     TailoringPlanOption,
     TailoringPlanQuestion,
 )
-from erga_mcp.resumes.tailoring import create_automatic_resume_proposal
+from erga_mcp.resumes.tailoring import TAILORING_VERSION, create_automatic_resume_proposal
 from erga_mcp.store import ErgaStore
 
 _HTTP_TOKEN = "test-token-with-at-least-thirty-two-characters"
@@ -2685,7 +2685,7 @@ Bottom of the approved master template.
             self.assertGreater(Path(result["diff"]).stat().st_size, 0)
             self.assertTrue(result["tailoring_meaningful_change"])
             self.assertEqual(result["tailoring_changed_sections"], ["Experience"])
-            self.assertEqual(result["tailoring_version"], 41)
+            self.assertEqual(result["tailoring_version"], TAILORING_VERSION)
             self.assertEqual(result["readiness"], "ready")
             self.assertEqual(result["git_project_research"], [])
             self.assertIsInstance(result["application_id"], str)
@@ -2699,7 +2699,7 @@ Bottom of the approved master template.
                 (Path(result["package_dir"]) / "package.json").read_text(encoding="utf-8")
             )
             self.assertTrue(manifest["tailoring"]["meaningful_change"])
-            self.assertEqual(manifest["tailoring"]["version"], 41)
+            self.assertEqual(manifest["tailoring"]["version"], TAILORING_VERSION)
             self.assertEqual(
                 manifest["generated_resume_version_id"], result["generated_resume_version_id"]
             )
@@ -2773,7 +2773,7 @@ Bottom of the approved master template.
             )
             manifest = json.loads((repaired / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["legacy_backup"], "legacy-backup")
-            self.assertEqual(manifest["tailoring"]["version"], 41)
+            self.assertEqual(manifest["tailoring"]["version"], TAILORING_VERSION)
             self.assertIn("Legacy package preserved", result["integration_warnings"][-1])
 
     def test_compile_rejects_a_pdf_over_the_configured_page_cap(self) -> None:

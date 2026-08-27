@@ -382,6 +382,32 @@ class ProjectInventoryTests(unittest.TestCase):
             "commit/file accounting instead of an outcome", project_quality_issues(candidate)
         )
 
+    def test_project_quality_rejects_two_bullets_for_the_same_benchmark(self) -> None:
+        candidate = ProjectCandidate(
+            id="duplicate-benchmark",
+            title="Duplicate Benchmark",
+            latex=(
+                r"\resumeProjectHeading{\textbf{Duplicate Benchmark}}{}"
+                "\n"
+                r"\resumeItemListStart"
+                "\n"
+                r"\resumeItem{Implemented inference with integrated benchmarking "
+                r"and resource monitoring.}"
+                "\n"
+                r"\resumeItem{Benchmarked latency, throughput, memory, and GPU utilization.}"
+                "\n"
+                r"\resumeItemListEnd"
+            ),
+            evidence_ids=("ev_benchmark",),
+            bullet_evidence_ids=(("ev_benchmark",), ("ev_benchmark",)),
+            tags=("cuda", "inference"),
+        )
+
+        self.assertIn(
+            "project bullets repeat the same benchmarking accomplishment",
+            project_quality_issues(candidate),
+        )
+
     def test_inventory_rejects_unapproved_or_missing_evidence(self) -> None:
         evidence = [
             Evidence("ev_ok", "Career#Project", "Verified project", True, datetime.now(UTC)),

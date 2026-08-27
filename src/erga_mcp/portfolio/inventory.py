@@ -86,6 +86,20 @@ _REQUIREMENT_MARKERS = (
     "must have",
     "must-have",
 )
+_INTERNAL_BULLET_CONCEPTS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "diagnostics",
+        re.compile(r"\b(?:check|detect|diagnos|doctor|mismatch|probe|validate)\w*\b", re.I),
+    ),
+    (
+        "benchmarking",
+        re.compile(
+            r"\b(?:benchmark|latency|throughput|resource monitoring|gpu utili[sz]ation|"
+            r"memory|power)\w*\b",
+            re.I,
+        ),
+    ),
+)
 _ROLE_SIGNAL_CLUSTERS: tuple[tuple[str, frozenset[str], frozenset[str]], ...] = (
     (
         "real-time / interactive systems",
@@ -387,10 +401,15 @@ def _terms(value: str) -> frozenset[str]:
 def project_quality_issues(candidate: ProjectCandidate) -> tuple[str, ...]:
     """Identify internal research prose that must never become résumé copy."""
     issues: list[str] = []
-    for bullet in resume_item_texts(candidate.latex):
+    bullets = resume_item_texts(candidate.latex)
+    for bullet in bullets:
         for label, pattern in _INTERNAL_RESEARCH_PATTERNS:
             if pattern.search(bullet) and label not in issues:
                 issues.append(label)
+    for label, pattern in _INTERNAL_BULLET_CONCEPTS:
+        concept_counts = [len(pattern.findall(bullet)) for bullet in bullets]
+        if sum(count >= 2 for count in concept_counts) > 1:
+            issues.append(f"project bullets repeat the same {label} accomplishment")
     return tuple(issues)
 
 

@@ -23,6 +23,26 @@ def _evidence(identifier: str, *, source_ref: str = "master-resume:synthetic") -
 
 
 class ExperienceInventoryTests(unittest.TestCase):
+    def test_seeded_master_bullet_accepts_standard_latex_apostrophe_escape(self) -> None:
+        master = r"""\section{Experience}
+\resumeSubHeadingListStart
+\resumeSubheading{President}{Jan 2025 -- Present}{Knight Hacks}{Orlando, FL}
+\resumeItemListStart
+\resumeItem{Directed UCF\'s largest hackathon for 1,000+ attendees.}
+\resumeItemListEnd
+\resumeSubHeadingListEnd
+"""
+        evidence = Evidence("ev_master", "master.tex", master, True, datetime.now(UTC))
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "experience.json"
+            sync_experience_inventory_from_master(
+                path, master_latex=master, evidence_id=evidence.id
+            )
+
+            candidates = load_experience_inventory(path, [evidence])
+
+        self.assertIn(r"UCF\'s largest hackathon", candidates[0].bullets[0].latex)
+
     def test_user_added_bullet_auto_bolds_confirmed_metrics(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "experience.json"
@@ -141,6 +161,80 @@ class ExperienceInventoryTests(unittest.TestCase):
             )
             self.assertIn(r"\textbf{12 services}", candidates[0].bullets[0].latex)
 
+    def test_sync_keeps_repeated_role_dates_as_distinct_entries(self) -> None:
+        master = r"""\section{Experience}
+\resumeSubHeadingListStart
+\resumeSubheading{Software Engineer Intern}{Jan 2026 -- Apr 2026}{Example}{Remote}
+\resumeItemListStart
+\resumeItem{Built the winter platform with 12 services.}
+\resumeItemListEnd
+\resumeSubheading{Software Engineer Intern}{May 2025 -- Aug 2025}{Example}{Remote}
+\resumeItemListStart
+\resumeItem{Built the summer platform with 8 services.}
+\resumeItemListEnd
+\resumeSubHeadingListEnd
+"""
+        evidence = Evidence("ev_master", "master.tex", master, True, datetime.now(UTC))
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "experience.json"
+            sync_experience_inventory_from_master(
+                path, master_latex=master, evidence_id=evidence.id
+            )
+            candidates = load_experience_inventory(path, [evidence])
+
+        self.assertEqual(len(candidates), 2)
+        self.assertEqual(
+            [candidate.entry_terms for candidate in candidates],
+            [("Jan 2026 -- Apr 2026",), ("May 2025 -- Aug 2025",)],
+        )
+
+    def test_tailoring_uses_dates_to_separate_repeated_roles(self) -> None:
+        section = r"""\section{Experience}
+\resumeSubHeadingListStart
+\resumeSubheading{Software Engineer Intern}{Jan 2026 -- Apr 2026}{Example}{Remote}
+\resumeItemListStart
+\resumeItem{Original winter bullet.}
+\resumeItemListEnd
+\resumeSubheading{Software Engineer Intern}{May 2025 -- Aug 2025}{Example}{Remote}
+\resumeItemListStart
+\resumeItem{Original summer bullet.}
+\resumeItemListEnd
+\resumeSubHeadingListEnd
+"""
+        candidates = (
+            ExperienceCandidate(
+                id="example-winter",
+                title="Software Engineer Intern",
+                company="Example",
+                match_terms=("Software Engineer Intern", "Example"),
+                bullets=(ExperienceBullet("Built winter CUDA systems.", ("ev-w",)),),
+                entry_terms=("Jan 2026 -- Apr 2026",),
+            ),
+            ExperienceCandidate(
+                id="example-summer",
+                title="Software Engineer Intern",
+                company="Example",
+                match_terms=("Software Engineer Intern", "Example"),
+                bullets=(ExperienceBullet("Built summer API systems.", ("ev-s",)),),
+                entry_terms=("May 2025 -- Aug 2025",),
+            ),
+        )
+
+        tailored, _, _, _, report = _tailor_experience_from_inventory(
+            section,
+            "CUDA API systems",
+            candidates,
+            minimum_bullets=1,
+            maximum_bullets=1,
+        )
+
+        self.assertIn("Built winter CUDA systems", tailored)
+        self.assertIn("Built summer API systems", tailored)
+        self.assertEqual(
+            [row["candidate_ids"] for row in report["selected"]],
+            [["example-winter"], ["example-summer"]],
+        )
+
     def test_tailoring_selects_distinct_role_bullets_without_touching_heading(self) -> None:
         section = r"""
 \resumeSubHeadingListStart
@@ -195,6 +289,98 @@ class ExperienceInventoryTests(unittest.TestCase):
         self.assertEqual(len(claims), 2)
         self.assertEqual(selection["mode"], "inventory")
         self.assertTrue(all(record["evidence_ids"] == ["ev-user"] for record in claims))
+
+    def test_role_relevance_earns_extra_experience_bullets_above_the_floor(self) -> None:
+        section = r"""
+\resumeSubHeadingListStart
+\resumeSubheading{President}{2025 -- Present}{Student Group}{Remote}
+\resumeItemListStart
+\resumeItem{Led a student organization.}
+\resumeItem{Managed its annual budget.}
+\resumeItemListEnd
+\resumeSubheading{Systems Engineer}{2026}{Example Labs}{Remote}
+\resumeItemListStart
+\resumeItem{Built a CUDA runtime diagnostic.}
+\resumeItem{Optimized Python inference latency.}
+\resumeItemListEnd
+\resumeSubHeadingListEnd
+"""
+        candidates = (
+            ExperienceCandidate(
+                id="leadership",
+                title="President",
+                company="Student Group",
+                match_terms=("President", "Student Group"),
+                bullets=(
+                    ExperienceBullet("Led a 40-person student organization.", ("ev-user",)),
+                    ExperienceBullet("Managed a verified annual program budget.", ("ev-user",)),
+                ),
+            ),
+            ExperienceCandidate(
+                id="systems",
+                title="Systems Engineer",
+                company="Example Labs",
+                match_terms=("Systems Engineer", "Example Labs"),
+                bullets=(
+                    ExperienceBullet(
+                        "Built a CUDA runtime diagnostic.", ("ev-user",), tags=("cuda",)
+                    ),
+                    ExperienceBullet(
+                        "Optimized Python inference latency.",
+                        ("ev-user",),
+                        tags=("python", "inference", "latency"),
+                    ),
+                ),
+            ),
+        )
+
+        tailored, _, _, _, selection = _tailor_experience_from_inventory(
+            section,
+            "Required: CUDA and Python inference performance.",
+            candidates,
+            minimum_bullets=1,
+            maximum_bullets=2,
+        )
+
+        entries = selection["selected"]
+        self.assertEqual(len(entries[0]["selected_bullets"]), 1)
+        self.assertEqual(len(entries[1]["selected_bullets"]), 2)
+        self.assertEqual(tailored.count(r"\resumeItem{"), 3)
+
+    def test_source_limited_role_uses_the_better_single_inventory_bullet(self) -> None:
+        section = r"""
+\resumeSubHeadingListStart
+\resumeSubheading{Engineer}{2026}{Example Labs}{Remote}
+\resumeItemListStart
+\resumeItem{Built a Python tool saving 10 labor hours weekly for higher-value work.}
+\resumeItemListEnd
+\resumeSubHeadingListEnd
+"""
+        candidate = ExperienceCandidate(
+            id="example-engineer",
+            title="Engineer",
+            company="Example Labs",
+            match_terms=("Engineer", "Example Labs"),
+            bullets=(
+                ExperienceBullet(
+                    "Built a Python tool saving 10 aggregate labor hours weekly.",
+                    ("ev-user",),
+                    tags=("python",),
+                ),
+            ),
+        )
+
+        tailored, _, _, claims, _ = _tailor_experience_from_inventory(
+            section,
+            "Python engineering role",
+            (candidate,),
+            minimum_bullets=2,
+            maximum_bullets=2,
+        )
+
+        self.assertIn("10 aggregate labor hours weekly", tailored)
+        self.assertNotIn("higher-value work", tailored)
+        self.assertEqual(len(claims), 1)
 
 
 if __name__ == "__main__":

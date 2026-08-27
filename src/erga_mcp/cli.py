@@ -587,6 +587,12 @@ def _parser() -> argparse.ArgumentParser:
     resume_tailor_job.add_argument("--max-pages", type=int)
     resume_tailor_job.add_argument("--experience-min-bullets", type=int)
     resume_tailor_job.add_argument("--experience-max-bullets", type=int)
+    resume_tailor_job.add_argument(
+        "--experience-tailoring",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="select approved alternate bullets for each experience (saved setting by default)",
+    )
     resume_tailor_job.add_argument("--project-min-bullets", type=int)
     resume_tailor_job.add_argument("--project-max-bullets", type=int)
     resume_tailor_job.add_argument("--minimum-page-fill", type=float)
@@ -696,6 +702,9 @@ def _parser() -> argparse.ArgumentParser:
     _config_argument(resume_experience_add)
     resume_experience_add.add_argument("--role", required=True)
     resume_experience_add.add_argument("--company", required=True)
+    resume_experience_add.add_argument(
+        "--dates", help="dates shown on the résumé when the same role appears more than once"
+    )
     resume_experience_add.add_argument("--bullet", required=True)
     resume_experience_add.add_argument("--tag", action="append", default=[])
     resume_sources = resume_commands.add_parser(
@@ -1878,6 +1887,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                         "id": item.id,
                         "role": item.title,
                         "company": item.company,
+                        "dates": list(item.entry_terms),
                         "bullet_count": len(item.bullets),
                     }
                     for item in experience_records
@@ -1896,6 +1906,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             text=args.bullet,
             evidence_id=evidence.id,
             tags=args.tag,
+            entry_terms=(args.dates,) if args.dates else (),
         )
         restrict_private_file(inventory_path)
         # Re-read through the strict evidence/metric validator before reporting success.

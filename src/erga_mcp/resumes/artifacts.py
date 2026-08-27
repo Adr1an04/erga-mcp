@@ -1100,12 +1100,28 @@ def validate_latex_proposal(
         raise ValueError("proposal_path must point to an existing .tex proposal")
     latexmk_executable = resolve_latexmk_executable(latexmk)
     command: tuple[str, ...]
+    temporary_path: Path | None = None
+    compile_path = proposal_path
     if latexmk_executable.name.casefold() == "tectonic":
+        source = proposal_path.read_text(encoding="utf-8")
+        compatible = _tectonic_compatible_source(source)
+        if compatible != source:
+            with NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=proposal_path.parent,
+                prefix="erga-tectonic-",
+                suffix=".tex",
+                delete=False,
+            ) as temporary:
+                temporary.write(compatible)
+                temporary_path = Path(temporary.name)
+            compile_path = temporary_path
         command = (
             str(latexmk_executable),
             "--untrusted",
             "--keep-logs",
-            proposal_path.name,
+            compile_path.name,
         )
     else:
         command = (
@@ -1122,20 +1138,52 @@ def validate_latex_proposal(
         environment["PATH"] = os.pathsep.join(
             [executable_directory, *[entry for entry in path_entries if entry]]
         )
-    completed = subprocess.run(
-        command,
-        cwd=proposal_path.parent,
-        capture_output=True,
-        check=False,
-        env=environment,
-        text=True,
-        timeout=120,
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=proposal_path.parent,
+            capture_output=True,
+            check=False,
+            env=environment,
+            text=True,
+            timeout=120,
+        )
+        if temporary_path is not None and completed.returncode == 0:
+            temporary_pdf = temporary_path.with_suffix(".pdf")
+            if temporary_pdf.is_file():
+                temporary_pdf.replace(proposal_path.with_suffix(".pdf"))
+        return LatexValidation(
+            command=command,
+            returncode=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+    finally:
+        if temporary_path is not None:
+            for generated in temporary_path.parent.glob(f"{temporary_path.stem}.*"):
+                if generated.is_file() or generated.is_symlink():
+                    generated.unlink(missing_ok=True)
+
+
+def _tectonic_compatible_source(source: str) -> str:
+    """Guard common pdfTeX-only accessibility hooks when Tectonic is the fallback."""
+    source = re.sub(
+        r"(?m)^(?P<indent>\s*)\\input\{glyphtounicode\}\s*$",
+        lambda match: (
+            f"{match.group('indent')}\\ifdefined\\pdfglyphtounicode\n"
+            f"{match.group('indent')}\\input{{glyphtounicode}}\n"
+            f"{match.group('indent')}\\fi"
+        ),
+        source,
     )
-    return LatexValidation(
-        command=command,
-        returncode=completed.returncode,
-        stdout=completed.stdout,
-        stderr=completed.stderr,
+    return re.sub(
+        r"(?m)^(?P<indent>\s*)\\pdfgentounicode\s*=\s*1\s*$",
+        lambda match: (
+            f"{match.group('indent')}\\ifdefined\\pdfgentounicode\n"
+            f"{match.group('indent')}\\pdfgentounicode=1\n"
+            f"{match.group('indent')}\\fi"
+        ),
+        source,
     )
 
 
@@ -1185,7 +1233,11 @@ def validate_single_line_resume_items(
             suffix=".tex",
             delete=False,
         ) as temporary:
-            temporary.write(instrumented)
+            temporary.write(
+                _tectonic_compatible_source(instrumented)
+                if latexmk_executable.name.casefold() == "tectonic"
+                else instrumented
+            )
             temporary_path = Path(temporary.name)
         command = (
             (str(latexmk_executable), "--untrusted", "--keep-logs", temporary_path.name)

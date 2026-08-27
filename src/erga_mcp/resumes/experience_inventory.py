@@ -16,7 +16,22 @@ _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9_-]*")
 _NUMBER = re.compile(r"(?<!\w)\$?\d[\d,]*(?:\.\d+)?(?:%|x|\+)?(?!\w)", re.I)
 _CONTROL_SEQUENCE = re.compile(r"\\([A-Za-z@]+|.)")
 _ALLOWED_CONTROL_SEQUENCES = frozenset(
-    {"textbf", "textit", "href", "%", "&", "#", "$", "_", ",", "-", "/", "{", "}"}
+    {
+        "textbf",
+        "textit",
+        "href",
+        "%",
+        "&",
+        "#",
+        "$",
+        "_",
+        ",",
+        "-",
+        "/",
+        "'",
+        "{",
+        "}",
+    }
 )
 _DISALLOWED_LATEX = ("\\input", "\\include", "\\write18", "\\immediate\\write")
 _GIT_METRIC_KINDS = frozenset(
@@ -92,6 +107,7 @@ class ExperienceCandidate:
     company: str
     match_terms: tuple[str, ...]
     bullets: tuple[ExperienceBullet, ...]
+    entry_terms: tuple[str, ...] = ()
 
 
 def _string(value: object, label: str) -> str:
@@ -152,6 +168,7 @@ def _candidate(value: object) -> ExperienceCandidate:
             value.get("match_terms", [title, company]), "match_terms", required=True
         ),
         bullets=tuple(_bullet(item) for item in raw_bullets),
+        entry_terms=_strings(value.get("entry_terms", []), "entry_terms"),
     )
 
 
@@ -297,6 +314,7 @@ def experience_inventory_entries_from_master(
                 "title": title,
                 "company": company,
                 "match_terms": [title, company],
+                "entry_terms": [latex_to_text(arguments[1])] if arguments[1].strip() else [],
                 "bullets": bullet_rows,
             }
         )
@@ -325,14 +343,26 @@ def sync_experience_inventory_from_master(
         (
             re.sub(r"[^a-z0-9]+", "", str(item.get("title", "")).casefold()),
             re.sub(r"[^a-z0-9]+", "", str(item.get("company", "")).casefold()),
+            tuple(
+                re.sub(r"[^a-z0-9]+", "", str(term).casefold())
+                for term in item.get("entry_terms", [])
+                if isinstance(term, str) and term.strip()
+            ),
         ): item
         for item in payload
         if isinstance(item, dict)
     }
     for master_entry in experience_inventory_entries_from_master(master_latex, evidence_id):
+        raw_entry_terms = master_entry.get("entry_terms")
+        entry_terms = raw_entry_terms if isinstance(raw_entry_terms, list) else []
         identity = (
             re.sub(r"[^a-z0-9]+", "", str(master_entry["title"]).casefold()),
             re.sub(r"[^a-z0-9]+", "", str(master_entry["company"]).casefold()),
+            tuple(
+                re.sub(r"[^a-z0-9]+", "", str(term).casefold())
+                for term in entry_terms
+                if isinstance(term, str) and term.strip()
+            ),
         )
         existing = by_identity.get(identity)
         if existing is None:
@@ -380,6 +410,7 @@ def add_user_experience_bullet(
     text: str,
     evidence_id: str,
     tags: Sequence[str] = (),
+    entry_terms: Sequence[str] = (),
 ) -> tuple[str, int]:
     """Append one explicitly confirmed claim and bold its user-supplied metrics."""
     title = title.strip()
@@ -405,16 +436,35 @@ def add_user_experience_bullet(
         re.sub(r"[^a-z0-9]+", "", title.casefold()),
         re.sub(r"[^a-z0-9]+", "", company.casefold()),
     )
-    entry = next(
-        (
-            item
-            for item in payload
-            if isinstance(item, dict)
-            and re.sub(r"[^a-z0-9]+", "", str(item.get("title", "")).casefold()) == identity[0]
-            and re.sub(r"[^a-z0-9]+", "", str(item.get("company", "")).casefold()) == identity[1]
-        ),
-        None,
+    normalized_entry_terms = tuple(
+        re.sub(r"[^a-z0-9]+", "", term.casefold()) for term in entry_terms if term.strip()
     )
+    identity_matches = [
+        item
+        for item in payload
+        if isinstance(item, dict)
+        and re.sub(r"[^a-z0-9]+", "", str(item.get("title", "")).casefold()) == identity[0]
+        and re.sub(r"[^a-z0-9]+", "", str(item.get("company", "")).casefold()) == identity[1]
+    ]
+    if normalized_entry_terms:
+        identity_matches = [
+            item
+            for item in identity_matches
+            if all(
+                term
+                in {
+                    re.sub(r"[^a-z0-9]+", "", str(value).casefold())
+                    for value in item.get("entry_terms", [])
+                    if isinstance(value, str)
+                }
+                for term in normalized_entry_terms
+            )
+        ]
+    if len(identity_matches) > 1:
+        raise ValueError(
+            "multiple matching roles exist; include the role dates to choose the right entry"
+        )
+    entry = identity_matches[0] if identity_matches else None
     if entry is None:
         base = re.sub(r"[^a-z0-9]+", "-", f"{company}-{title}".casefold()).strip("-")
         used_ids = {
@@ -430,6 +480,7 @@ def add_user_experience_bullet(
             "title": title,
             "company": company,
             "match_terms": [title, company],
+            "entry_terms": [term.strip() for term in entry_terms if term.strip()],
             "bullets": [],
         }
         payload.append(entry)

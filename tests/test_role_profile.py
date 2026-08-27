@@ -121,6 +121,18 @@ class RoleProfileTests(unittest.TestCase):
             ]
             self.assertEqual(added[0]["evidence_ids"], ["containers"])
 
+    def test_gpu_build_skills_require_both_job_and_approved_evidence(self) -> None:
+        evidence = [_evidence("gpu", "Built a C++ CUDA diagnostic CLI with CMake.")]
+
+        skills = supported_role_skills(
+            evidence,
+            "Required: C++, CUDA, and Linux. Nice to have Bazel.",
+        )
+
+        names = [(item.name, item.evidence_ids) for item in skills]
+        self.assertIn(("CUDA", ("gpu",)), names)
+        self.assertNotIn("CMake", [item.name for item in skills])
+
     def test_plan_exposes_required_gaps_before_generation(self) -> None:
         profile = build_role_profile(
             role="Infrastructure Engineer",

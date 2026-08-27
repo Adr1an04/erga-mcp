@@ -70,6 +70,8 @@ _SKILLS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("PyTorch", "framework", ("pytorch",)),
     ("React", "framework", ("react", "react.js", "reactjs")),
     ("TensorFlow", "framework", ("tensorflow",)),
+    ("CUDA", "tool", ("cuda",)),
+    ("CMake", "tool", ("cmake",)),
     ("AWS", "platform", ("aws", "amazon web services")),
     ("Azure", "platform", ("azure",)),
     ("Docker", "platform", ("docker",)),

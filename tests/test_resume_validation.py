@@ -48,6 +48,27 @@ class ResumeValidationTests(unittest.TestCase):
             self.assertEqual(result.item_count, 2)
             self.assertEqual(result.wrapped_item_indices, (0,))
 
+    @unittest.skipUnless(shutil.which("tectonic"), "tectonic is not installed")
+    def test_tectonic_fallback_guards_common_jake_resume_pdftex_hooks(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            proposal = root / "proposal.tex"
+            source = r"""\documentclass{article}
+\input{glyphtounicode}
+\pdfgentounicode=1
+\begin{document}
+Jake-style resume content.
+\end{document}
+"""
+            proposal.write_text(source, encoding="utf-8")
+
+            result = validate_latex_proposal(proposal, latexmk=Path("tectonic"))
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(proposal.with_suffix(".pdf").is_file())
+            self.assertEqual(proposal.read_text(encoding="utf-8"), source)
+            self.assertEqual(tuple(root.glob("erga-tectonic-*")), ())
+
     def test_inspects_an_existing_pdf_without_starting_a_second_compiler(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
