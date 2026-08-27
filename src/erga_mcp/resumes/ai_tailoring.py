@@ -1377,12 +1377,16 @@ async def draft_evidence_backed_projects(
     bullet_max_chars: int,
     require_unique_lead_verbs: bool,
     single_line_bullets: bool = False,
+    bullet_max_lines: int = 0,
     retry_feedback: str = "",
     required_project_ids: tuple[str, ...] = (),
     tailoring_emphasis: str = "balanced",
     style_preferences: ResumeStylePreferences | None = None,
 ) -> AIProjectTailoring:
     """Ask an injected model client for bounded, evidence-cited project bullets."""
+    if bullet_max_lines < 0:
+        raise ValueError("bullet_max_lines must be zero or positive")
+    effective_maximum_lines = 1 if single_line_bullets else bullet_max_lines
     resolved_minimum_bullets = (
         bullets_per_project if minimum_bullets_per_project is None else minimum_bullets_per_project
     )
@@ -1567,7 +1571,8 @@ async def draft_evidence_backed_projects(
             "minimum_hard": bullet_min_chars,
             "target": bullet_target_chars,
             "maximum_hard": bullet_max_chars,
-            "single_rendered_line_hard": single_line_bullets,
+            "single_rendered_line_hard": effective_maximum_lines == 1,
+            "maximum_rendered_lines_hard": effective_maximum_lines,
         },
         "forbidden_lead_verbs": sorted(baseline_leads) if require_unique_lead_verbs else [],
         "allowed_lead_verbs": list(allowed_lead_verbs) if require_unique_lead_verbs else [],
@@ -1638,11 +1643,16 @@ async def draft_evidence_backed_projects(
         "exact list; no two bullets anywhere in the submission may share a lead verb. Return plain "
         "text, never LaTeX. Prefer concrete engineering scope and outcomes over generic prose."
     )
-    if single_line_bullets:
+    if effective_maximum_lines:
+        rendered_limit = (
+            "one physical line"
+            if effective_maximum_lines == 1
+            else f"{effective_maximum_lines} physical lines"
+        )
         system_prompt += (
-            " Every bullet must be compact enough to render on one physical line in the user's "
-            "unchanged resume template. Rendered PDF measurement is authoritative; a character "
-            "count alone does not prove that a bullet fits."
+            f" Every bullet must fit within {rendered_limit} in the user's unchanged resume "
+            "template. Rendered PDF measurement is authoritative; a character count alone does "
+            "not prove that a bullet fits."
         )
     messages = [TailoringDraftMessage(role="user", text=json.dumps(prompt))]
     if retry_feedback:

@@ -48,6 +48,7 @@ def validate_resume_render(
     minimum_page_fill_ratio: float = 0,
     check_item_layout: bool = True,
     reject_wrapped_items: bool = True,
+    maximum_item_lines: int = 0,
     compiler: Callable[..., LatexValidation] = validate_latex_proposal,
     layout_checker: Callable[..., ResumeItemLayoutValidation] = validate_single_line_resume_items,
     compiled_layout_checker: Callable[
@@ -56,7 +57,10 @@ def validate_resume_render(
     page_counter: Callable[[Path], int] = pdf_page_count,
     fill_reader: Callable[[Path], PdfPageFill] = pdf_page_fill,
 ) -> ResumeRenderValidation:
-    """Compile and reject structurally broken, overflowing, sparse, or wrapped resumes."""
+    """Compile and reject structurally broken, overflowing, sparse, or overlong resumes."""
+    if maximum_item_lines < 0:
+        raise ValueError("maximum_item_lines must be zero or positive")
+    effective_maximum_item_lines = 1 if reject_wrapped_items else maximum_item_lines
     source = proposal_path.read_text(encoding="utf-8")
     structure_issues = semantic_resume_structure_issues(source)
     if structure_issues:
@@ -143,14 +147,9 @@ def validate_resume_render(
             layout = layout_checker(proposal_path, latexmk=latexmk)
             used_physical_layout = True
         # A PDF text layer can prove that visible words wrapped, but it cannot expose a physical
-        # line containing only template glue.  In strict one-line mode, also inspect TeX's actual
-        # paragraph line count for custom resume-item macros and union both measurements.
-        if (
-            reject_wrapped_items
-            and r"\resumeItem" in source
-            and not used_physical_layout
-            and not layout.wrapped_item_indices
-        ):
+        # line containing only template glue. When a line limit is configured, also inspect TeX's
+        # actual paragraph line count for custom resume-item macros and union both measurements.
+        if effective_maximum_item_lines and r"\resumeItem" in source and not used_physical_layout:
             physical_layout = layout_checker(proposal_path, latexmk=latexmk)
             if physical_layout.returncode != 0:
                 proposal_pdf.unlink(missing_ok=True)
@@ -161,6 +160,26 @@ def validate_resume_render(
                     page_count=page_count,
                     reason="Resume physical-line measurement failed.",
                 )
+            visible_line_counts = layout.item_line_counts or tuple(
+                2 if index in layout.wrapped_item_indices else 1
+                for index in range(layout.item_count)
+            )
+            physical_line_counts = physical_layout.item_line_counts or tuple(
+                2 if index in physical_layout.wrapped_item_indices else 1
+                for index in range(physical_layout.item_count)
+            )
+            line_counts = (
+                tuple(
+                    max(visible, physical)
+                    for visible, physical in zip(
+                        visible_line_counts,
+                        physical_line_counts,
+                        strict=True,
+                    )
+                )
+                if len(visible_line_counts) == len(physical_line_counts)
+                else physical_line_counts or visible_line_counts
+            )
             layout = ResumeItemLayoutValidation(
                 command=physical_layout.command,
                 returncode=0,
@@ -177,6 +196,7 @@ def validate_resume_render(
                 ),
                 stdout=physical_layout.stdout,
                 stderr=physical_layout.stderr,
+                item_line_counts=line_counts,
             )
         if layout.returncode != 0:
             proposal_pdf.unlink(missing_ok=True)
@@ -189,11 +209,37 @@ def validate_resume_render(
             )
         wrapped = layout.wrapped_item_indices
         orphans = layout.orphan_item_indices
-        if (reject_wrapped_items and wrapped) or orphans:
+        over_line_limit: tuple[int, ...]
+        if not effective_maximum_item_lines:
+            over_line_limit = ()
+        elif len(layout.item_line_counts) == layout.item_count:
+            over_line_limit = tuple(
+                index
+                for index, count in enumerate(layout.item_line_counts)
+                if count > effective_maximum_item_lines
+            )
+        elif effective_maximum_item_lines == 1:
+            over_line_limit = layout.wrapped_item_indices
+        else:
+            proposal_pdf.unlink(missing_ok=True)
+            return ResumeRenderValidation(
+                passed=False,
+                returncode=1,
+                pdf=None,
+                page_count=page_count,
+                reason="Resume bullet line-count measurement was incomplete.",
+            )
+        if (effective_maximum_item_lines and over_line_limit) or orphans:
             proposal_pdf.unlink(missing_ok=True)
             details = []
-            if reject_wrapped_items and wrapped:
-                details.append(f"wrapped bullets {list(wrapped)}")
+            if effective_maximum_item_lines and over_line_limit:
+                if effective_maximum_item_lines == 1:
+                    details.append(f"wrapped bullets {list(over_line_limit)}")
+                else:
+                    details.append(
+                        f"bullets exceeding {effective_maximum_item_lines} rendered line(s) "
+                        f"{list(over_line_limit)}"
+                    )
             if orphans:
                 details.append(f"stranded short tails {list(orphans)}")
             return ResumeRenderValidation(

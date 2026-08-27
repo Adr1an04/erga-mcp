@@ -670,6 +670,11 @@ def _parser() -> argparse.ArgumentParser:
     resume_settings_set.add_argument("--bullet-max-chars", type=int)
     resume_settings_set.add_argument("--single-line-bullets", action=argparse.BooleanOptionalAction)
     resume_settings_set.add_argument(
+        "--bullet-max-lines",
+        type=int,
+        help="maximum rendered lines per bullet; use 0 for no line limit",
+    )
+    resume_settings_set.add_argument(
         "--experience-tailoring", action=argparse.BooleanOptionalAction
     )
     resume_settings_set.add_argument("--experience-inventory-path")
@@ -960,6 +965,7 @@ def _resume_readiness(config: ErgaConfig, store: ErgaStore) -> dict[str, object]
                 config.resume.project_max_bullets,
             ],
             "minimum_page_fill_ratio": config.resume.minimum_page_fill_ratio,
+            "bullet_max_lines": config.resume.bullet_max_lines,
         },
     }
 
@@ -988,6 +994,11 @@ def _render_resume_readiness(readiness: dict[str, object]) -> str:
         f"  Experience bullets per entry: {experience[0]}–{experience[1]}",
         f"  Project bullets per entry: {projects[0]}–{projects[1]}",
         f"  Minimum one-page fill: {cast(float, defaults['minimum_page_fill_ratio']):.0%}",
+        (
+            f"  Maximum rendered lines per bullet: {defaults['bullet_max_lines']}"
+            if defaults["bullet_max_lines"]
+            else "  Maximum rendered lines per bullet: unlimited"
+        ),
     ]
     if readiness["project_warning"]:
         lines.extend(("", f"Needs attention: {readiness['project_warning']}"))
@@ -1850,6 +1861,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "bullet_target_chars": args.bullet_target_chars,
             "bullet_max_chars": args.bullet_max_chars,
             "single_line_bullets": args.single_line_bullets,
+            "bullet_max_lines": args.bullet_max_lines,
             "experience_tailoring": args.experience_tailoring,
             "experience_inventory_path": args.experience_inventory_path,
             "max_pages": args.max_pages,

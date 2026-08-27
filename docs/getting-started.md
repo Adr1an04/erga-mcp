@@ -87,10 +87,11 @@ uv run erga resume settings set \
   --bullet-min-chars 90 \
   --bullet-target-chars 105 \
   --bullet-max-chars 120 \
+  --bullet-max-lines 2 \
   --max-pages 1 \
   --experience-min-bullets 2 \
   --experience-max-bullets 4 \
-   --project-min-bullets 2 \
+  --project-min-bullets 2 \
   --project-max-bullets 4 \
   --project-count 4 \
   --minimum-page-fill-ratio 0.90 \

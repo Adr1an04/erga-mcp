@@ -32,6 +32,9 @@ bullet_max_chars = 0
 # When enabled, compilation fails unless every rendered resume bullet fits on exactly one line.
 # This is measured from the PDF; character counts alone are never treated as proof of fit.
 single_line_bullets = false
+# Maximum rendered lines per bullet. Zero allows any line count. Positive values supersede the
+# legacy single_line_bullets switch; legacy true + zero still maps to one line for compatibility.
+bullet_max_lines = 0
 max_pages = 1
 # For a one-page resume, require rendered text to occupy at least this fraction of the page height.
 # Erga fills the page with supported content and never stretches whitespace or invents filler.
@@ -116,6 +119,7 @@ class ResumeSettings:
     bullet_target_chars: int
     bullet_max_chars: int
     single_line_bullets: bool
+    bullet_max_lines: int
     max_pages: int
     minimum_page_fill_ratio: float
     output_root: Path
@@ -248,6 +252,18 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
     single_line_bullets_value = resume.get("single_line_bullets", False)
     if not isinstance(single_line_bullets_value, bool):
         raise ValueError("resume single_line_bullets must be true or false")
+    bullet_max_lines_value = resume.get("bullet_max_lines")
+    if bullet_max_lines_value is None:
+        bullet_max_lines = 1 if single_line_bullets_value else 0
+    elif isinstance(bullet_max_lines_value, bool):
+        raise ValueError("resume bullet_max_lines must be zero or a positive integer")
+    else:
+        bullet_max_lines = int(bullet_max_lines_value)
+        if bullet_max_lines < 0:
+            raise ValueError("resume bullet_max_lines must be zero or a positive integer")
+        if single_line_bullets_value and bullet_max_lines == 0:
+            bullet_max_lines = 1
+        single_line_bullets_value = bullet_max_lines == 1
     max_pages = int(resume.get("max_pages", 1))
     if max_pages < 0:
         raise ValueError("resume max_pages must be zero or positive")
@@ -308,6 +324,7 @@ def _resume_settings(document: dict[str, Any], base_dir: Path) -> ResumeSettings
         bullet_target_chars=bullet_lengths[1],
         bullet_max_chars=bullet_lengths[2],
         single_line_bullets=single_line_bullets_value,
+        bullet_max_lines=bullet_max_lines,
         max_pages=max_pages,
         minimum_page_fill_ratio=minimum_page_fill_ratio,
         output_root=_path(str(resume.get("output_root", "output")), base_dir),

@@ -44,7 +44,8 @@ class ResumeSettingsCliTests(unittest.TestCase):
                     "105",
                     "--bullet-max-chars",
                     "120",
-                    "--single-line-bullets",
+                    "--bullet-max-lines",
+                    "2",
                     "--experience-tailoring",
                     "--experience-inventory-path",
                     "experience.json",
@@ -70,7 +71,8 @@ class ResumeSettingsCliTests(unittest.TestCase):
             self.assertEqual(settings["template_path"], str(root / "templates/master.tex"))
             self.assertEqual(settings["editable_sections"], ["experience", "projects"])
             self.assertEqual(settings["bullet_target_chars"], 105)
-            self.assertTrue(settings["single_line_bullets"])
+            self.assertFalse(settings["single_line_bullets"])
+            self.assertEqual(settings["bullet_max_lines"], 2)
             self.assertTrue(settings["experience_tailoring"])
             self.assertEqual(settings["experience_inventory_path"], str(root / "experience.json"))
             self.assertEqual(settings["max_pages"], 2)
@@ -84,7 +86,8 @@ class ResumeSettingsCliTests(unittest.TestCase):
             self.assertIn('template_path = "templates/master.tex"', stored_config)
             self.assertIn('output_root = "applications"', stored_config)
             self.assertIn('output_pdf_name = "Candidate_Resume.pdf"', stored_config)
-            self.assertIn("single_line_bullets = true", stored_config)
+            self.assertIn("single_line_bullets = false", stored_config)
+            self.assertIn("bullet_max_lines = 2", stored_config)
 
     def test_adds_and_lists_user_confirmed_experience_bullets(self) -> None:
         with TemporaryDirectory() as directory:

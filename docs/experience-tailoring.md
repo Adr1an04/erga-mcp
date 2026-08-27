@@ -11,6 +11,7 @@ experience_tailoring = true
 experience_inventory_path = "experience-inventory.json"
 experience_min_bullets = 2
 experience_max_bullets = 4
+bullet_max_lines = 2
 ```
 
 The normal commands do not require editing JSON:
@@ -33,6 +34,8 @@ bullets against the job, applies the configured per-role floor/cap, and replaces
 bodies. If a role cannot meet the floor with distinct approved evidence, its master entry is kept
 unchanged.
 
-When `single_line_bullets = true`, validation counts physical TeX paragraph lines as well as visible
-PDF text lines. This rejects the invisible extra line that some Jake-style macros create when a
-nearly full line is followed by `\vspace` or other template glue.
+`bullet_max_lines` controls the rendered PDF, not an approximate character count. Set it to `1`
+for strict one-line bullets, `2` to allow up to two lines, or `0` for no hard line limit. The legacy
+`single_line_bullets = true` setting remains supported and maps to a one-line maximum. In strict
+one-line mode, validation also counts physical TeX paragraph lines, catching invisible extra lines
+that some Jake-style macros create after nearly full text.

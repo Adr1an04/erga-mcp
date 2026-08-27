@@ -30,6 +30,10 @@ def update_settings(config_path: Path, updates: Mapping[str, object]) -> ResumeS
     raw = config_path.read_text(encoding="utf-8")
     load_config(config_path)
     selected = {key: value for key, value in updates.items() if value is not None}
+    if "bullet_max_lines" in selected:
+        selected["single_line_bullets"] = selected["bullet_max_lines"] == 1
+    elif "single_line_bullets" in selected:
+        selected["bullet_max_lines"] = 1 if selected["single_line_bullets"] else 0
     replaced = update_table(raw, "resume", selected)
     with tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", dir=config_path.parent, delete=False

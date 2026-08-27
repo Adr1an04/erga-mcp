@@ -61,6 +61,7 @@ class ResumeItemLayoutValidation:
     stdout: str
     stderr: str
     orphan_item_indices: tuple[int, ...] = ()
+    item_line_counts: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -159,10 +160,12 @@ _LATEX_COMMAND_WITH_ARGUMENT = re.compile(r"\\[A-Za-z]+\*?(?:\[[^]]*\])?\{([^{}]
 _LATEX_COMMAND = re.compile(r"\\[A-Za-z]+\*?(?:\[[^]]*\])?")
 _SPACE = re.compile(r"\s+")
 _LAYOUT_MARKER = re.compile(r"ERGA-RESUME-ITEM-(?P<state>FIT|WRAP|ORPHAN):(?P<index>\d+)")
+_LAYOUT_LINES_MARKER = re.compile(r"ERGA-RESUME-ITEM-LINES:(?P<index>\d+):(?P<lines>\d+)")
 _PDF_BULLET_LINE = re.compile(r"^(?P<indent>\s*)[•●▪◦‣⁃]\s+(?P<text>.*\S)\s*$")
 _STANDARD_ITEM = re.compile(r"\\item(?![A-Za-z\[])", re.MULTILINE)
 _SINGLE_LINE_LAYOUT_INSTRUMENT = r"""
 \newcounter{ergaResumeItemCounter}
+\newcount\ergaResumeItemLineCount
 \let\ergaOriginalResumeItem\resumeItem
 \renewcommand{\resumeItem}[1]{%
   \stepcounter{ergaResumeItemCounter}%
@@ -172,11 +175,10 @@ _SINGLE_LINE_LAYOUT_INSTRUMENT = r"""
   % visible text consumes the line.  \prevgraf counts physical paragraph lines, including that
   % empty-looking line, using the template's actual font, list width, and macro implementation.
   \par
-  \ifnum\prevgraf>1
-    \typeout{ERGA-RESUME-ITEM-WRAP:\arabic{ergaResumeItemCounter}}%
-  \else
-    \typeout{ERGA-RESUME-ITEM-FIT:\arabic{ergaResumeItemCounter}}%
-  \fi
+  % Preserve the primitive before expanding it: direct \the/\number expansion can lose the
+  % just-finished paragraph on some TeX engines.
+  \ergaResumeItemLineCount=\prevgraf
+  \typeout{ERGA-RESUME-ITEM-LINES:\arabic{ergaResumeItemCounter}:\the\ergaResumeItemLineCount}%
 }
 """
 
@@ -243,6 +245,7 @@ def inspect_compiled_resume_item_layout(
         item_count=item_count,
         wrapped_item_indices=wrapped,
         orphan_item_indices=orphans,
+        item_line_counts=tuple(len(lines) for lines in pdf_items),
         stdout="",
         stderr="",
     )
@@ -1261,10 +1264,16 @@ def validate_single_line_resume_items(
         )
         log_path = temporary_path.with_suffix(".log")
         log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+        compiler_output = f"{completed.stdout}\n{log}"
         observed: dict[int, str] = {}
-        for match in _LAYOUT_MARKER.finditer(f"{completed.stdout}\n{log}"):
+        for match in _LAYOUT_MARKER.finditer(compiler_output):
             observed[int(match.group("index"))] = match.group("state")
-        if completed.returncode == 0 and set(observed) != set(range(1, custom_item_count + 1)):
+        observed_lines = {
+            int(match.group("index")): int(match.group("lines"))
+            for match in _LAYOUT_LINES_MARKER.finditer(compiler_output)
+        }
+        observed_indices = set(observed_lines) or set(observed)
+        if completed.returncode == 0 and observed_indices != set(range(1, custom_item_count + 1)):
             raise ValueError(
                 "single-line layout validation did not observe every rendered resume bullet"
             )
@@ -1277,10 +1286,29 @@ def validate_single_line_resume_items(
             raise ValueError(
                 "single-line layout validation could not observe every standard LaTeX bullet"
             )
-        wrapped_items = (
-            tuple(index for index, lines in enumerate(pdf_items) if len(lines) > 1)
-            if has_standard_items and pdf_items is not None
-            else tuple(index - 1 for index, state in sorted(observed.items()) if state != "FIT")
+        physical_line_counts = (
+            tuple(lines for _, lines in sorted(observed_lines.items()))
+            if observed_lines
+            else tuple(1 if state == "FIT" else 2 for _, state in sorted(observed.items()))
+        )
+        pdf_line_counts = (
+            tuple(len(lines) for lines in pdf_items)
+            if pdf_items is not None and len(pdf_items) == item_count
+            else ()
+        )
+        item_line_counts = (
+            pdf_line_counts
+            if has_standard_items
+            else tuple(
+                max(
+                    pdf_line_counts[index] if index < len(pdf_line_counts) else 0,
+                    physical_line_counts[index] if index < len(physical_line_counts) else 0,
+                )
+                for index in range(item_count)
+            )
+        )
+        wrapped_items = tuple(
+            index for index, line_count in enumerate(item_line_counts) if line_count > 1
         )
         rendered_orphans = (
             tuple(
@@ -1299,6 +1327,7 @@ def validate_single_line_resume_items(
             stdout=completed.stdout,
             stderr=completed.stderr,
             orphan_item_indices=rendered_orphans,
+            item_line_counts=item_line_counts,
         )
     finally:
         if temporary_path is not None:

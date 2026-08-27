@@ -47,6 +47,7 @@ class ResumeValidationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(result.item_count, 2)
             self.assertEqual(result.wrapped_item_indices, (0,))
+            self.assertEqual(result.item_line_counts, (2, 1))
 
     @unittest.skipUnless(shutil.which("tectonic"), "tectonic is not installed")
     def test_tectonic_fallback_guards_common_jake_resume_pdftex_hooks(self) -> None:

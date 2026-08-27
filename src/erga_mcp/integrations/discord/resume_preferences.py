@@ -36,6 +36,7 @@ def _has_resume_preference_subject(content: str) -> bool:
         "resume" in content
         or "experience tailoring" in content
         or "experience unchanged" in content
+        or bool(re.search(r"\bbullets?\s+(?:up to\s+)?\d+\s+lines?\b", content))
         or bool(
             re.search(r"\b(?:experience|project)s?\s+bullets?\b", content)
             or re.search(r"\bbullets?\s+(?:per|for)\s+(?:experience|project)s?\b", content)
@@ -94,6 +95,11 @@ def parse_resume_preference_update(content: str) -> dict[str, int | bool] | None
         return None
 
     updates: dict[str, int | bool] = {}
+    line_limit_match = re.search(
+        r"(?:bullets?\s+(?:can be|to|at|with|up to)?\s*|(?:up to\s+)?)(?P<count>\d+)"
+        r"[ -]?lines?(?:\s+(?:per|for)\s+bullets?)?",
+        normalized,
+    )
     one_line_markers = (
         "single line bullets",
         "single-line bullets",
@@ -110,9 +116,15 @@ def parse_resume_preference_update(content: str) -> dict[str, int | bool] | None
         "multi line bullets",
         "multi-line bullets",
     )
-    if any(marker in normalized for marker in one_line_markers):
+    if line_limit_match:
+        maximum_lines = int(line_limit_match.group("count"))
+        updates["bullet_max_lines"] = maximum_lines
+        updates["single_line_bullets"] = maximum_lines == 1
+    elif any(marker in normalized for marker in one_line_markers):
+        updates["bullet_max_lines"] = 1
         updates["single_line_bullets"] = True
     elif any(marker in normalized for marker in wrapped_markers):
+        updates["bullet_max_lines"] = 0
         updates["single_line_bullets"] = False
     enable_experience_markers = (
         "tailor experience bullets",
@@ -174,9 +186,11 @@ def render_resume_preferences(settings: ResumeSettings, *, updated: bool = False
     else:
         suffix = "page" if settings.max_pages == 1 else "pages"
         page_limit = f"up to {settings.max_pages} {suffix}"
-    wrapping = (
-        "never; every bullet must render on one line" if settings.single_line_bullets else "allowed"
-    )
+    if settings.bullet_max_lines:
+        suffix = "line" if settings.bullet_max_lines == 1 else "lines"
+        wrapping = f"up to {settings.bullet_max_lines} rendered {suffix} per bullet"
+    else:
+        wrapping = "no hard rendered-line limit"
     heading = "✓ Résumé defaults updated" if updated else "Your résumé defaults"
     return (
         f"**{heading}**\n"

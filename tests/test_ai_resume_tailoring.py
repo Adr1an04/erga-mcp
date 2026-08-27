@@ -251,6 +251,7 @@ Python
         minimum_bullets: int | None = None,
         minimum_characters: int = 0,
         single_line_bullets: bool = False,
+        bullet_max_lines: int = 0,
         style_preferences: ResumeStylePreferences | None = None,
         candidate: ProjectCandidate | None = None,
     ):
@@ -349,6 +350,7 @@ Python
                     bullet_max_chars=116,
                     require_unique_lead_verbs=True,
                     single_line_bullets=single_line_bullets,
+                    bullet_max_lines=bullet_max_lines,
                     retry_feedback=retry_feedback,
                     required_project_ids=required_project_ids,
                     style_preferences=style_preferences,
@@ -724,6 +726,34 @@ Python
         graph_quality = result.quality_report["evidence_graph_alignment"][0]
         self.assertGreater(graph_quality["graph"]["node_count"], 0)
         self.assertTrue(all(item["passed"] for item in graph_quality["bullets"]))
+
+    def test_model_receives_configurable_two_line_rendering_limit(self) -> None:
+        _, session = self._draft(
+            {
+                "projects": [
+                    {
+                        "project_id": "api-platform",
+                        "bullets": [
+                            {
+                                "text": "Engineered a Python API serving 100 users safely.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                            {
+                                "text": "Validated 20 API routes across request failures.",
+                                "evidence_ids": ["ev_api"],
+                            },
+                        ],
+                    }
+                ]
+            },
+            bullet_max_lines=2,
+        )
+
+        prompt = json.loads(session.messages[0][0].text)
+        preferences = prompt["bullet_character_preferences"]
+        self.assertEqual(preferences["maximum_rendered_lines_hard"], 2)
+        self.assertFalse(preferences["single_rendered_line_hard"])
+        self.assertIn("within 2 physical lines", session.calls[0]["system_prompt"])
 
     def test_explicit_style_preferences_are_run_scoped_and_contain_no_personal_facts(self) -> None:
         result, session = self._draft(

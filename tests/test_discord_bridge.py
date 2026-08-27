@@ -99,12 +99,19 @@ class DiscordBridgeTests(unittest.TestCase):
                 "experience_max_bullets": 4,
                 "project_min_bullets": 2,
                 "project_max_bullets": 4,
+                "bullet_max_lines": 1,
                 "single_line_bullets": True,
             },
         )
         self.assertEqual(
             parse_resume_preference_update("Change my resume preference to allow wrapped bullets"),
-            {"single_line_bullets": False},
+            {"bullet_max_lines": 0, "single_line_bullets": False},
+        )
+        self.assertEqual(
+            parse_resume_preference_update(
+                "Set my resume defaults so bullets can use up to 2 lines"
+            ),
+            {"bullet_max_lines": 2, "single_line_bullets": False},
         )
         self.assertEqual(
             parse_resume_preference_update("Enable experience tailoring going forward"),
@@ -175,13 +182,14 @@ class DiscordBridgeTests(unittest.TestCase):
             self.assertEqual(settings.project_min_bullets, 2)
             self.assertEqual(settings.project_max_bullets, 3)
             self.assertTrue(settings.single_line_bullets)
+            self.assertEqual(settings.bullet_max_lines, 1)
             backend.assert_not_called()
             message.reply.assert_awaited_once_with(
                 render_resume_preferences(settings, updated=True),
                 mention_author=False,
             )
             self.assertIn(
-                "every bullet must render on one line",
+                "up to 1 rendered line per bullet",
                 render_resume_preferences(settings),
             )
 

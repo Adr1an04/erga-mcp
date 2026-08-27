@@ -311,9 +311,62 @@ def _resume_item_layout(
         visible_layout = inspect_compiled_resume_item_layout(proposal_path, pdf_path)
     except ValueError:
         return validate_single_line_resume_items(proposal_path, latexmk=Path(latexmk))
-    if not strict_physical_lines or visible_layout.wrapped_item_indices:
+    if not strict_physical_lines:
         return visible_layout
-    return validate_single_line_resume_items(proposal_path, latexmk=Path(latexmk))
+    physical_layout = validate_single_line_resume_items(proposal_path, latexmk=Path(latexmk))
+    if physical_layout.returncode != 0:
+        return physical_layout
+    visible_line_counts = visible_layout.item_line_counts or tuple(
+        2 if index in visible_layout.wrapped_item_indices else 1
+        for index in range(visible_layout.item_count)
+    )
+    physical_line_counts = physical_layout.item_line_counts or tuple(
+        2 if index in physical_layout.wrapped_item_indices else 1
+        for index in range(physical_layout.item_count)
+    )
+    line_counts = (
+        tuple(
+            max(visible, physical)
+            for visible, physical in zip(
+                visible_line_counts,
+                physical_line_counts,
+                strict=True,
+            )
+        )
+        if len(visible_line_counts) == len(physical_line_counts)
+        else physical_line_counts or visible_line_counts
+    )
+    return ResumeItemLayoutValidation(
+        command=physical_layout.command,
+        returncode=0,
+        item_count=max(visible_layout.item_count, physical_layout.item_count),
+        wrapped_item_indices=tuple(
+            index for index, line_count in enumerate(line_counts) if line_count > 1
+        ),
+        orphan_item_indices=tuple(
+            sorted(
+                set(visible_layout.orphan_item_indices) | set(physical_layout.orphan_item_indices)
+            )
+        ),
+        stdout=physical_layout.stdout,
+        stderr=physical_layout.stderr,
+        item_line_counts=line_counts,
+    )
+
+
+def _items_exceeding_line_limit(
+    layout: ResumeItemLayoutValidation, maximum_lines: int
+) -> tuple[int, ...]:
+    """Return exact rendered-line violations while preserving legacy one-line measurements."""
+    if maximum_lines < 1:
+        return ()
+    if layout.item_line_counts:
+        return tuple(
+            index
+            for index, line_count in enumerate(layout.item_line_counts)
+            if line_count > maximum_lines
+        )
+    return layout.wrapped_item_indices if maximum_lines == 1 else ()
 
 
 def _layout_safe_project_selection(
@@ -359,19 +412,20 @@ def _layout_safe_project_selection(
         )
         proposal_pdf = automatic.proposal.proposed_tex_path.with_suffix(".pdf")
         if checked.returncode != 0 or not proposal_pdf.is_file():
-            raise ValueError("single-line resume layout preflight did not compile")
+            raise ValueError("resume bullet layout preflight did not compile")
         layout = _resume_item_layout(
             automatic.proposal.proposed_tex_path,
             proposal_pdf,
             latexmk=config.resume.latexmk,
-            strict_physical_lines=config.resume.single_line_bullets,
+            strict_physical_lines=config.resume.bullet_max_lines > 0,
         )
         if layout.returncode != 0:
-            raise ValueError("single-line resume layout preflight could not measure bullets")
-        rejected_item_indices = (
-            layout.wrapped_item_indices
-            if config.resume.single_line_bullets
-            else layout.orphan_item_indices
+            raise ValueError("resume bullet layout preflight could not measure bullets")
+        rejected_item_indices = tuple(
+            sorted(
+                set(layout.orphan_item_indices)
+                | set(_items_exceeding_line_limit(layout, config.resume.bullet_max_lines))
+            )
         )
         rejected_project_ids, non_project_indices = classify_wrapped_resume_items(
             automatic.proposal.proposed_tex_path.read_text(encoding="utf-8"),
@@ -381,8 +435,8 @@ def _layout_safe_project_selection(
         if non_project_indices:
             rendered = ", ".join(str(index + 1) for index in non_project_indices)
             requirement = (
-                "must fit on one rendered line"
-                if config.resume.single_line_bullets
+                f"must fit within {config.resume.bullet_max_lines} rendered line(s)"
+                if config.resume.bullet_max_lines
                 else "leave only one or two words on their final line"
             )
             raise ValueError(
@@ -408,8 +462,8 @@ def _layout_safe_project_selection(
                     "title": candidate.title,
                     "reasons": [
                         (
-                            "project bullet wraps beyond one rendered line"
-                            if config.resume.single_line_bullets
+                            "project bullet exceeds the configured rendered-line limit"
+                            if config.resume.bullet_max_lines
                             else "project bullet leaves a one/two-word final line"
                         )
                     ],
@@ -465,11 +519,11 @@ def _project_density_trial(
             automatic.proposal.proposed_tex_path,
             proposal_pdf,
             latexmk=config.resume.latexmk,
-            strict_physical_lines=config.resume.single_line_bullets,
+            strict_physical_lines=config.resume.bullet_max_lines > 0,
         )
         if layout.returncode != 0 or layout.orphan_item_indices:
             return False, 0
-        if config.resume.single_line_bullets and layout.wrapped_item_indices:
+        if _items_exceeding_line_limit(layout, config.resume.bullet_max_lines):
             return False, 0
         if pdf_page_count(proposal_pdf) != 1:
             return False, 0
@@ -483,6 +537,7 @@ def _layout_balanced_generated_proposal(
     *,
     latexmk: str,
     single_line_bullets: bool = False,
+    bullet_max_lines: int = 0,
 ) -> tuple[AutomaticResumeProposal, ResumeItemLayoutValidation, tuple[str, ...]]:
     """Backfill around rendered bullets that violate the configured wrapping policy."""
     rejected: list[str] = []
@@ -510,10 +565,14 @@ def _layout_balanced_generated_proposal(
             automatic.proposal.proposed_tex_path,
             proposal_pdf,
             latexmk=latexmk,
-            strict_physical_lines=single_line_bullets,
+            strict_physical_lines=(single_line_bullets or bullet_max_lines > 0),
         )
-        rejected_indices = (
-            layout.wrapped_item_indices if single_line_bullets else layout.orphan_item_indices
+        effective_max_lines = 1 if single_line_bullets else bullet_max_lines
+        rejected_indices = tuple(
+            sorted(
+                set(layout.orphan_item_indices)
+                | set(_items_exceeding_line_limit(layout, effective_max_lines))
+            )
         )
         if layout.returncode != 0 or not rejected_indices:
             return automatic, layout, tuple(rejected)
@@ -578,12 +637,13 @@ def _generated_density_trial(
         ),
         latexmk=config.resume.latexmk,
         single_line_bullets=config.resume.single_line_bullets,
+        bullet_max_lines=config.resume.bullet_max_lines,
     )
     if automatic.constraint_violations:
         return False, 0, rejected
     if layout.returncode != 0 or layout.orphan_item_indices:
         return False, 0, rejected
-    if config.resume.single_line_bullets and layout.wrapped_item_indices:
+    if _items_exceeding_line_limit(layout, config.resume.bullet_max_lines):
         return False, 0, rejected
     proposal_pdf = automatic.proposal.proposed_tex_path.with_suffix(".pdf")
     if not proposal_pdf.is_file():
@@ -941,6 +1001,7 @@ def _create_render_packed_automatic_resume_proposal(
             ),
             latexmk=config.resume.latexmk,
             single_line_bullets=config.resume.single_line_bullets,
+            bullet_max_lines=config.resume.bullet_max_lines,
         )
         return automatic
 
@@ -1315,6 +1376,7 @@ async def _ai_tailored_project_enrichment(
                 bullet_max_chars=model_max_chars,
                 require_unique_lead_verbs=config.resume.require_unique_lead_verbs,
                 single_line_bullets=config.resume.single_line_bullets,
+                bullet_max_lines=config.resume.bullet_max_lines,
                 retry_feedback=feedback,
                 required_project_ids=locked_project_ids,
                 tailoring_emphasis=tailoring_emphasis,
@@ -1444,8 +1506,8 @@ async def _ai_tailored_project_enrichment(
             feedback = (
                 f"The prior structured draft failed validation: {error}. Do not replace any "
                 "required project; rewrite the same projects more compactly while preserving "
-                "their cited facts. If single-line bullets are configured, every rewritten "
-                "bullet must fit one rendered line in the unchanged template."
+                "their cited facts. Every rewritten bullet must respect the configured rendered-"
+                "line maximum in the unchanged template."
             )
     if last_error is not None:
         raise last_error
@@ -1643,6 +1705,7 @@ def _compile_intake_proposal(
     max_pages: int,
     minimum_page_fill_ratio: float = 0,
     single_line_bullets: bool = False,
+    bullet_max_lines: int = 0,
 ) -> IntakeValidationResult:
     """Compile through the interface-neutral resume validation pipeline."""
     # Generated/package test adapters may intentionally carry an opaque proposal payload. This
@@ -1657,6 +1720,7 @@ def _compile_intake_proposal(
         minimum_page_fill_ratio=minimum_page_fill_ratio,
         check_item_layout=check_item_layout,
         reject_wrapped_items=single_line_bullets,
+        maximum_item_lines=bullet_max_lines,
         compiler=validate_latex_proposal,
         page_counter=pdf_page_count,
         fill_reader=pdf_page_fill,
@@ -1976,6 +2040,7 @@ def _upgrade_existing_tailoring(
             config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
         ),
         single_line_bullets=config.resume.single_line_bullets,
+        bullet_max_lines=config.resume.bullet_max_lines,
     )
     manifest_updates = {
         "selection_strategy": str(
@@ -3334,6 +3399,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
             ),
             single_line_bullets=config.resume.single_line_bullets,
+            bullet_max_lines=config.resume.bullet_max_lines,
         )
         if validation.returncode != 0:
             raise ValueError("automatic tailored resume did not compile")
@@ -3457,6 +3523,7 @@ def build_server(config_path: Path, *, store_factory: StoreFactory | None = None
                 config.resume.minimum_page_fill_ratio if config.resume.max_pages == 1 else 0
             ),
             single_line_bullets=config.resume.single_line_bullets,
+            bullet_max_lines=config.resume.bullet_max_lines,
         )
         return cast(dict[str, object], _json_value(validation.model_dump()))
 

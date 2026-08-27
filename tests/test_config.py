@@ -74,6 +74,7 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(resume.project_min_bullets, 2)
             self.assertEqual(resume.project_max_bullets, 4)
             self.assertFalse(resume.single_line_bullets)
+            self.assertEqual(resume.bullet_max_lines, 0)
             self.assertTrue(resume.experience_tailoring)
             self.assertIsNone(resume.experience_inventory_path)
 
@@ -105,12 +106,30 @@ class ConfigTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertTrue(load_config(config_path).resume.single_line_bullets)
+            self.assertEqual(load_config(config_path).resume.bullet_max_lines, 1)
 
             config_path.write_text(
                 '[resume]\nsingle_line_bullets = "yes"\n',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "single_line_bullets"):
+                load_config(config_path)
+
+    def test_rendered_bullet_line_limit_is_configurable_and_supersedes_legacy_switch(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(
+                "[resume]\nsingle_line_bullets = true\nbullet_max_lines = 2\n",
+                encoding="utf-8",
+            )
+
+            resume = load_config(config_path).resume
+
+            self.assertEqual(resume.bullet_max_lines, 2)
+            self.assertFalse(resume.single_line_bullets)
+
+            config_path.write_text("[resume]\nbullet_max_lines = -1\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "bullet_max_lines"):
                 load_config(config_path)
 
     def test_resume_entry_bullet_limits_must_be_ordered_and_positive(self) -> None:
