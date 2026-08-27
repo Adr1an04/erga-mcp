@@ -1265,6 +1265,7 @@ def _tailor_skills(
     job_description: str,
     *,
     maximum_values_per_category: int = 0,
+    maximum_row_width_em: float = 0.0,
     supported_skills: tuple[SupportedSkill, ...] = (),
 ) -> tuple[str, list[dict[str, object]], bool]:
     records: list[dict[str, object]] = []
@@ -1287,6 +1288,34 @@ def _tailor_skills(
 
     def latex_skill(value: str) -> str:
         return value.replace("#", r"\#").replace("%", r"\%").replace("&", r"\&")
+
+    def rendered_width_em(value: str) -> float:
+        """Conservatively approximate Computer Modern text width in font-relative units."""
+        plain = latex_to_text(value)
+        width = 0.0
+        for character in plain:
+            if character.isspace():
+                width += 0.28
+            elif character in "ilI|!.,:;'`":
+                width += 0.27
+            elif character in "mwMW@%&":
+                width += 0.86
+            elif character.isupper():
+                width += 0.67
+            elif character.isdigit():
+                width += 0.52
+            else:
+                width += 0.49
+        return width
+
+    def fits_single_row(category: str, values: list[str], candidate: str) -> bool:
+        if not maximum_row_width_em:
+            return True
+        rendered = ", ".join([*values, candidate])
+        # Category labels are bold in both generated skill-row macros and preserved Jake-style
+        # templates, so reserve a small weight premium in addition to the separator.
+        prefix_width = rendered_width_em(f"{category}: ") * 1.08
+        return prefix_width + rendered_width_em(rendered) <= maximum_row_width_em
 
     def tailored_values(category: str, values: str) -> str:
         nonlocal changed
@@ -1317,11 +1346,20 @@ def _tailor_skills(
                 item[1],
             )
         )
-        selected = ranked[:maximum_values_per_category] if maximum_values_per_category else ranked
+        selected: list[tuple[int | None, str, int, tuple[str, ...], SupportedSkill | None]] = []
+        selected_values: list[str] = []
+        for item in ranked:
+            if maximum_values_per_category and len(selected) >= maximum_values_per_category:
+                break
+            if fits_single_row(category, selected_values, item[1]):
+                selected.append(item)
+                selected_values.append(item[1])
         changed = changed or [item[0] for item in selected] != list(range(len(items)))
-        for ranked_index, (original_index, value, score, matched, supported) in enumerate(ranked):
-            included = ranked_index < len(selected)
-            output_index = ranked_index if included else None
+        selected_ids = {id(item): index for index, item in enumerate(selected)}
+        for item in ranked:
+            original_index, value, score, matched, supported = item
+            output_index = selected_ids.get(id(item))
+            included = output_index is not None
             source_ref = (
                 f"approved-evidence#skill/{supported.name}"
                 if supported is not None
@@ -2408,7 +2446,9 @@ def create_automatic_resume_proposal(
         tailored, skill_records, changed = _tailor_skills(
             proposed[start:end],
             job_description,
-            maximum_values_per_category=(4 * max_pages if generated_template and max_pages else 0),
+            # Skill rows have a horizontal budget, not a page-count budget. A hard four-item cap
+            # discarded useful verified skills even when a row still had substantial room.
+            maximum_row_width_em=(49.0 if generated_template and max_pages else 0.0),
             supported_skills=supported_role_skills(evidence, job_description),
         )
         proposed = _replace_section_body(proposed, canonical, tailored)

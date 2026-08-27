@@ -561,9 +561,12 @@ Python
             self.assertIn("Created a Docker inference platform", proposed)
             self.assertLessEqual(proposed.count(r"\resumeItem{"), 11)
             self.assertGreater(len(report["page_target_omissions"]), 0)
-            self.assertTrue(
-                any(item["action"] == "omitted_for_page_target" for item in report["skills"])
-            )
+            language_skills = [
+                item
+                for item in report["skills"]
+                if item["category"] == "Languages" and item["output_index"] is not None
+            ]
+            self.assertGreater(len(language_skills), 4)
             self.assertTrue(
                 all(
                     item["action"] == "omitted_for_page_target"
